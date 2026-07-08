@@ -803,28 +803,21 @@ class ChatScreen extends StatelessWidget {
     return SafeArea(
       key: const ValueKey('chat'),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
         child: Column(
           children: [
             ConnectionHeader(
               session: session,
+              running: running,
               connected: connected,
               offline: offline,
               onReconnect: onReconnect,
               onLogout: onLogout,
             ),
             const SizedBox(height: 10),
-            SessionStrip(
-              running: running,
-              connected: connected,
-              offline: offline,
-              onReconnect: onReconnect,
-            ),
-            const SizedBox(height: 10),
             Expanded(
               child: TranscriptView(
                 messages: messages,
-                running: running,
                 onFillPrompt: onFillPrompt,
               ),
             ),
@@ -849,6 +842,7 @@ class ConnectionHeader extends StatelessWidget {
   const ConnectionHeader({
     super.key,
     required this.session,
+    required this.running,
     required this.connected,
     required this.offline,
     required this.onReconnect,
@@ -856,6 +850,7 @@ class ConnectionHeader extends StatelessWidget {
   });
 
   final SavedSession? session;
+  final bool running;
   final bool connected;
   final bool offline;
   final VoidCallback onReconnect;
@@ -863,49 +858,93 @@ class ConnectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final statusLabel = running
+        ? '运行中'
+        : connected
+        ? '已连接'
+        : offline
+        ? '电脑端离线'
+        : '正在连接';
+    final statusColor = running || connected
+        ? AppColors.accent
+        : offline
+        ? AppColors.stop
+        : AppColors.muted;
+    final workspace = session?.workspaceName ?? 'cc-remote';
+
     return GlassPanel(
-      padding: const EdgeInsets.fromLTRB(16, 14, 10, 14),
-      child: Row(
+      radius: 26,
+      padding: EdgeInsets.fromLTRB(8, 7, 8, running ? 8 : 7),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  session?.deviceName ?? 'Jayson PC',
-                  style: const TextStyle(
-                    fontSize: 19,
-                    fontWeight: FontWeight.w800,
-                  ),
+          Row(
+            children: [
+              SizedBox(
+                width: 44,
+                child: !connected && !running
+                    ? IconButton(
+                        onPressed: onReconnect,
+                        icon: Icon(
+                          Icons.refresh_rounded,
+                          color: statusColor,
+                          size: 21,
+                        ),
+                        tooltip: '重连',
+                      )
+                    : const SizedBox.shrink(),
+              ),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      session?.deviceName ?? 'Jayson PC',
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$workspace · $statusLabel',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: statusColor,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 4),
-                MonoText(session?.workspaceName ?? 'cc-remote'),
-              ],
+              ),
+              SizedBox(
+                width: 44,
+                child: IconButton(
+                  onPressed: () => showSettingsSheet(
+                    context,
+                    session,
+                    onReconnect,
+                    onLogout,
+                  ),
+                  icon: const Icon(Icons.more_horiz_rounded, size: 23),
+                  tooltip: '设置',
+                ),
+              ),
+            ],
+          ),
+          if (running) ...[
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(999),
+              child: const LinearProgressIndicator(
+                minHeight: 2,
+                color: AppColors.accent,
+                backgroundColor: Color(0x2219A7CE),
+              ),
             ),
-          ),
-          StatusPill(
-            label: connected
-                ? '已连接'
-                : offline
-                ? '电脑端离线'
-                : '正在连接',
-            color: connected
-                ? AppColors.accent
-                : offline
-                ? AppColors.stop
-                : AppColors.muted,
-          ),
-          const SizedBox(width: 6),
-          IconButton(
-            onPressed: () => showSettingsSheet(
-              context,
-              session,
-              onReconnect,
-              onLogout,
-            ),
-            icon: const Icon(Icons.settings_rounded),
-            tooltip: '设置',
-          ),
+          ],
         ],
       ),
     );
@@ -1064,173 +1103,103 @@ Future<void> confirmLogout(BuildContext context, VoidCallback onLogout) async {
   onLogout();
 }
 
-class SessionStrip extends StatelessWidget {
-  const SessionStrip({
-    super.key,
-    required this.running,
-    required this.connected,
-    required this.offline,
-    required this.onReconnect,
-  });
-
-  final bool running;
-  final bool connected;
-  final bool offline;
-  final VoidCallback onReconnect;
-
-  @override
-  Widget build(BuildContext context) {
-    final icon = running
-        ? Icons.bolt_rounded
-        : connected
-        ? Icons.history_rounded
-        : Icons.wifi_off_rounded;
-    final color = running || connected
-        ? AppColors.accent
-        : offline
-        ? AppColors.stop
-        : AppColors.muted;
-    final label = running
-        ? 'Claude 正在运行'
-        : connected
-        ? '新会话'
-        : offline
-        ? '电脑端离线'
-        : '正在连接电脑端';
-
-    return GlassPanel(
-      radius: 16,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-      child: Row(
-        children: [
-          Icon(icon, color: color, size: 19),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-          ),
-          if (running)
-            const SizedBox(
-              width: 58,
-              child: LinearProgressIndicator(
-                minHeight: 3,
-                color: AppColors.accent,
-                backgroundColor: Color(0xFFE8F3F6),
-              ),
-            )
-          else if (!connected)
-            TextButton(onPressed: onReconnect, child: const Text('重连')),
-        ],
-      ),
-    );
-  }
-}
-
 class TranscriptView extends StatelessWidget {
   const TranscriptView({
     super.key,
     required this.messages,
-    required this.running,
     required this.onFillPrompt,
   });
 
   final List<TranscriptMessage> messages;
-  final bool running;
   final ValueChanged<String> onFillPrompt;
 
   @override
   Widget build(BuildContext context) {
     if (messages.isEmpty) {
-      return GlassPanel(
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            return SingleChildScrollView(
-              child: ConstrainedBox(
-                constraints: BoxConstraints(minHeight: constraints.maxHeight),
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.terminal_rounded,
-                          size: 42,
-                          color: AppColors.accent,
-                        ),
-                        const SizedBox(height: 14),
-                        const Text(
-                          '本机已连接',
-                          style: TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          return SingleChildScrollView(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 64,
+                        height: 64,
+                        child: GlassPanel(
+                          radius: 24,
+                          padding: EdgeInsets.zero,
+                          child: const Icon(
+                            Icons.terminal_rounded,
+                            size: 30,
+                            color: AppColors.accent,
                           ),
                         ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          '可以发送任务给 Claude Code',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: AppColors.muted),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        '本机已连接',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
                         ),
-                        const SizedBox(height: 18),
-                        Wrap(
-                          alignment: WrapAlignment.center,
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            PromptChip(
-                              label: '检查这个项目',
-                              onTap: () => onFillPrompt('检查这个项目'),
-                            ),
-                            PromptChip(
-                              label: '运行测试',
-                              onTap: () => onFillPrompt('运行测试并总结结果'),
-                            ),
-                            PromptChip(
-                              label: '总结当前目录',
-                              onTap: () => onFillPrompt('总结当前目录结构'),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        '可以发送任务给 Claude Code',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: AppColors.muted),
+                      ),
+                      const SizedBox(height: 18),
+                      Wrap(
+                        alignment: WrapAlignment.center,
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          PromptChip(
+                            label: '检查这个项目',
+                            onTap: () => onFillPrompt('检查这个项目'),
+                          ),
+                          PromptChip(
+                            label: '运行测试',
+                            onTap: () => onFillPrompt('运行测试并总结结果'),
+                          ),
+                          PromptChip(
+                            label: '总结当前目录',
+                            onTap: () => onFillPrompt('总结当前目录结构'),
+                          ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ),
-            );
-          },
-        ),
+            ),
+          );
+        },
       );
     }
 
-    return GlassPanel(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
-      child: ListView.separated(
-        itemCount: messages.length,
-        separatorBuilder: (_, _) => const SizedBox(height: 10),
-        itemBuilder: (context, index) {
-          final message = messages[index];
-          return MessageBlock(
-            message: message,
-            streaming: running && index == messages.length - 1,
-          );
-        },
-      ),
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(2, 16, 2, 16),
+      itemCount: messages.length,
+      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      itemBuilder: (context, index) {
+        final message = messages[index];
+        return MessageBlock(message: message);
+      },
     );
   }
 }
 
 class MessageBlock extends StatelessWidget {
-  const MessageBlock({
-    super.key,
-    required this.message,
-    required this.streaming,
-  });
+  const MessageBlock({super.key, required this.message});
 
   final TranscriptMessage message;
-  final bool streaming;
 
   @override
   Widget build(BuildContext context) {
@@ -1244,43 +1213,36 @@ class MessageBlock extends StatelessWidget {
     }
 
     final isUser = message.role == MessageRole.user;
+    final maxWidth = MediaQuery.sizeOf(context).width * (isUser ? 0.74 : 0.84);
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 320),
+        constraints: BoxConstraints(maxWidth: maxWidth),
         child: Container(
-          padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+          padding: const EdgeInsets.fromLTRB(15, 12, 15, 12),
           decoration: BoxDecoration(
             color: isUser
-                ? AppColors.accent.withValues(alpha: 0.12)
-                : Colors.white.withValues(alpha: 0.62),
-            borderRadius: BorderRadius.circular(16),
+                ? AppColors.accent.withValues(alpha: 0.13)
+                : Colors.white.withValues(alpha: 0.50),
+            borderRadius: BorderRadius.only(
+              topLeft: const Radius.circular(20),
+              topRight: const Radius.circular(20),
+              bottomLeft: Radius.circular(isUser ? 20 : 8),
+              bottomRight: Radius.circular(isUser ? 8 : 20),
+            ),
             border: Border.all(
               color: isUser
-                  ? AppColors.accent.withValues(alpha: 0.26)
-                  : Colors.white.withValues(alpha: 0.74),
+                  ? AppColors.accent.withValues(alpha: 0.22)
+                  : Colors.white.withValues(alpha: 0.62),
             ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                message.text,
-                style: TextStyle(
-                  height: 1.42,
-                  color: isUser ? AppColors.ink : AppColors.ink,
-                  fontFamily: message.text.contains('`') ? 'monospace' : null,
-                ),
-              ),
-              if (streaming) ...[
-                const SizedBox(height: 12),
-                const LinearProgressIndicator(
-                  minHeight: 3,
-                  color: AppColors.accent,
-                  backgroundColor: Color(0xFFE8F3F6),
-                ),
-              ],
-            ],
+          child: Text(
+            message.text,
+            style: TextStyle(
+              height: 1.42,
+              color: AppColors.ink,
+              fontFamily: message.text.contains('`') ? 'monospace' : null,
+            ),
           ),
         ),
       ),
@@ -1312,8 +1274,8 @@ class PromptBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final canSend = controller.text.trim().isNotEmpty && !running && connected;
     return GlassPanel(
-      padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
-      radius: 20,
+      padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+      radius: 28,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
@@ -1326,30 +1288,35 @@ class PromptBar extends StatelessWidget {
               onChanged: (_) => onChanged(),
               decoration: InputDecoration(
                 hintText: connected
-                    ? '发送任务给 Claude Code'
+                    ? '发送给 Claude Code'
                     : offline
                     ? '电脑端离线，请先重连'
                     : '正在连接电脑端',
                 border: InputBorder.none,
                 isDense: true,
                 contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 6,
-                  vertical: 10,
+                  horizontal: 10,
+                  vertical: 12,
                 ),
               ),
             ),
           ),
           const SizedBox(width: 8),
-          IconButton.filled(
-            onPressed: running ? onStop : (canSend ? onSend : null),
-            icon: Icon(
-              running ? Icons.stop_rounded : Icons.arrow_upward_rounded,
-            ),
-            tooltip: running ? '停止' : '发送',
-            style: IconButton.styleFrom(
-              backgroundColor: running ? AppColors.stop : AppColors.accent,
-              disabledBackgroundColor: const Color(0xFFD9E7EC),
-              foregroundColor: Colors.white,
+          SizedBox(
+            width: 44,
+            height: 44,
+            child: IconButton.filled(
+              onPressed: running ? onStop : (canSend ? onSend : null),
+              icon: Icon(
+                running ? Icons.stop_rounded : Icons.arrow_upward_rounded,
+              ),
+              tooltip: running ? '停止' : '发送',
+              style: IconButton.styleFrom(
+                backgroundColor: running ? AppColors.stop : AppColors.accent,
+                disabledBackgroundColor: const Color(0xFFDCE6EA),
+                foregroundColor: Colors.white,
+                fixedSize: const Size.square(44),
+              ),
             ),
           ),
         ],
@@ -1438,10 +1405,10 @@ class AppBackground extends StatelessWidget {
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              Color(0xFFF7FAFC),
-              Color(0xFFEAF5FF),
-              Color(0xFFE6FBF5),
-              Color(0xFFF0EEFA),
+              Color(0xFFFAFBFB),
+              Color(0xFFF0F7F8),
+              Color(0xFFF8FAF8),
+              Color(0xFFF4F3F7),
             ],
           ),
         ),
@@ -1468,19 +1435,19 @@ class GlassPanel extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(radius),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
         child: Container(
           width: double.infinity,
           padding: padding,
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.56),
+            color: Colors.white.withValues(alpha: 0.46),
             borderRadius: BorderRadius.circular(radius),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.78)),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.66)),
             boxShadow: [
               BoxShadow(
-                color: AppColors.shadow.withValues(alpha: 0.13),
-                blurRadius: 30,
-                offset: const Offset(0, 14),
+                color: AppColors.shadow.withValues(alpha: 0.09),
+                blurRadius: 24,
+                offset: const Offset(0, 10),
               ),
             ],
           ),
@@ -1591,9 +1558,10 @@ class PromptChip extends StatelessWidget {
     return ActionChip(
       onPressed: onTap,
       label: Text(label),
-      side: BorderSide(color: AppColors.accent.withValues(alpha: 0.18)),
-      backgroundColor: Colors.white.withValues(alpha: 0.54),
-      labelStyle: const TextStyle(color: AppColors.ink),
+      side: BorderSide(color: AppColors.accent.withValues(alpha: 0.14)),
+      shape: const StadiumBorder(),
+      backgroundColor: Colors.white.withValues(alpha: 0.58),
+      labelStyle: const TextStyle(color: AppColors.ink, fontSize: 13),
     );
   }
 }
@@ -1778,7 +1746,7 @@ enum MessageRole { user, assistant, system }
 class AppColors {
   static const ink = Color(0xFF172026);
   static const muted = Color(0xFF6B7880);
-  static const accent = Color(0xFF19A7CE);
+  static const accent = Color(0xFF168EB0);
   static const stop = Color(0xFFD96B6B);
   static const shadow = Color(0xFF7B8B96);
 }

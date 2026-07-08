@@ -68,6 +68,50 @@ void main() {
     expect(find.textContaining('正在检查 `cc-remote` 的当前结构'), findsNothing);
   });
 
+  testWidgets('running progress stays out of the message bubble', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AppBackground(
+          child: ChatScreen(
+            session: SavedSession(
+              origin: Uri.parse('https://tbhaoshuai.ccwu.cc'),
+              token: 'demo',
+              deviceName: 'tb',
+              workspaceDir: 'cc-remote',
+            ),
+            running: true,
+            connected: true,
+            offline: false,
+            messages: [TranscriptMessage.user('你好')],
+            promptController: controller,
+            onChanged: () {},
+            onFillPrompt: (_) {},
+            onReconnect: () {},
+            onSend: () {},
+            onStop: () {},
+            onLogout: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.textContaining('运行中'), findsOneWidget);
+    expect(find.text('新会话'), findsNothing);
+    expect(find.byType(LinearProgressIndicator), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(MessageBlock),
+        matching: find.byType(LinearProgressIndicator),
+      ),
+      findsNothing,
+    );
+  });
+
   testWidgets('empty transcript does not overflow when keyboard is open', (
     tester,
   ) async {
