@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <title>CC Remote</title>
+  <style>
+    :root { color-scheme: dark; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+    main { max-width: 760px; min-height: 100vh; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    h1 { margin: 0; font-size: 20px; }
+    #status { color: #94a3b8; font-size: 13px; }
+    #transcript { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 10px; padding: 8px 0 120px; }
+    .bubble { white-space: pre-wrap; line-height: 1.5; padding: 11px 13px; border-radius: 14px; max-width: 94%; overflow-wrap: anywhere; }
+    .user { align-self: flex-end; background: #2563eb; color: white; }
+    .assistant { align-self: flex-start; background: #1e293b; border: 1px solid #334155; }
+    .system { align-self: center; color: #94a3b8; font-size: 13px; padding: 2px 8px; }
+    form { position: fixed; left: 50%; bottom: 0; transform: translateX(-50%); width: min(760px, 100%); padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); display: grid; grid-template-columns: 1fr auto auto; gap: 8px; background: linear-gradient(180deg, rgba(15, 23, 42, 0), #0f172a 20%); }
+    textarea { resize: none; min-height: 48px; max-height: 140px; padding: 11px; border-radius: 12px; border: 1px solid #334155; background: #020617; color: #e2e8f0; font: inherit; }
+    button { border: 0; border-radius: 12px; padding: 0 14px; min-height: 44px; color: white; background: #2563eb; font: inherit; font-weight: 650; }
+    button.secondary { background: #334155; }
+    button:disabled { opacity: .5; }
+    #logout { color: #94a3b8; background: transparent; min-height: 32px; padding: 0 4px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>CC Remote</h1>
+        <div id="status">启动中…</div>
+      </div>
+      <button id="logout" type="button">退出</button>
+    </header>
+    <section id="transcript" aria-live="polite"></section>
+    <form id="prompt-form">
+      <textarea id="prompt" placeholder="输入要发给 Claude Code 的内容" rows="2" autocomplete="off"></textarea>
+      <button id="send" type="submit">发送</button>
+      <button id="stop" class="secondary" type="button">停止</button>
+    </form>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
