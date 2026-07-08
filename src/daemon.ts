@@ -5,7 +5,7 @@ import { extname, join } from 'node:path';
 import qrcode from 'qrcode-terminal';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createAuthState } from './authState.js';
-import { ClaudeBridge } from './claudeBridge.js';
+import { ClaudeBridge, isMissingConversationError } from './claudeBridge.js';
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 8787);
@@ -180,15 +180,22 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
 
   broadcast({ type: 'status', authenticated: true, running: true, hasClaudeSessionId: Boolean(auth.getClaudeSessionId()) });
 
-  const result = await bridge.run({
+  const runClaude = (sessionId: string | undefined) => bridge.run({
     prompt,
-    sessionId: auth.getClaudeSessionId(),
+    sessionId,
     onEvent: event => broadcast({ type: 'claude_event', event }),
     onText: text => broadcast({ type: 'text', text }),
     onSessionId: sessionId => {
       void auth.setClaudeSessionId(sessionId);
     },
   });
+
+  const previousSessionId = auth.getClaudeSessionId();
+  let result = await runClaude(previousSessionId);
+  if (previousSessionId && result.exitCode !== 0 && isMissingConversationError(result.stderr)) {
+    await auth.setClaudeSessionId(undefined);
+    result = await runClaude(undefined);
+  }
 
   if (result.sessionId) await auth.setClaudeSessionId(result.sessionId);
   if (result.stopped) {

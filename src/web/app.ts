@@ -13,6 +13,7 @@ const promptEl = mustGet('prompt') as HTMLTextAreaElement;
 const sendButton = mustGet('send') as HTMLButtonElement;
 const stopButton = mustGet('stop') as HTMLButtonElement;
 const logoutButton = mustGet('logout') as HTMLButtonElement;
+const TOKEN_KEY = 'cc_remote_token';
 
 let ws: WebSocket | undefined;
 let running = false;
@@ -34,12 +35,21 @@ stopButton.addEventListener('click', () => {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'stop' }));
   } else {
-    void fetch('/api/stop', { method: 'POST', credentials: 'same-origin' });
+    void fetch('/api/stop', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: authHeaders(),
+    });
   }
 });
 
 logoutButton.addEventListener('click', async () => {
-  await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' });
+  await fetch('/api/logout', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: authHeaders(),
+  });
+  localStorage.removeItem(TOKEN_KEY);
   location.reload();
 });
 
@@ -60,8 +70,8 @@ async function boot(): Promise<void> {
 }
 
 async function pairFromHash(): Promise<void> {
-  const code = location.hash.slice(1);
-  if (!code) {
+  const nonce = nonceFromHash();
+  if (!nonce) {
     setStatus('配对链接缺少验证码');
     return;
   }
@@ -71,7 +81,7 @@ async function pairFromHash(): Promise<void> {
     method: 'POST',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ nonce }),
   });
 
   if (!res.ok) {
@@ -79,14 +89,26 @@ async function pairFromHash(): Promise<void> {
     return;
   }
 
+  const data = await res.json() as { token?: string };
+  if (!data.token) {
+    setStatus('配对失败，服务端没有返回 token');
+    return;
+  }
+
+  localStorage.setItem(TOKEN_KEY, data.token);
   history.replaceState(null, '', '/');
   appendBubble('system', '配对成功');
   connect();
 }
 
 async function refreshStatus(): Promise<boolean> {
-  const res = await fetch('/api/status', { credentials: 'same-origin', cache: 'no-store' });
+  const res = await fetch('/api/status', {
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: authHeaders(),
+  });
   if (res.status === 401) {
+    localStorage.removeItem(TOKEN_KEY);
     setStatus('未配对：请扫描 daemon 终端里的二维码');
     setControls(false);
     return false;
@@ -102,12 +124,28 @@ async function refreshStatus(): Promise<boolean> {
 }
 
 function connect(): void {
+  const token = localStorage.getItem(TOKEN_KEY);
+  if (!token) {
+    setStatus('未配对：请扫描 daemon 终端里的二维码');
+    setControls(false);
+    return;
+  }
+
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${scheme}//${location.host}/ws`);
   setStatus('正在连接…');
 
-  ws.addEventListener('open', () => setStatus('已连接'));
-  ws.addEventListener('close', () => {
+  ws.addEventListener('open', () => {
+    setStatus('正在鉴权…');
+    ws?.send(JSON.stringify({ type: 'auth', token }));
+  });
+  ws.addEventListener('close', event => {
+    if (event.code === 1008) {
+      localStorage.removeItem(TOKEN_KEY);
+      setStatus('授权已失效，请重新配对');
+      setControls(false);
+      return;
+    }
     setStatus('连接已断开，3 秒后重连');
     setControls(false);
     setTimeout(connect, 3_000);
@@ -153,6 +191,22 @@ function setControls(connected: boolean): void {
   promptEl.disabled = !connected || running;
   sendButton.disabled = !connected || running;
   stopButton.disabled = !connected || !running;
+}
+
+function nonceFromHash(): string {
+  const raw = decodeURIComponent(location.hash.slice(1)).trim();
+  if (!raw) return '';
+  try {
+    const parsed = JSON.parse(raw) as { nonce?: unknown };
+    return typeof parsed.nonce === 'string' ? parsed.nonce.trim() : raw;
+  } catch {
+    return raw;
+  }
+}
+
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem(TOKEN_KEY);
+  return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
 function appendAssistantText(text: string): void {

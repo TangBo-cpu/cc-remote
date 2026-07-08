@@ -164,6 +164,10 @@ export class ClaudeBridge {
   }
 }
 
+export function isMissingConversationError(stderr: string): boolean {
+  return /No conversation found with session ID/i.test(stderr);
+}
+
 function extractTextDelta(event: unknown): string {
   if (!isRecord(event)) return '';
   if (event.type !== 'stream_event') return '';

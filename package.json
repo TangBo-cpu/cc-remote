@@ -7,6 +7,7 @@
     "build:web": "node scripts/build-web.mjs",
     "build": "npm run build:web && tsc -p tsconfig.json",
     "dev": "npm run build:web && tsx src/daemon.ts",
+    "cc-remote": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/cc-remote.ps1",
     "start": "node dist/src/daemon.js",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts"

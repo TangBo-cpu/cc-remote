@@ -15,13 +15,66 @@
 
 电脑端 daemon 负责显示配对二维码、签发 App token、鉴权 HTTP/WebSocket、调用本机 `claude` CLI。网页/PWA 只保留为调试壳，不是主产品入口。
 
-## 运行
+## 当前状态
+
+已完成：
+
+- daemon App-first token 协议。
+- 终端 JSON QR 配对。
+- `/api/pair` 返回 Bearer token。
+- HTTP Bearer 鉴权。
+- daemon WebSocket 首条 `auth` 消息鉴权。
+- Flutter App 扫码配对。
+- Flutter App Secure Storage 保存 token。
+- Flutter App 启动时 `/api/status` 恢复已配对状态。
+- Flutter App logout 调用 daemon 并清本地 token。
+- Flutter App WebSocket 连接 `/ws`。
+- Flutter App 发送首条 `{ "type": "auth", "token": "..." }` 鉴权。
+- Flutter App 发送 prompt 到 daemon。
+- Flutter App 接收 `text`、`done`、`error`、`stopped`。
+- Stop 按钮发送 WebSocket `{ "type": "stop" }`。
+
+未完成：
+
+- 还没做手机真机端到端验证 Claude Code 流式输出。
+- 还没做 transcript 持久化。
+- 还没做断线自动恢复任务输出。
+
+下一步最小任务：真机发 `回复 pong，只输出 pong`，验证 App 能收到 Claude Code 真实输出。
+
+## 一键启动电脑端
+
+```powershell
+.\cc-remote.cmd
+```
+
+这个命令会同时启动：
+
+- Cloudflare Tunnel：`tbhaoshuai.ccwu.cc` -> `127.0.0.1:8787`
+- daemon：打印 App 扫码二维码，调用本机 Claude Code CLI
+
+按 `Ctrl+C` 会停止 daemon，并清理本次脚本启动的 tunnel。
+
+也可以用 npm：
+
+```powershell
+npm run cc-remote
+```
+
+可选参数：
+
+```powershell
+.\cc-remote.cmd -NoTunnel
+.\cc-remote.cmd -WorkspaceDir "E:\\Code-All\\cc-remote" -DeviceName "tb"
+```
+
+## 手动运行 daemon
 
 ```powershell
 npm install
 $env:PUBLIC_ORIGIN = "https://tbhaoshuai.ccwu.cc"
 $env:WORKSPACE_DIR = "E:\\Code-All\\cc-remote"
-$env:DEVICE_NAME = "Jayson PC"
+$env:DEVICE_NAME = "tb"
 npm run dev
 ```
 
@@ -35,12 +88,19 @@ npm run dev
   "version": 1,
   "origin": "https://tbhaoshuai.ccwu.cc",
   "nonce": "base64url-random-nonce",
-  "deviceName": "Jayson PC",
+  "deviceName": "tb",
   "expiresAt": 1780000000000
 }
 ```
 
 二维码 5 分钟过期，一次性使用。App 扫码后调用 `/api/pair` 换取 Bearer token。
+
+如果端口被占用：
+
+```powershell
+$pids8787 = (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8787 -State Listen).OwningProcess
+Stop-Process -Id $pids8787 -Force
+```
 
 ## Cloudflare Tunnel
 
@@ -50,11 +110,54 @@ npm run dev
 cloudflared tunnel --url http://127.0.0.1:8787
 ```
 
+如果使用本项目 `.run` 下的固定 tunnel 配置：
+
+```powershell
+cloudflared tunnel --config ".run\cloudflared-cc-remote.yml" run
+```
+
 正式使用固定域名时，确保 `PUBLIC_ORIGIN` 等于手机访问的 HTTPS 域名：
 
 ```powershell
 $env:PUBLIC_ORIGIN = "https://tbhaoshuai.ccwu.cc"
 npm run dev
+```
+
+手机端先用浏览器验证：
+
+```text
+https://tbhaoshuai.ccwu.cc/api/health
+```
+
+期望：
+
+```json
+{"ok":true}
+```
+
+## Flutter App
+
+```powershell
+cd mobile
+flutter test
+flutter run
+```
+
+App 当前能力：
+
+```text
+扫码二维码
+确认设备和服务地址
+POST /api/pair
+保存 token 到 Secure Storage
+启动时 GET /api/status
+显示已连接设备
+连接 wss://tbhaoshuai.ccwu.cc/ws
+发送 auth 消息
+发送 prompt
+接收 text/done/error/stopped
+发送 stop
+POST /api/logout
 ```
 
 ## HTTP API
@@ -84,7 +187,7 @@ Content-Type: application/json
 {
   "ok": true,
   "token": "base64url-app-token",
-  "deviceName": "Jayson PC"
+  "deviceName": "tb"
 }
 ```
 
@@ -134,6 +237,8 @@ wss://tbhaoshuai.ccwu.cc/ws
 status, claude_event, text, done, stopped, error
 ```
 
+注意：daemon 和 Flutter App 已接入这套 WebSocket 协议，真机 Claude 输出仍需端到端验证。
+
 ## 配置项
 
 | 环境变量 | 默认值 | 说明 |
@@ -151,6 +256,8 @@ status, claude_event, text, done, stopped, error
 npm run typecheck
 npm run build
 npm test
+cd mobile
+flutter test
 ```
 
 ## 安全边界
