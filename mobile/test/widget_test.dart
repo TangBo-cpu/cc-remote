@@ -48,6 +48,26 @@ void main() {
     expect(find.text('扫描电脑终端里的二维码'), findsOneWidget);
   });
 
+  testWidgets('demo chat no longer uses the old fake project scan reply', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'ping');
+    await tester.pump();
+    await tester.tap(find.byTooltip('发送'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('ping'), findsOneWidget);
+    expect(find.textContaining('真实对话需要连接 daemon WebSocket'), findsOneWidget);
+    expect(find.textContaining('正在检查 `cc-remote` 的当前结构'), findsNothing);
+  });
+
   testWidgets('empty transcript does not overflow when keyboard is open', (
     tester,
   ) async {

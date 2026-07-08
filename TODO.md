@@ -18,7 +18,7 @@
 ### Flutter App
 
 - [x] 创建 `mobile/` Flutter 项目
-- [x] 加依赖：`mobile_scanner`、`flutter_secure_storage`、`http`
+- [x] 加依赖：`mobile_scanner`、`flutter_secure_storage`、`http`、`web_socket_channel`
 - [x] Android 增加 Camera / Internet 权限
 - [x] 实现 QR JSON 解析和校验
 - [x] 实现配对确认 sheet
@@ -27,7 +27,12 @@
 - [x] 启动时读取 token 并调用 `/api/status`
 - [x] 显示已连接设备和工作区
 - [x] 实现 Logout 并清本地 token
-- [x] 保留聊天 UI 壳
+- [x] 实现 WebSocket connect + auth 消息
+- [x] 发送 prompt 时发送 `{ "type": "prompt", "text": "..." }`
+- [x] 收到 `text` 时追加到当前 assistant message
+- [x] 收到 `done` / `error` / `stopped` 时更新运行状态
+- [x] Stop 按钮发送 `{ "type": "stop" }`
+- [x] 断线时显示重连入口，不自动重发 prompt
 - [x] `flutter test`
 
 ### 文档和保存点
@@ -35,27 +40,16 @@
 - [x] README 更新为 App-first token 协议
 - [x] 当前配对壳状态已提交：`6777cda feat: add mobile pairing shell`
 
-## 当前未完成：真实对话
+## 当前未完成：真机对话验证
 
-App 现在还没有实现真实对话。`sendPrompt()` 只追加本地占位文本：
+App 已接入 WebSocket 对话，但还需要真机端到端验证：
 
-```text
-正在检查 `cc-remote` 的当前结构...
-```
-
-下一步必须做：
-
-- [ ] 加依赖：`web_socket_channel`
-- [ ] 实现 `wss://tbhaoshuai.ccwu.cc/ws` 连接
-- [ ] 连接后发送 `{ "type": "auth", "token": "..." }`
-- [ ] 收到 `status.authenticated == true` 后标记 WebSocket ready
-- [ ] 发送 prompt 时发送 `{ "type": "prompt", "text": "..." }`
-- [ ] 收到 `text` 时追加到当前 assistant message
-- [ ] 收到 `done` 时结束 running 状态
-- [ ] 收到 `error` 时显示错误并结束 running 状态
-- [ ] Stop 按钮发送 `{ "type": "stop" }`
-- [ ] 收到 `stopped` 时标记当前回答已停止
-- [ ] 断线时显示重连入口，不自动重发 prompt
+- [ ] 手机 App 连接 `wss://tbhaoshuai.ccwu.cc/ws` 成功
+- [ ] 发送 `回复 pong，只输出 pong`
+- [ ] daemon 启动本机 `claude` CLI
+- [ ] App 显示真实 `pong` 输出
+- [ ] App 收到 `done`
+- [ ] Stop 可中断长任务
 
 ## 下一步验证清单
 
@@ -75,7 +69,7 @@ App 现在还没有实现真实对话。`sendPrompt()` 只追加本地占位文�
 - [x] 电脑端访问 `https://tbhaoshuai.ccwu.cc/api/health` 成功
 - [ ] 手机浏览器访问 `https://tbhaoshuai.ccwu.cc/api/health` 成功
 - [x] 手机 App 经域名配对成功
-- [ ] 手机 App 经 `wss://tbhaoshuai.ccwu.cc/ws` 连接成功
+- [ ] 手机 App 经 `wss://tbhaoshuai.ccwu.cc/ws` 连接成功并 auth
 - [ ] 验证错误 Origin 无法调用 mutating API
 - [ ] 验证错误 Host 被拒绝
 
@@ -85,9 +79,9 @@ App 现在还没有实现真实对话。`sendPrompt()` 只追加本地占位文�
 - [x] App 显示已连接设备
 - [x] 关闭重开 App 后可恢复已配对状态
 - [x] App logout 可清理本地 token
-- [ ] App 发送 prompt 后 daemon 启动本机 `claude` CLI
-- [ ] App 能收到流式 `text`
-- [ ] App 能收到 `done`
+- [ ] 真机 App 发送 prompt 后 daemon 启动本机 `claude` CLI
+- [ ] 真机 App 能收到流式 `text`
+- [ ] 真机 App 能收到 `done`
 - [ ] `.data/state.json` 写入 `claudeSessionId`
 - [ ] 第二条 prompt 验证 `--resume <claudeSessionId>` 生效
 - [ ] Stop 可中断长任务
@@ -98,7 +92,7 @@ App 现在还没有实现真实对话。`sendPrompt()` 只追加本地占位文�
 - [ ] 只有单设备授权态，没有多设备管理
 - [ ] 只有单项目工作目录，通过 `WORKSPACE_DIR` 固定
 - [ ] 网页/PWA 只作为调试壳，不是主产品入口
-- [ ] App 聊天功能尚未接 WebSocket
+- [ ] App 聊天功能已接 WebSocket，但尚未完成真机 Claude 输出验证
 - [ ] 没有文件上传/下载
 - [ ] 没有手机端权限审批流
 - [ ] 没有任务历史持久化，重开 App 不恢复 transcript

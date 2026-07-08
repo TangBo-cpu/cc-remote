@@ -28,14 +28,19 @@
 - Flutter App Secure Storage 保存 token。
 - Flutter App 启动时 `/api/status` 恢复已配对状态。
 - Flutter App logout 调用 daemon 并清本地 token。
+- Flutter App WebSocket 连接 `/ws`。
+- Flutter App 发送首条 `{ "type": "auth", "token": "..." }` 鉴权。
+- Flutter App 发送 prompt 到 daemon。
+- Flutter App 接收 `text`、`done`、`error`、`stopped`。
+- Stop 按钮发送 WebSocket `{ "type": "stop" }`。
 
 未完成：
 
-- Flutter App 还没有接 WebSocket 对话。
-- App 里的聊天输出目前是本地占位文本，不是 Claude Code 真实回复。
-- Stop 按钮目前还没有发送 WebSocket `{ "type": "stop" }`。
+- 还没做手机真机端到端验证 Claude Code 流式输出。
+- 还没做 transcript 持久化。
+- 还没做断线自动恢复任务输出。
 
-下一步最小任务：给 Flutter App 接上 `wss://tbhaoshuai.ccwu.cc/ws`，完成 auth、prompt、text/done/error、stop。
+下一步最小任务：真机发 `回复 pong，只输出 pong`，验证 App 能收到 Claude Code 真实输出。
 
 ## 运行 daemon
 
@@ -121,10 +126,13 @@ POST /api/pair
 保存 token 到 Secure Storage
 启动时 GET /api/status
 显示已连接设备
+连接 wss://tbhaoshuai.ccwu.cc/ws
+发送 auth 消息
+发送 prompt
+接收 text/done/error/stopped
+发送 stop
 POST /api/logout
 ```
-
-App 当前不能做真实对话。聊天界面只是 UI 壳。
 
 ## HTTP API
 

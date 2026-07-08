@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 void main() {
   runApp(const CcRemoteApp());
@@ -63,9 +64,12 @@ class _DemoShellState extends State<DemoShell> {
   bool running = false;
   bool pairing = false;
   bool handlingQr = false;
+  bool wsReady = false;
   String? pausedQrRaw;
   String? pairError;
   SavedSession? session;
+  WebSocketChannel? ws;
+  StreamSubscription<dynamic>? wsSubscription;
   final TokenStore tokenStore = TokenStore();
   final http.Client httpClient = http.Client();
   final TextEditingController promptController = TextEditingController();
@@ -79,6 +83,7 @@ class _DemoShellState extends State<DemoShell> {
 
   @override
   void dispose() {
+    closeWs();
     httpClient.close();
     promptController.dispose();
     super.dispose();
@@ -103,13 +108,15 @@ class _DemoShellState extends State<DemoShell> {
     try {
       final status = await fetchStatus(saved);
       if (!mounted) return;
+      final restored = saved.copyWith(
+        deviceName: status.deviceName,
+        workspaceDir: status.workspaceDir,
+      );
       setState(() {
-        session = saved.copyWith(
-          deviceName: status.deviceName,
-          workspaceDir: status.workspaceDir,
-        );
+        session = restored;
         route = ShellRoute.chat;
       });
+      connectWs(restored);
     } catch (err) {
       if (err is UnauthorizedSession) await tokenStore.clear();
       if (!mounted) return;
@@ -132,28 +139,155 @@ class _DemoShellState extends State<DemoShell> {
       );
       route = ShellRoute.chat;
       running = false;
+      wsReady = true;
       messages.clear();
+    });
+  }
+
+  void closeWs() {
+    final subscription = wsSubscription;
+    if (subscription != null) unawaited(subscription.cancel());
+    wsSubscription = null;
+    ws?.sink.close();
+    ws = null;
+    wsReady = false;
+  }
+
+  void connectWs(SavedSession saved) {
+    if (widget.demoMode) {
+      setState(() => wsReady = true);
+      return;
+    }
+
+    closeWs();
+    setState(() => wsReady = false);
+
+    try {
+      final channel = WebSocketChannel.connect(wsUri(saved.origin));
+      ws = channel;
+      wsSubscription = channel.stream.listen(
+        handleWsMessage,
+        onError: (Object err) => handleWsClosed('连接错误：$err'),
+        onDone: () => handleWsClosed('连接已断开'),
+      );
+      channel.sink.add(jsonEncode({'type': 'auth', 'token': saved.token}));
+    } catch (err) {
+      handleWsClosed('连接失败：$err');
+    }
+  }
+
+  Uri wsUri(Uri origin) {
+    final scheme = origin.scheme == 'https' ? 'wss' : 'ws';
+    return Uri.parse('$scheme://${origin.authority}/ws');
+  }
+
+  void handleWsMessage(dynamic data) {
+    final decoded = jsonDecode(data.toString());
+    if (decoded is! Map<String, dynamic>) return;
+
+    switch (decoded['type']) {
+      case 'status':
+        setState(() {
+          wsReady = decoded['authenticated'] == true;
+          running = decoded['running'] == true;
+        });
+      case 'text':
+        appendAssistantText(decoded['text'] as String? ?? '');
+      case 'done':
+        setState(() => running = false);
+      case 'stopped':
+        setState(() {
+          running = false;
+          messages.add(TranscriptMessage.system('已停止'));
+        });
+      case 'error':
+        setState(() {
+          running = false;
+          messages.add(
+            TranscriptMessage.system('错误：${decoded['message'] ?? '未知错误'}'),
+          );
+        });
+    }
+  }
+
+  void handleWsClosed(String message) {
+    if (!mounted || route != ShellRoute.chat) return;
+    setState(() {
+      wsReady = false;
+      if (running) {
+        running = false;
+        messages.add(TranscriptMessage.system(message));
+      }
+    });
+  }
+
+  void appendAssistantText(String text) {
+    if (text.isEmpty) return;
+    setState(() {
+      if (messages.isNotEmpty && messages.last.role == MessageRole.assistant) {
+        final last = messages.removeLast();
+        messages.add(TranscriptMessage.assistant(last.text + text));
+      } else {
+        messages.add(TranscriptMessage.assistant(text));
+      }
     });
   }
 
   void sendPrompt() {
     final text = promptController.text.trim();
     if (text.isEmpty || running) return;
+
+    if (widget.demoMode) {
+      setState(() {
+        promptController.clear();
+        running = false;
+        messages
+          ..add(TranscriptMessage.user(text))
+          ..add(TranscriptMessage.assistant('演示模式：真实对话需要连接 daemon WebSocket。'));
+      });
+      return;
+    }
+
+    final channel = ws;
+    final current = session;
+    if (!wsReady || channel == null || current == null) {
+      if (current != null) connectWs(current);
+      setState(() => messages.add(TranscriptMessage.system('正在连接电脑端，请稍后再试')));
+      return;
+    }
+
     setState(() {
       promptController.clear();
       running = true;
       messages
         ..add(TranscriptMessage.user(text))
-        ..add(TranscriptMessage.assistant('正在检查 `cc-remote` 的当前结构...\n\n'));
+        ..add(TranscriptMessage.assistant(''));
     });
+    channel.sink.add(jsonEncode({'type': 'prompt', 'text': text}));
   }
 
   void stopRun() {
     if (!running) return;
-    setState(() {
-      running = false;
-      messages.add(TranscriptMessage.system('已停止'));
-    });
+
+    if (widget.demoMode) {
+      setState(() {
+        running = false;
+        messages.add(TranscriptMessage.system('已停止'));
+      });
+      return;
+    }
+
+    final channel = ws;
+    if (channel == null || !wsReady) {
+      setState(() {
+        running = false;
+        messages.add(TranscriptMessage.system('未连接，无法发送停止指令'));
+      });
+      return;
+    }
+
+    channel.sink.add(jsonEncode({'type': 'stop'}));
+    setState(() => messages.add(TranscriptMessage.system('正在停止')));
   }
 
   void fillPrompt(String text) {
@@ -163,10 +297,12 @@ class _DemoShellState extends State<DemoShell> {
   }
 
   void logoutDemoDevice() {
+    closeWs();
     setState(() {
       session = null;
       route = ShellRoute.pair;
       running = false;
+      wsReady = false;
       pausedQrRaw = null;
       messages.clear();
       promptController.clear();
@@ -259,6 +395,7 @@ class _DemoShellState extends State<DemoShell> {
         pairError = null;
         messages.clear();
       });
+      connectWs(saved);
     } catch (err) {
       if (mounted) setState(() => pairError = errorText(err));
     } finally {
@@ -285,10 +422,15 @@ class _DemoShellState extends State<DemoShell> {
           ShellRoute.chat => ChatScreen(
             session: session,
             running: running,
+            connected: wsReady,
             messages: messages,
             promptController: promptController,
             onChanged: () => setState(() {}),
             onFillPrompt: fillPrompt,
+            onReconnect: () {
+              final current = session;
+              if (current != null) connectWs(current);
+            },
             onSend: sendPrompt,
             onStop: stopRun,
             onLogout: logoutPairedDevice,
@@ -564,10 +706,12 @@ class ChatScreen extends StatelessWidget {
     super.key,
     required this.session,
     required this.running,
+    required this.connected,
     required this.messages,
     required this.promptController,
     required this.onChanged,
     required this.onFillPrompt,
+    required this.onReconnect,
     required this.onSend,
     required this.onStop,
     required this.onLogout,
@@ -575,10 +719,12 @@ class ChatScreen extends StatelessWidget {
 
   final SavedSession? session;
   final bool running;
+  final bool connected;
   final List<TranscriptMessage> messages;
   final TextEditingController promptController;
   final VoidCallback onChanged;
   final ValueChanged<String> onFillPrompt;
+  final VoidCallback onReconnect;
   final VoidCallback onSend;
   final VoidCallback onStop;
   final VoidCallback onLogout;
@@ -591,9 +737,17 @@ class ChatScreen extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
         child: Column(
           children: [
-            ConnectionHeader(session: session, onLogout: onLogout),
+            ConnectionHeader(
+              session: session,
+              connected: connected,
+              onLogout: onLogout,
+            ),
             const SizedBox(height: 10),
-            SessionStrip(running: running),
+            SessionStrip(
+              running: running,
+              connected: connected,
+              onReconnect: onReconnect,
+            ),
             const SizedBox(height: 10),
             Expanded(
               child: TranscriptView(
@@ -606,6 +760,7 @@ class ChatScreen extends StatelessWidget {
             PromptBar(
               controller: promptController,
               running: running,
+              connected: connected,
               onChanged: onChanged,
               onSend: onSend,
               onStop: onStop,
@@ -621,10 +776,12 @@ class ConnectionHeader extends StatelessWidget {
   const ConnectionHeader({
     super.key,
     required this.session,
+    required this.connected,
     required this.onLogout,
   });
 
   final SavedSession? session;
+  final bool connected;
   final VoidCallback onLogout;
 
   @override
@@ -649,7 +806,10 @@ class ConnectionHeader extends StatelessWidget {
               ],
             ),
           ),
-          const StatusPill(label: '已连接', color: AppColors.accent),
+          StatusPill(
+            label: connected ? '已连接' : '连接中',
+            color: connected ? AppColors.accent : AppColors.muted,
+          ),
           const SizedBox(width: 6),
           IconButton(
             onPressed: () => showSettingsSheet(context, session, onLogout),
@@ -805,9 +965,16 @@ Future<void> confirmLogout(BuildContext context, VoidCallback onLogout) async {
 }
 
 class SessionStrip extends StatelessWidget {
-  const SessionStrip({super.key, required this.running});
+  const SessionStrip({
+    super.key,
+    required this.running,
+    required this.connected,
+    required this.onReconnect,
+  });
 
   final bool running;
+  final bool connected;
+  final VoidCallback onReconnect;
 
   @override
   Widget build(BuildContext context) {
@@ -817,14 +984,22 @@ class SessionStrip extends StatelessWidget {
       child: Row(
         children: [
           Icon(
-            running ? Icons.bolt_rounded : Icons.history_rounded,
-            color: running ? AppColors.accent : AppColors.muted,
+            running
+                ? Icons.bolt_rounded
+                : connected
+                ? Icons.history_rounded
+                : Icons.wifi_off_rounded,
+            color: running || connected ? AppColors.accent : AppColors.muted,
             size: 19,
           ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              running ? 'Claude 正在运行' : '新会话',
+              running
+                  ? 'Claude 正在运行'
+                  : connected
+                  ? '新会话'
+                  : '正在连接电脑端',
               style: const TextStyle(fontWeight: FontWeight.w600),
             ),
           ),
@@ -836,7 +1011,9 @@ class SessionStrip extends StatelessWidget {
                 color: AppColors.accent,
                 backgroundColor: Color(0xFFE8F3F6),
               ),
-            ),
+            )
+          else if (!connected)
+            TextButton(onPressed: onReconnect, child: const Text('重连')),
         ],
       ),
     );
@@ -1008,6 +1185,7 @@ class PromptBar extends StatelessWidget {
     super.key,
     required this.controller,
     required this.running,
+    required this.connected,
     required this.onChanged,
     required this.onSend,
     required this.onStop,
@@ -1015,13 +1193,14 @@ class PromptBar extends StatelessWidget {
 
   final TextEditingController controller;
   final bool running;
+  final bool connected;
   final VoidCallback onChanged;
   final VoidCallback onSend;
   final VoidCallback onStop;
 
   @override
   Widget build(BuildContext context) {
-    final canSend = controller.text.trim().isNotEmpty && !running;
+    final canSend = controller.text.trim().isNotEmpty && !running && connected;
     return GlassPanel(
       padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
       radius: 20,
@@ -1035,11 +1214,11 @@ class PromptBar extends StatelessWidget {
               minLines: 1,
               maxLines: 4,
               onChanged: (_) => onChanged(),
-              decoration: const InputDecoration(
-                hintText: '发送任务给 Claude Code',
+              decoration: InputDecoration(
+                hintText: connected ? '发送任务给 Claude Code' : '正在连接电脑端',
                 border: InputBorder.none,
                 isDense: true,
-                contentPadding: EdgeInsets.symmetric(
+                contentPadding: const EdgeInsets.symmetric(
                   horizontal: 6,
                   vertical: 10,
                 ),

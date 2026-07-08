@@ -14,16 +14,17 @@ Flutter 手机 App，用于扫码配对本机 CC Remote daemon。
 - 启动时读取 token 并调用 `/api/status`。
 - 显示已连接设备和工作区。
 - Logout 调用 `/api/logout` 并清本地 token。
-- 聊天 UI 壳。
+- 连接 daemon WebSocket。
+- 发送首条 auth 消息。
+- 发送 prompt 到 daemon。
+- 接收 Claude Code `text`、`done`、`error`、`stopped` 消息。
+- Stop 发送 `{ "type": "stop" }`。
 
 未实现：
 
-- WebSocket 对话。
-- 发送 prompt 到 daemon。
-- 接收 Claude Code 流式输出。
-- Stop 真实中断 daemon 任务。
-
-当前聊天页里的回复是本地占位，不是 Claude Code 输出。
+- transcript 持久化。
+- 断线期间输出恢复。
+- 多设备管理。
 
 ## 运行
 
@@ -71,9 +72,7 @@ QR payload：
 }
 ```
 
-## 下一步：真实对话
-
-需要新增 `web_socket_channel`，然后实现：
+## WebSocket 对话流程
 
 ```text
 connect wss://tbhaoshuai.ccwu.cc/ws
@@ -84,3 +83,5 @@ append server text events
 handle done/error/stopped
 send { "type": "stop" }
 ```
+
+下一步真机验证：发送 `回复 pong，只输出 pong`，确认 App 显示真实 Claude Code 输出。
