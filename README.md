@@ -15,13 +15,35 @@
 
 电脑端 daemon 负责显示配对二维码、签发 App token、鉴权 HTTP/WebSocket、调用本机 `claude` CLI。网页/PWA 只保留为调试壳，不是主产品入口。
 
-## 运行
+## 当前状态
+
+已完成：
+
+- daemon App-first token 协议。
+- 终端 JSON QR 配对。
+- `/api/pair` 返回 Bearer token。
+- HTTP Bearer 鉴权。
+- daemon WebSocket 首条 `auth` 消息鉴权。
+- Flutter App 扫码配对。
+- Flutter App Secure Storage 保存 token。
+- Flutter App 启动时 `/api/status` 恢复已配对状态。
+- Flutter App logout 调用 daemon 并清本地 token。
+
+未完成：
+
+- Flutter App 还没有接 WebSocket 对话。
+- App 里的聊天输出目前是本地占位文本，不是 Claude Code 真实回复。
+- Stop 按钮目前还没有发送 WebSocket `{ "type": "stop" }`。
+
+下一步最小任务：给 Flutter App 接上 `wss://tbhaoshuai.ccwu.cc/ws`，完成 auth、prompt、text/done/error、stop。
+
+## 运行 daemon
 
 ```powershell
 npm install
 $env:PUBLIC_ORIGIN = "https://tbhaoshuai.ccwu.cc"
 $env:WORKSPACE_DIR = "E:\\Code-All\\cc-remote"
-$env:DEVICE_NAME = "Jayson PC"
+$env:DEVICE_NAME = "tb"
 npm run dev
 ```
 
@@ -35,12 +57,19 @@ npm run dev
   "version": 1,
   "origin": "https://tbhaoshuai.ccwu.cc",
   "nonce": "base64url-random-nonce",
-  "deviceName": "Jayson PC",
+  "deviceName": "tb",
   "expiresAt": 1780000000000
 }
 ```
 
 二维码 5 分钟过期，一次性使用。App 扫码后调用 `/api/pair` 换取 Bearer token。
+
+如果端口被占用：
+
+```powershell
+$pids8787 = (Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 8787 -State Listen).OwningProcess
+Stop-Process -Id $pids8787 -Force
+```
 
 ## Cloudflare Tunnel
 
@@ -50,12 +79,52 @@ npm run dev
 cloudflared tunnel --url http://127.0.0.1:8787
 ```
 
+如果使用本项目 `.run` 下的固定 tunnel 配置：
+
+```powershell
+cloudflared tunnel --config ".run\cloudflared-cc-remote.yml" run
+```
+
 正式使用固定域名时，确保 `PUBLIC_ORIGIN` 等于手机访问的 HTTPS 域名：
 
 ```powershell
 $env:PUBLIC_ORIGIN = "https://tbhaoshuai.ccwu.cc"
 npm run dev
 ```
+
+手机端先用浏览器验证：
+
+```text
+https://tbhaoshuai.ccwu.cc/api/health
+```
+
+期望：
+
+```json
+{"ok":true}
+```
+
+## Flutter App
+
+```powershell
+cd mobile
+flutter test
+flutter run
+```
+
+App 当前能力：
+
+```text
+扫码二维码
+确认设备和服务地址
+POST /api/pair
+保存 token 到 Secure Storage
+启动时 GET /api/status
+显示已连接设备
+POST /api/logout
+```
+
+App 当前不能做真实对话。聊天界面只是 UI 壳。
 
 ## HTTP API
 
@@ -84,7 +153,7 @@ Content-Type: application/json
 {
   "ok": true,
   "token": "base64url-app-token",
-  "deviceName": "Jayson PC"
+  "deviceName": "tb"
 }
 ```
 
@@ -134,6 +203,8 @@ wss://tbhaoshuai.ccwu.cc/ws
 status, claude_event, text, done, stopped, error
 ```
 
+注意：daemon 已支持这套 WebSocket 协议，Flutter App 尚未接入。
+
 ## 配置项
 
 | 环境变量 | 默认值 | 说明 |
@@ -151,6 +222,8 @@ status, claude_event, text, done, stopped, error
 npm run typecheck
 npm run build
 npm test
+cd mobile
+flutter test
 ```
 
 ## 安全边界
