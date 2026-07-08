@@ -1,10 +1,16 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:cc_remote/main.dart';
 
 void main() {
   testWidgets('shows the app shell and advances to pairing', (tester) async {
-    await tester.pumpWidget(const CcRemoteApp());
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
 
     expect(find.text('CC Remote'), findsOneWidget);
     expect(find.text('正在检查本地配对信息'), findsOneWidget);
@@ -18,7 +24,9 @@ void main() {
   testWidgets('settings uses a confirmation before leaving pairing', (
     tester,
   ) async {
-    await tester.pumpWidget(const CcRemoteApp());
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
     await tester.pump(const Duration(seconds: 1));
 
     await tester.tap(find.text('连接这台电脑'));
@@ -38,5 +46,74 @@ void main() {
     await tester.tap(find.text('退出').last);
     await tester.pumpAndSettle();
     expect(find.text('扫描电脑终端里的二维码'), findsOneWidget);
+  });
+
+  testWidgets('empty transcript does not overflow when keyboard is open', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(393, 640);
+    tester.view.devicePixelRatio = 1;
+    tester.view.viewInsets = const FakeViewPadding(bottom: 260);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetViewInsets);
+
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('本机已连接'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('pair screen can resume after holding a scanned QR', (
+    tester,
+  ) async {
+    var resetCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: PairScreen(
+          enableCamera: false,
+          pairing: false,
+          canResetScan: true,
+          onQr: (_) {},
+          onClearError: () => resetCount += 1,
+        ),
+      ),
+    );
+
+    expect(find.text('已暂停扫描，点刷新可重新确认'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('重新扫描'));
+    await tester.pump();
+
+    expect(resetCount, 1);
+  });
+
+  test('parses daemon QR pairing payload', () {
+    final payload = PairingPayload.parse(
+      jsonEncode({
+        'type': 'cc-remote-pair',
+        'version': 1,
+        'origin': 'https://tbhaoshuai.ccwu.cc',
+        'nonce': 'abc123',
+        'deviceName': 'Jayson PC',
+        'expiresAt': DateTime.now()
+            .add(const Duration(minutes: 5))
+            .millisecondsSinceEpoch,
+      }),
+    );
+
+    expect(payload.origin.toString(), 'https://tbhaoshuai.ccwu.cc');
+    expect(payload.nonce, 'abc123');
+    expect(payload.deviceName, 'Jayson PC');
+  });
+
+  test('network timeout gets a useful pairing error', () {
+    expect(errorText(TimeoutException('slow')), '连接超时，请检查电脑端和隧道');
   });
 }
