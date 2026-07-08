@@ -51,13 +51,20 @@ export type AuthState = {
 export async function createAuthState(statePath = join(process.cwd(), '.data', 'state.json')): Promise<AuthState> {
   let state = await loadOrCreateState(statePath);
   let pairing: PairingCode | undefined;
+  let saveQueue: Promise<void> = Promise.resolve();
+  let tmpCounter = 0;
 
   async function save(next = state): Promise<void> {
     state = next;
-    await mkdir(dirname(statePath), { recursive: true });
-    const tmp = `${statePath}.${process.pid}.tmp`;
-    await writeFile(tmp, JSON.stringify(state, null, 2) + '\n', 'utf8');
-    await rename(tmp, statePath);
+    const snapshot = { ...state };
+    const write = saveQueue.catch(() => undefined).then(async () => {
+      await mkdir(dirname(statePath), { recursive: true });
+      const tmp = `${statePath}.${process.pid}.${tmpCounter += 1}.tmp`;
+      await writeFile(tmp, JSON.stringify(snapshot, null, 2) + '\n', 'utf8');
+      await rename(tmp, statePath);
+    });
+    saveQueue = write;
+    await write;
   }
 
   function verifyToken(token: string | undefined): boolean {

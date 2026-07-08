@@ -42,7 +42,33 @@
 
 下一步最小任务：真机发 `回复 pong，只输出 pong`，验证 App 能收到 Claude Code 真实输出。
 
-## 运行 daemon
+## 一键启动电脑端
+
+```powershell
+.\cc-remote.cmd
+```
+
+这个命令会同时启动：
+
+- Cloudflare Tunnel：`tbhaoshuai.ccwu.cc` -> `127.0.0.1:8787`
+- daemon：打印 App 扫码二维码，调用本机 Claude Code CLI
+
+按 `Ctrl+C` 会停止 daemon，并清理本次脚本启动的 tunnel。
+
+也可以用 npm：
+
+```powershell
+npm run cc-remote
+```
+
+可选参数：
+
+```powershell
+.\cc-remote.cmd -NoTunnel
+.\cc-remote.cmd -WorkspaceDir "E:\\Code-All\\cc-remote" -DeviceName "tb"
+```
+
+## 手动运行 daemon
 
 ```powershell
 npm install
@@ -211,7 +237,7 @@ wss://tbhaoshuai.ccwu.cc/ws
 status, claude_event, text, done, stopped, error
 ```
 
-注意：daemon 已支持这套 WebSocket 协议，Flutter App 尚未接入。
+注意：daemon 和 Flutter App 已接入这套 WebSocket 协议，真机 Claude 输出仍需端到端验证。
 
 ## 配置项
 

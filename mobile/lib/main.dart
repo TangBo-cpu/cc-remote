@@ -259,9 +259,7 @@ class _DemoShellState extends State<DemoShell> {
     setState(() {
       promptController.clear();
       running = true;
-      messages
-        ..add(TranscriptMessage.user(text))
-        ..add(TranscriptMessage.assistant(''));
+      messages.add(TranscriptMessage.user(text));
     });
     channel.sink.add(jsonEncode({'type': 'prompt', 'text': text}));
   }

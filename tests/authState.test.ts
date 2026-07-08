@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import assert from 'node:assert/strict';
@@ -38,6 +38,24 @@ test('pairing issues a bearer token and persists session id', async () => {
     const reloaded = await createAuthState(statePath);
     assert.deepEqual(reloaded.status(), { paired: true, hasClaudeSessionId: true });
     assert.equal(reloaded.getClaudeSessionId(), 'session-1');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('concurrent session id saves do not reuse the same temp file', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-'));
+  try {
+    const statePath = join(dir, 'state.json');
+    const auth = await createAuthState(statePath);
+
+    await Promise.all([
+      auth.setClaudeSessionId('session-1'),
+      auth.setClaudeSessionId('session-2'),
+    ]);
+
+    const parsed = JSON.parse(await readFile(statePath, 'utf8')) as { claudeSessionId?: string };
+    assert.equal(parsed.claudeSessionId, 'session-2');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
