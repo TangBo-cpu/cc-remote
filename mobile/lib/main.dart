@@ -59,6 +59,7 @@ class DemoShell extends StatefulWidget {
 
 class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   static const networkTimeout = Duration(seconds: 12);
+  static const interruptedRunMessage = '上次任务可能仍在电脑端运行，请重连确认';
 
   ShellRoute route = ShellRoute.boot;
   bool running = false;
@@ -72,9 +73,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   WebSocketChannel? ws;
   StreamSubscription<dynamic>? wsSubscription;
   final TokenStore tokenStore = TokenStore();
+  final TranscriptStore transcriptStore = TranscriptStore();
   final http.Client httpClient = http.Client();
   final TextEditingController promptController = TextEditingController();
   final List<TranscriptMessage> messages = [];
+  Future<void> lastTranscriptWrite = Future<void>.value();
 
   @override
   void initState() {
@@ -98,6 +101,59 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     unawaited(refreshConnection());
   }
 
+  Future<void> queueTranscriptWrite(Future<void> Function() write) {
+    final previous = lastTranscriptWrite;
+    lastTranscriptWrite = () async {
+      try {
+        await previous;
+      } catch (_) {}
+      try {
+        await write();
+      } catch (_) {}
+    }();
+    return lastTranscriptWrite;
+  }
+
+  Future<void> persistTranscriptSnapshot() {
+    final snapshot = TranscriptSnapshot(
+      messages: List.of(messages),
+      running: running,
+    );
+    return queueTranscriptWrite(() => transcriptStore.save(snapshot));
+  }
+
+  void persistTranscriptSnapshotLater() {
+    unawaited(persistTranscriptSnapshot());
+  }
+
+  Future<void> restoreTranscriptSnapshot() async {
+    final snapshot = await transcriptStore.load();
+    if (snapshot == null || !mounted) return;
+    setState(() {
+      messages
+        ..clear()
+        ..addAll(snapshot.messages);
+      running = snapshot.running;
+      if (snapshot.running &&
+          !messages.any((message) => message.text == interruptedRunMessage)) {
+        messages.add(TranscriptMessage.system(interruptedRunMessage));
+      }
+    });
+    await persistTranscriptSnapshot();
+  }
+
+  Future<void> clearTranscriptStore() {
+    return queueTranscriptWrite(transcriptStore.clear);
+  }
+
+  void removeInterruptedRunNotice() {
+    messages.removeWhere(
+      (message) =>
+          message.role == MessageRole.system &&
+          message.text == interruptedRunMessage,
+    );
+  }
+
   Future<void> refreshConnection() async {
     final current = session;
     if (widget.demoMode || route != ShellRoute.chat || current == null) return;
@@ -115,13 +171,17 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       setState(() {
         session = restored;
         remoteOffline = false;
+        running = status.running;
+        if (!status.running) removeInterruptedRunNotice();
       });
+      persistTranscriptSnapshotLater();
       connectWs(restored);
     } catch (err) {
       if (!mounted || session != current) return;
       closeWs();
       if (err is UnauthorizedSession) {
         await tokenStore.clear();
+        await clearTranscriptStore();
         if (!mounted || session != current) return;
         setState(() {
           session = null;
@@ -129,6 +189,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           pairError = '无法恢复连接，请重新扫码';
           remoteOffline = false;
           running = false;
+          messages.clear();
         });
         return;
       }
@@ -136,6 +197,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         remoteOffline = true;
         running = false;
       });
+      persistTranscriptSnapshotLater();
     }
   }
 
@@ -151,9 +213,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     final saved = await tokenStore.load();
     if (!mounted) return;
     if (saved == null) {
+      await clearTranscriptStore();
+      if (!mounted) return;
       setState(() => route = ShellRoute.pair);
       return;
     }
+
+    await restoreTranscriptSnapshot();
+    if (!mounted) return;
 
     try {
       final status = await fetchStatus(saved);
@@ -166,16 +233,22 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         session = restored;
         route = ShellRoute.chat;
         remoteOffline = false;
+        running = status.running;
+        if (!status.running) removeInterruptedRunNotice();
       });
+      persistTranscriptSnapshotLater();
       connectWs(restored);
     } catch (err) {
       if (!mounted) return;
       if (err is UnauthorizedSession) {
         await tokenStore.clear();
+        await clearTranscriptStore();
         if (!mounted) return;
         setState(() {
           pairError = '无法恢复连接，请重新扫码';
           route = ShellRoute.pair;
+          running = false;
+          messages.clear();
         });
         return;
       }
@@ -186,10 +259,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         remoteOffline = true;
         running = false;
       });
+      persistTranscriptSnapshotLater();
     }
   }
 
-  void connectDemoDevice() {
+  Future<void> connectDemoDevice() async {
+    await clearTranscriptStore();
+    if (!mounted) return;
     setState(() {
       session = SavedSession(
         origin: Uri.parse('https://tbhaoshuai.ccwu.cc'),
@@ -246,22 +322,31 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     final decoded = jsonDecode(data.toString());
     if (decoded is! Map<String, dynamic>) return;
 
+    if (decoded['authenticated'] == false) {
+      unawaited(recoverUnauthorizedSession());
+      return;
+    }
+
     switch (decoded['type']) {
       case 'status':
         setState(() {
           wsReady = decoded['authenticated'] == true;
           remoteOffline = false;
           running = decoded['running'] == true;
+          if (!running) removeInterruptedRunNotice();
         });
+        persistTranscriptSnapshotLater();
       case 'text':
         appendAssistantText(decoded['text'] as String? ?? '');
       case 'done':
         setState(() => running = false);
+        persistTranscriptSnapshotLater();
       case 'stopped':
         setState(() {
           running = false;
           messages.add(TranscriptMessage.system('已停止'));
         });
+        persistTranscriptSnapshotLater();
       case 'error':
         setState(() {
           running = false;
@@ -269,7 +354,23 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             TranscriptMessage.system('错误：${decoded['message'] ?? '未知错误'}'),
           );
         });
+        persistTranscriptSnapshotLater();
     }
+  }
+
+  Future<void> recoverUnauthorizedSession() async {
+    closeWs();
+    await tokenStore.clear();
+    await clearTranscriptStore();
+    if (!mounted) return;
+    setState(() {
+      session = null;
+      route = ShellRoute.pair;
+      pairError = '无法恢复连接，请重新扫码';
+      remoteOffline = false;
+      running = false;
+      messages.clear();
+    });
   }
 
   void handleWsClosed(String message) {
@@ -282,6 +383,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         messages.add(TranscriptMessage.system(message));
       }
     });
+    persistTranscriptSnapshotLater();
   }
 
   void appendAssistantText(String text) {
@@ -294,6 +396,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         messages.add(TranscriptMessage.assistant(text));
       }
     });
+    persistTranscriptSnapshotLater();
   }
 
   void sendPrompt() {
@@ -308,6 +411,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           ..add(TranscriptMessage.user(text))
           ..add(TranscriptMessage.assistant('演示模式：真实对话需要连接 daemon WebSocket。'));
       });
+      persistTranscriptSnapshotLater();
       return;
     }
 
@@ -316,12 +420,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     if (!wsReady || channel == null || current == null) {
       if (current != null) refreshConnection();
       setState(() {
+        running = false;
         messages.add(
           TranscriptMessage.system(
             remoteOffline ? '电脑端离线，请先重连' : '正在连接电脑端，请稍后再试',
           ),
         );
       });
+      persistTranscriptSnapshotLater();
       return;
     }
 
@@ -330,6 +436,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       running = true;
       messages.add(TranscriptMessage.user(text));
     });
+    persistTranscriptSnapshotLater();
     channel.sink.add(jsonEncode({'type': 'prompt', 'text': text}));
   }
 
@@ -341,6 +448,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         running = false;
         messages.add(TranscriptMessage.system('已停止'));
       });
+      persistTranscriptSnapshotLater();
       return;
     }
 
@@ -350,11 +458,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         running = false;
         messages.add(TranscriptMessage.system('未连接，无法发送停止指令'));
       });
+      persistTranscriptSnapshotLater();
       return;
     }
 
     channel.sink.add(jsonEncode({'type': 'stop'}));
     setState(() => messages.add(TranscriptMessage.system('正在停止')));
+    persistTranscriptSnapshotLater();
   }
 
   Future<void> beginNewConversation() async {
@@ -366,6 +476,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           ..clear()
           ..add(TranscriptMessage.system('已开启新对话'));
       });
+      persistTranscriptSnapshotLater();
       return;
     }
 
@@ -379,7 +490,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             headers: {'Authorization': 'Bearer ${current.token}'},
           )
           .timeout(networkTimeout);
-      if (res.statusCode == 401) throw const UnauthorizedSession();
+      if (res.statusCode == 401) {
+        if (!mounted || session != current) return;
+        await tokenStore.clear();
+        await clearTranscriptStore();
+        await logoutDemoDevice();
+        if (mounted) setState(() => pairError = '无法恢复连接，请重新扫码');
+        return;
+      }
       if (res.statusCode != 200) throw StateError('new_conversation_failed');
       if (!mounted || session != current) return;
       setState(() {
@@ -387,11 +505,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           ..clear()
           ..add(TranscriptMessage.system('已开启新对话'));
       });
+      persistTranscriptSnapshotLater();
     } catch (_) {
       if (!mounted || session != current) return;
       setState(() {
         messages.add(TranscriptMessage.system('开启新对话失败，请重试'));
       });
+      persistTranscriptSnapshotLater();
     }
   }
 
@@ -401,8 +521,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     setState(() {});
   }
 
-  void logoutDemoDevice() {
+  Future<void> logoutDemoDevice() async {
     closeWs();
+    await clearTranscriptStore();
+    if (!mounted) return;
     setState(() {
       session = null;
       route = ShellRoute.pair;
@@ -437,7 +559,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       }
       await tokenStore.clear();
     }
-    logoutDemoDevice();
+    await logoutDemoDevice();
   }
 
   Future<RemoteStatus> fetchStatus(SavedSession saved) async {
@@ -493,10 +615,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         deviceName: body['deviceName'] as String? ?? payload.deviceName,
       );
       await tokenStore.save(saved);
+      await clearTranscriptStore();
       if (!mounted) return;
       setState(() {
         session = saved;
         route = ShellRoute.chat;
+        running = false;
         remoteOffline = false;
         pausedQrRaw = null;
         pairError = null;
@@ -1735,15 +1859,21 @@ class SavedSession {
 }
 
 class RemoteStatus {
-  const RemoteStatus({required this.deviceName, required this.workspaceDir});
+  const RemoteStatus({
+    required this.deviceName,
+    required this.workspaceDir,
+    required this.running,
+  });
 
   final String? deviceName;
   final String? workspaceDir;
+  final bool running;
 
   static RemoteStatus fromJson(Map<String, dynamic> json) {
     return RemoteStatus(
       deviceName: json['deviceName'] as String?,
       workspaceDir: json['workspaceDir'] as String?,
+      running: json['running'] == true,
     );
   }
 }
@@ -1779,10 +1909,74 @@ class TokenStore {
   }
 }
 
+class TranscriptStore {
+  TranscriptStore({FlutterSecureStorage? storage})
+    : storage = storage ?? const FlutterSecureStorage();
+
+  static const key = 'cc_remote_transcript';
+  final FlutterSecureStorage storage;
+
+  Future<TranscriptSnapshot?> load() async {
+    final raw = await storage.read(key: key);
+    if (raw == null) return null;
+    try {
+      return TranscriptSnapshot.fromJson(
+        jsonDecode(raw) as Map<String, dynamic>,
+      );
+    } catch (_) {
+      await clear();
+      return null;
+    }
+  }
+
+  Future<void> save(TranscriptSnapshot snapshot) {
+    return storage.write(key: key, value: jsonEncode(snapshot.toJson()));
+  }
+
+  Future<void> clear() {
+    return storage.delete(key: key);
+  }
+}
+
 String errorText(Object err) {
   if (err is FormatException) return '这不是 CC Remote 配对二维码';
   if (err is TimeoutException) return '连接超时，请检查电脑端和隧道';
   return '配对失败，请重新生成二维码';
+}
+
+class TranscriptSnapshot {
+  const TranscriptSnapshot({required this.messages, required this.running});
+
+  static const schemaVersion = 1;
+  final List<TranscriptMessage> messages;
+  final bool running;
+
+  Map<String, dynamic> toJson() {
+    return {
+      'version': schemaVersion,
+      'running': running,
+      'messages': messages.map((message) => message.toJson()).toList(),
+    };
+  }
+
+  static TranscriptSnapshot fromJson(Map<String, dynamic> json) {
+    if (json['version'] != schemaVersion) {
+      throw const FormatException('bad_transcript_snapshot');
+    }
+    final rawMessages = json['messages'];
+    if (rawMessages is! List) {
+      throw const FormatException('bad_transcript_snapshot');
+    }
+    return TranscriptSnapshot(
+      running: json['running'] == true,
+      messages: rawMessages
+          .map(
+            (message) =>
+                TranscriptMessage.fromJson(message as Map<String, dynamic>),
+          )
+          .toList(),
+    );
+  }
 }
 
 class TranscriptMessage {
@@ -1797,6 +1991,22 @@ class TranscriptMessage {
 
   final MessageRole role;
   final String text;
+
+  Map<String, dynamic> toJson() {
+    return {'role': role.name, 'text': text};
+  }
+
+  static TranscriptMessage fromJson(Map<String, dynamic> json) {
+    final role = switch (json['role']) {
+      'user' => MessageRole.user,
+      'assistant' => MessageRole.assistant,
+      'system' => MessageRole.system,
+      _ => throw const FormatException('bad_transcript_message'),
+    };
+    final text = json['text'];
+    if (text is! String) throw const FormatException('bad_transcript_message');
+    return TranscriptMessage(role, text);
+  }
 }
 
 enum MessageRole { user, assistant, system }

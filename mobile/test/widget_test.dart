@@ -2,11 +2,65 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:cc_remote/main.dart';
 
 void main() {
+  setUp(() {
+    FlutterSecureStorage.setMockInitialValues({});
+  });
+
+  test('transcript snapshot round-trip preserves messages and running', () {
+    final snapshot = TranscriptSnapshot(
+      running: true,
+      messages: [
+        TranscriptMessage.user('user text'),
+        TranscriptMessage.assistant('assistant text'),
+        TranscriptMessage.system('system text'),
+      ],
+    );
+
+    final restored = TranscriptSnapshot.fromJson(snapshot.toJson());
+
+    expect(restored.running, isTrue);
+    expect(restored.messages, hasLength(3));
+    expect(restored.messages[0].role, MessageRole.user);
+    expect(restored.messages[0].text, 'user text');
+    expect(restored.messages[1].role, MessageRole.assistant);
+    expect(restored.messages[1].text, 'assistant text');
+    expect(restored.messages[2].role, MessageRole.system);
+    expect(restored.messages[2].text, 'system text');
+  });
+
+  test('transcript store round-trip and clear', () async {
+    final store = TranscriptStore();
+    final snapshot = TranscriptSnapshot(
+      running: true,
+      messages: [
+        TranscriptMessage.user('user text'),
+        TranscriptMessage.assistant('assistant text'),
+        TranscriptMessage.system('system text'),
+      ],
+    );
+
+    await store.save(snapshot);
+    final restored = await store.load();
+
+    expect(restored, isNotNull);
+    expect(restored!.running, isTrue);
+    expect(restored.messages.map((message) => message.text), [
+      'user text',
+      'assistant text',
+      'system text',
+    ]);
+
+    await store.clear();
+
+    expect(await store.load(), isNull);
+  });
+
   testWidgets('shows the app shell and advances to pairing', (tester) async {
     await tester.pumpWidget(
       const CcRemoteApp(enableCamera: false, demoMode: true),
@@ -33,6 +87,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('本机已连接'), findsOneWidget);
 
+    await TranscriptStore().save(
+      TranscriptSnapshot(
+        running: false,
+        messages: [TranscriptMessage.user('persisted')],
+      ),
+    );
+
     await tester.tap(find.byTooltip('设置'));
     await tester.pumpAndSettle();
     expect(find.text('退出配对'), findsOneWidget);
@@ -47,6 +108,7 @@ void main() {
     await tester.tap(find.text('退出').last);
     await tester.pumpAndSettle();
     expect(find.text('扫描电脑终端里的二维码'), findsOneWidget);
+    expect(await TranscriptStore().load(), isNull);
   });
 
   testWidgets('demo chat no longer uses the old fake project scan reply', (
@@ -67,6 +129,13 @@ void main() {
     expect(find.text('ping'), findsOneWidget);
     expect(find.textContaining('真实对话需要连接 daemon WebSocket'), findsOneWidget);
     expect(find.textContaining('正在检查 `cc-remote` 的当前结构'), findsNothing);
+
+    final snapshot = await TranscriptStore().load();
+    expect(snapshot, isNotNull);
+    expect(snapshot!.messages.map((message) => message.text), [
+      'ping',
+      '演示模式：真实对话需要连接 daemon WebSocket。',
+    ]);
   });
 
   testWidgets('new conversation clears the current transcript', (tester) async {
@@ -90,6 +159,11 @@ void main() {
 
     expect(find.text('ping'), findsNothing);
     expect(find.text('已开启新对话'), findsOneWidget);
+
+    final snapshot = await TranscriptStore().load();
+    expect(snapshot, isNotNull);
+    expect(snapshot!.running, isFalse);
+    expect(snapshot.messages.map((message) => message.text), ['已开启新对话']);
   });
 
   testWidgets('running state does not show a chat progress bar', (
