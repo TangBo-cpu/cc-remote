@@ -16,6 +16,7 @@
 - [x] Claude bridge 保留 `--resume <claudeSessionId>`
 - [x] stale Claude Code session 报 `No conversation found with session ID` 时清理并新会话重试
 - [x] auth state 写入串行化，避免并发写 `.data/state.json` 临时文件 race
+- [x] Claude bridge 对重复 `session_id` 去重，避免同一轮 prompt 重复写状态
 - [x] 电脑端一键启动脚本：`cc-remote` / `.\cc-remote.cmd` / `npm run cc-remote`
 
 ### Flutter App
@@ -47,17 +48,22 @@
 - [x] mobile README 更新为真实 WebSocket 对话流程
 - [x] 当前功能分支已合并回 `master`：`a0f182f merge: mobile pairing and remote chat`
 
-## 当前未完成：真机 Claude 输出验证
+## 当前未完成：真机 UI Claude 输出验证
 
-App 已接入 WebSocket 对话，配对和状态机已实现。还需要完整真机端到端验证 Claude Code 真实输出：
+本地脚本模拟 App 已通过 WebSocket auth、单条 `pong`、长输出多段 `text`、`done` 和 `claudeSessionId` 写入。还需要完整真机 UI 端到端验证 Claude Code 真实输出：
 
-- [ ] 启动电脑端 `cc-remote`
-- [ ] 手机 App 扫新二维码并显示已连接
-- [ ] 发送 `回复 pong，只输出 pong`
-- [ ] daemon 启动本机 `claude` CLI
-- [ ] App 显示真实 `pong` 输出
-- [ ] App 收到 `done`
-- [ ] `.data/state.json` 写入 `claudeSessionId`
+- [x] 本地启动 daemon 并通过 `/api/health`
+- [x] 本地脚本模拟 App 调用 `/api/pair`
+- [x] 本地脚本模拟 App WebSocket auth 成功
+- [x] 本地脚本模拟 App 发送 `回复 pong，只输出 pong`
+- [x] daemon 启动本机 `claude` CLI
+- [x] 本地脚本模拟 App 收到真实 `pong` 输出
+- [x] 本地脚本模拟 App 收到 `done`
+- [x] `.data/state.json` 写入 `claudeSessionId`
+- [x] 本地脚本模拟 App 验证长输出多段 `text`
+- [ ] 真机 App 扫新二维码并显示已连接
+- [ ] 真机 App 显示真实 `pong` 输出
+- [ ] 真机 App 收到 `done`
 - [ ] 第二条 prompt 验证 `--resume <claudeSessionId>` 生效
 - [ ] Stop 可中断长任务
 - [ ] Stop 后无残留 Claude 进程
@@ -70,7 +76,7 @@ App 已接入 WebSocket 对话，配对和状态机已实现。还需要完整�
 - [x] `GET /api/health` 可返回 `{ "ok": true }`
 - [x] 旧 daemon 占用 `127.0.0.1:8787` 时可定位并杀掉
 - [ ] 无 token 访问 `/api/status` 返回 401
-- [ ] Bearer token 访问 `/api/status` 返回已授权状态
+- [x] Bearer token 访问 `/api/status` 返回已授权状态
 - [ ] logout 后旧 Bearer token 失效
 - [ ] stale `claudeSessionId` 自动清理并重试新会话
 
@@ -92,9 +98,11 @@ App 已接入 WebSocket 对话，配对和状态机已实现。还需要完整�
 - [x] 关闭重开 App 后可恢复已配对状态
 - [x] daemon 离线时显示“电脑端离线”
 - [x] App logout 可清理本地 token
-- [ ] 真机 App 发送 prompt 后 daemon 启动本机 `claude` CLI
-- [ ] 真机 App 能收到流式 `text`
-- [ ] 真机 App 能收到 `done`
+- [x] 本地脚本模拟 App 发送 prompt 后 daemon 启动本机 `claude` CLI
+- [x] 本地脚本模拟 App 能收到流式 `text`
+- [x] 本地脚本模拟 App 能收到 `done`
+- [ ] 真机 App 能显示真实流式 `text`
+- [ ] 真机 App 能显示 `done` 后的完成态
 - [ ] Stop 可中断长任务
 - [ ] Stop 后无残留 Claude 进程
 
@@ -103,7 +111,7 @@ App 已接入 WebSocket 对话，配对和状态机已实现。还需要完整�
 - [ ] 只有单设备授权态，没有多设备管理
 - [ ] 只有单项目工作目录，通过 `WORKSPACE_DIR` 固定
 - [ ] 网页/PWA 只作为调试壳，不是主产品入口
-- [ ] 真机 Claude 输出仍未完整端到端验证
+- [ ] 真机 UI Claude 输出仍未完整端到端验证
 - [ ] 没有文件上传/下载
 - [ ] 没有手机端权限审批流
 - [ ] 没有任务历史持久化，重开 App 不恢复 transcript

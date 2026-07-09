@@ -109,6 +109,8 @@ App 回到前台时会重新调用 `/api/status`。电脑端关闭后，App 保�
 
 ## 下一步真机验证
 
+本地脚本模拟 App 已通过 WebSocket auth、单条 `pong`、长输出多段 `text`、`done` 和 `claudeSessionId` 写入。还需要真机 UI 验证。
+
 发送：
 
 ```text
@@ -117,8 +119,7 @@ App 回到前台时会重新调用 `/api/status`。电脑端关闭后，App 保�
 
 确认：
 
-- App 显示真实 Claude Code 输出。
-- App 收到 `done`。
-- daemon 写入 `.data/state.json` 的 `claudeSessionId`。
+- 真机 App 显示真实 Claude Code 输出。
+- 真机 App 收到 `done` 并回到可发送状态。
 - 第二条 prompt 使用 `--resume <claudeSessionId>` 生效。
 - Stop 可以中断长任务。

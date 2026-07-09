@@ -31,6 +31,7 @@
 - Flutter App WebSocket 连接 `/ws` 并发送首条 `{ "type": "auth", "token": "..." }`。
 - Flutter App 发送 prompt 到 daemon。
 - Flutter App 接收 `text`、`done`、`error`、`stopped`。
+- 本地脚本模拟 App 已验证 WebSocket auth、单条 `pong`、长输出多段 `text`、`done` 和 `claudeSessionId` 写入。
 - Stop 按钮发送 WebSocket `{ "type": "stop" }`。
 - App 状态机区分“已配对”和“已连接”，daemon 离线时显示“电脑端离线”。
 - App 回到前台时重新探测 daemon 状态。
@@ -41,11 +42,13 @@
 
 未完成：
 
-- 还没做完整真机端到端验证 Claude Code 流式输出。
+- 还没做完整真机 UI 端到端验证 Claude Code 流式输出。
+- 还没做连续对话 `--resume <claudeSessionId>` 语义验证。
+- 还没做 Stop 中断长任务验证。
 - 还没做 transcript 持久化。
 - 还没做断线期间输出恢复。
 
-下一步最小任务：启动 `cc-remote` 后，真机发 `回复 pong，只输出 pong`，验证 App 能收到 Claude Code 真实输出。
+下一步最小任务：启动 `cc-remote` 后，在真机 App 发 `回复 pong，只输出 pong`，验证 UI 能显示 Claude Code 真实输出和完成状态。
 
 ## 一键启动电脑端
 
