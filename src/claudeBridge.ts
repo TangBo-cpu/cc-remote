@@ -84,7 +84,7 @@ export class ClaudeBridge {
       options.onEvent(event);
 
       const foundSessionId = findSessionId(event);
-      if (foundSessionId) {
+      if (foundSessionId && foundSessionId !== sessionId) {
         sessionId = foundSessionId;
         options.onSessionId(foundSessionId);
       }
