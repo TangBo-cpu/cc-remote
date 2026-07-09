@@ -580,33 +580,39 @@ class ChatController extends ChangeNotifier {}
 
 ## 13. 与 daemon 的配套改造
 
-当前 daemon 需要从 PWA/cookie 模式改为 App/token 模式。
+当前 daemon 已完成 App/token 主协议。
 
-必须改：
+已完成：
 
-- [ ] `/api/pair` 返回 token，不再设置 cookie。
-- [ ] `AuthState` 提供 `verifyBearerToken()`。
-- [ ] `AuthState` 保留 token hash，不保存 token 明文。
-- [ ] WebSocket 支持第一条 `auth` 消息。
-- [ ] 未 auth 的 WebSocket 不接受 `prompt` / `stop`。
-- [ ] QR 生成 JSON payload。
-- [ ] logout 清 token hash、递增 authGeneration、关闭旧 WS。
+- [x] `/api/pair` 返回 token，不再设置 cookie。
+- [x] `AuthState` 提供 `verifyBearerToken()` 和 `verifyToken()`。
+- [x] `AuthState` 保留 token hash，不保存 token 明文。
+- [x] WebSocket 支持第一条 `auth` 消息。
+- [x] 未 auth 的 WebSocket 不接受 `prompt` / `stop`。
+- [x] QR 生成 JSON payload。
+- [x] logout 清 token hash、递增 authGeneration、关闭旧 WS。
+- [x] auth state 写入串行化，避免并发写 `.data/state.json` 临时文件 race。
+- [x] stale Claude Code session 自动清理并重试新会话。
+- [x] 电脑端一键启动命令 `cc-remote` / `.\cc-remote.cmd`。
 
-可以暂时保留：
+保留：
 
-- [ ] `web/` 调试页，但不作为主产品入口。
+- [x] `web/` 调试页，但不作为主产品入口。
 
 ## 14. 实现顺序
 
-### Step 1：daemon 协议迁移
+### Step 1：daemon 协议迁移（已完成）
 
 - 改 `/api/pair` 返回 token。
 - 改 QR payload 为 JSON。
 - 改 WS auth 消息。
 - 保留现有 Claude bridge。
+- 修复 auth state 并发写 race。
+- stale Claude Code session 自动清理并重试新会话。
+- 添加电脑端一键启动命令。
 - 跑 `npm run typecheck && npm run build && npm test`。
 
-### Step 2：创建 Flutter 项目
+### Step 2：创建 Flutter 项目（已完成）
 
 ```powershell
 flutter create mobile
@@ -619,7 +625,7 @@ cd mobile
 flutter pub add mobile_scanner flutter_secure_storage web_socket_channel http
 ```
 
-### Step 3：实现配对
+### Step 3：实现配对（已完成）
 
 - `PairingPayload.fromJson`
 - `PairingService.pair`
@@ -632,7 +638,7 @@ flutter pub add mobile_scanner flutter_secure_storage web_socket_channel http
 电脑终端二维码 -> 手机扫码 -> App 显示已连接 Jayson PC
 ```
 
-### Step 4：实现 WebSocket 聊天
+### Step 4：实现 WebSocket 聊天（已完成，真机 Claude 输出待验证）
 
 - `RemoteWs.connect`
 - auth 消息
@@ -646,7 +652,7 @@ flutter pub add mobile_scanner flutter_secure_storage web_socket_channel http
 App 发 prompt -> 电脑 Claude Code 执行 -> App 流式显示输出
 ```
 
-### Step 5：Stop 和 Logout
+### Step 5：Stop、Logout 和离线状态（已完成，Stop 真机中断待验证）
 
 - Stop 当前任务。
 - Logout 撤销 token。
@@ -661,17 +667,18 @@ Logout 后旧 App 不能继续控制电脑
 
 ## 15. 第一版验收标准
 
-- [ ] 电脑端 daemon 终端显示 JSON payload 二维码。
-- [ ] Flutter App 可扫码并配对。
-- [ ] token 存入 Secure Storage。
-- [ ] 关闭重开 App 后自动恢复连接。
-- [ ] App 可发送 prompt。
-- [ ] App 可流式显示 Claude 输出。
-- [ ] App 可 Stop。
-- [ ] App 可 Logout。
-- [ ] Logout 后旧 WebSocket 失效。
-- [ ] daemon 仍只监听 `127.0.0.1`。
-- [ ] Cloudflare Tunnel 指向 `127.0.0.1:8787`。
+- [x] 电脑端 daemon 终端显示 JSON payload 二维码。
+- [x] Flutter App 可扫码并配对。
+- [x] token 存入 Secure Storage。
+- [x] 关闭重开 App 后自动恢复已配对状态。
+- [x] daemon 离线时 App 显示“电脑端离线”。
+- [x] App 可发送 prompt 到 WebSocket。
+- [ ] App 可在真机显示 Claude 真实流式输出。
+- [ ] App 可真机 Stop Claude 长任务。
+- [x] App 可 Logout。
+- [x] Logout 后旧 WebSocket 失效。
+- [x] daemon 仍只监听 `127.0.0.1`。
+- [x] Cloudflare Tunnel 指向 `127.0.0.1:8787`。
 
 ## 16. 后续增强
 

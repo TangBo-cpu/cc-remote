@@ -874,7 +874,7 @@ class ConnectionHeader extends StatelessWidget {
 
     return GlassPanel(
       radius: 26,
-      padding: EdgeInsets.fromLTRB(8, 7, 8, running ? 8 : 7),
+      padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -934,17 +934,6 @@ class ConnectionHeader extends StatelessWidget {
               ),
             ],
           ),
-          if (running) ...[
-            const SizedBox(height: 10),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(999),
-              child: const LinearProgressIndicator(
-                minHeight: 2,
-                color: AppColors.accent,
-                backgroundColor: Color(0x2219A7CE),
-              ),
-            ),
-          ],
         ],
       ),
     );

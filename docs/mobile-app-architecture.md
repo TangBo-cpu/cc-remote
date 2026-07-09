@@ -277,9 +277,9 @@ mobile/lib/
 
 ## App 状态流
 
-启动时进入 `booting`，读取 Secure Storage。没有 token 进入 `unpaired`。有 token 就调用 `/api/status`，成功进入 `connected` 并建立 WebSocket。扫码后先进入配对确认 sheet，用户确认后才调用 `/api/pair`。配对成功保存 `origin`、`token` 和 `deviceName`，再进入主控制台。
+启动时进入 `booting`，读取 Secure Storage。没有 token 进入 `unpaired`。有 token 就调用 `/api/status`：成功进入主控制台并建立 WebSocket；失败但 token 未过期时保留已配对态，显示 `offline`；401 时清 token 并回到扫码配对。扫码后先进入配对确认 sheet，用户确认后才调用 `/api/pair`。配对成功保存 `origin`、`token` 和 `deviceName`，再进入主控制台。
 
-运行时状态只有几种。`connected` 可以发送 prompt。`running` 禁用发送并显示 Stop。`disconnected` 保留 transcript，禁用输入，显示重新连接。`authExpired` 清理 token 并回到扫码配对。`error` 只显示当前操作错误，不清空 transcript。
+运行时状态分两层：已配对不等于已连接。`connected` 代表 WebSocket 已 auth，可发送 prompt。`running` 禁用发送并显示 Stop。`offline` 保留本地配对信息，禁用输入，显示“电脑端离线”和重新连接。App 回到前台会重新调用 `/api/status` 探测 daemon。`authExpired` 清理 token 并回到扫码配对。`error` 只显示当前操作错误，不清空 transcript。
 
 ```text
 booting
@@ -287,9 +287,9 @@ booting
   -> scanning
   -> pairReview
   -> pairing
+  -> pairedOffline
   -> connected
   -> running
-  -> disconnected
   -> authExpired
 ```
 
@@ -313,22 +313,26 @@ daemon 默认只监听 loopback。公网入口只通过 Cloudflare Tunnel。二�
 
 App 不提供修改 `WORKSPACE_DIR` 的入口，不开放任意 shell 命令，不默认启用 `--dangerously-skip-permissions`，不绕过 Claude Code 自己的权限系统。
 
-## 当前实现顺序
+## 当前实现状态
 
-daemon 的 App token 主协议已经在代码里。下一步从手机端开始。
+daemon 的 App token 主协议已经在代码里，Flutter App 也已经完成扫码配对、状态恢复、WebSocket 对话、Stop、Logout 和离线状态展示。当前代码已合并回 `master`。
 
-第一步创建 `mobile/` Flutter 项目，接入基础依赖和浅色毛玻璃 UI 骨架。先做 `BootstrapScreen`、`PairScreen` 和 `ChatScreen` 空壳。
+已完成：
 
-第二步实现扫码配对。解析 JSON QR，校验 `type`、`version`、`origin`、`nonce` 和 `expiresAt`，展示配对确认 sheet，确认后调用 `/api/pair`，把 `origin`、`token`、`deviceName` 存进 Secure Storage。
+1. 创建 `mobile/` Flutter 项目，接入基础依赖和浅色毛玻璃 UI 骨架。
+2. 实现扫码配对。解析 JSON QR，校验 `type`、`version`、`origin`、`nonce` 和 `expiresAt`，展示配对确认 sheet，确认后调用 `/api/pair`，把 `origin`、`token`、`deviceName` 存进 Secure Storage。
+3. 实现状态恢复。App 重启后读取本地 session，调用 `/api/status`。成功进入主控制台；daemon 离线时保留配对态并显示“电脑端离线”；401 时清 token 并回到配对页。
+4. 实现 WebSocket 聊天。连接 `/ws`，发送 `auth`，处理 `status`、`text`、`done`、`stopped`、`error`，把文本流追加到当前 assistant message。
+5. 实现 Stop、重新连接和 Logout。Stop 走 WebSocket `stop`。Logout 先调 `/api/logout`，再清本地 token，最后回到扫码页。
+6. 电脑端新增一键启动命令：`cc-remote` / `.\cc-remote.cmd` / `npm run cc-remote`。
+7. daemon 修复 auth state 并发写 race，stale Claude Code session 会自动清理并用新会话重试一次。
 
-第三步实现状态恢复。App 重启后读取本地 session，调用 `/api/status`，成功进入主控制台，401 时清 token 并回到配对页。
-
-第四步实现 WebSocket 聊天。连接 `/ws`，发送 `auth`，处理 `status`、`text`、`done`、`stopped`、`error`，把文本流追加到当前 assistant message。
-
-第五步实现 Stop、重新连接和 Logout。Stop 走 WebSocket `stop` 或 HTTP `/api/stop` 都能接受，UI 第一版只保留一个按钮。Logout 先调 `/api/logout`，再清本地 token，最后回到扫码页。
+待验证：真机 Claude 输出、`done`、`--resume` 和 Stop 中断长任务。
 
 ## 第一版验收
 
-电脑端 daemon 能显示 JSON 二维码。Flutter App 能扫码并展示确认 sheet。确认后 App 能保存 token，并在关闭重开后恢复连接。主控制台能显示设备名、工作目录、连接状态和 transcript。App 能发送 prompt，daemon 能调用本机 Claude Code，App 能流式显示输出。运行中 Stop 能中断任务。Logout 后旧 WebSocket 失效，旧 token 不能继续控制电脑。
+已满足：电脑端 daemon 能显示 JSON 二维码。Flutter App 能扫码并展示确认 sheet。确认后 App 能保存 token，并在关闭重开后恢复已配对状态。主控制台能显示设备名、工作目录、连接状态和 transcript。App 能发送 prompt，Logout 后旧 WebSocket 失效，旧 token 不能继续控制电脑。daemon 离线时 App 能显示“电脑端离线”。
+
+待真机验证：daemon 调用本机 Claude Code 后，App 能流式显示真实输出；收到 `done`；第二条 prompt 通过 `--resume <claudeSessionId>` 延续上下文；运行中 Stop 能中断任务且没有残留 Claude 进程。
 
 第一版到这里就够。多设备、历史持久化、文件能力、推送和上架材料等核心链路稳定后再补。

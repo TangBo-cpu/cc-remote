@@ -28,21 +28,32 @@
 - Flutter App Secure Storage 保存 token。
 - Flutter App 启动时 `/api/status` 恢复已配对状态。
 - Flutter App logout 调用 daemon 并清本地 token。
-- Flutter App WebSocket 连接 `/ws`。
-- Flutter App 发送首条 `{ "type": "auth", "token": "..." }` 鉴权。
+- Flutter App WebSocket 连接 `/ws` 并发送首条 `{ "type": "auth", "token": "..." }`。
 - Flutter App 发送 prompt 到 daemon。
 - Flutter App 接收 `text`、`done`、`error`、`stopped`。
 - Stop 按钮发送 WebSocket `{ "type": "stop" }`。
+- App 状态机区分“已配对”和“已连接”，daemon 离线时显示“电脑端离线”。
+- App 回到前台时重新探测 daemon 状态。
+- daemon auth state 写入串行化，避免并发写 `.data/state.json` 临时文件冲突。
+- stale Claude Code session 自动清理并用新会话重试一次。
+- 电脑端一键启动命令：`cc-remote` / `.\cc-remote.cmd` / `npm run cc-remote`。
+- 当前开发分支已合并回 `master`。
 
 未完成：
 
-- 还没做手机真机端到端验证 Claude Code 流式输出。
+- 还没做完整真机端到端验证 Claude Code 流式输出。
 - 还没做 transcript 持久化。
-- 还没做断线自动恢复任务输出。
+- 还没做断线期间输出恢复。
 
-下一步最小任务：真机发 `回复 pong，只输出 pong`，验证 App 能收到 Claude Code 真实输出。
+下一步最小任务：启动 `cc-remote` 后，真机发 `回复 pong，只输出 pong`，验证 App 能收到 Claude Code 真实输出。
 
 ## 一键启动电脑端
+
+```powershell
+cc-remote
+```
+
+如果全局命令不可用，也可在项目根目录运行：
 
 ```powershell
 .\cc-remote.cmd
@@ -237,7 +248,7 @@ wss://tbhaoshuai.ccwu.cc/ws
 status, claude_event, text, done, stopped, error
 ```
 
-注意：daemon 和 Flutter App 已接入这套 WebSocket 协议，真机 Claude 输出仍需端到端验证。
+注意：daemon 和 Flutter App 已接入这套 WebSocket 协议。App 会在回到前台时重新探测 daemon；电脑端离线时保留配对态，但显示“电脑端离线”并禁止发送。
 
 ## 配置项
 
@@ -257,6 +268,7 @@ npm run typecheck
 npm run build
 npm test
 cd mobile
+flutter analyze
 flutter test
 ```
 

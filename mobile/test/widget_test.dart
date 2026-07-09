@@ -68,7 +68,7 @@ void main() {
     expect(find.textContaining('正在检查 `cc-remote` 的当前结构'), findsNothing);
   });
 
-  testWidgets('running progress stays out of the message bubble', (
+  testWidgets('running state does not show a chat progress bar', (
     tester,
   ) async {
     final controller = TextEditingController();
@@ -102,14 +102,7 @@ void main() {
 
     expect(find.textContaining('运行中'), findsOneWidget);
     expect(find.text('新会话'), findsNothing);
-    expect(find.byType(LinearProgressIndicator), findsOneWidget);
-    expect(
-      find.descendant(
-        of: find.byType(MessageBlock),
-        matching: find.byType(LinearProgressIndicator),
-      ),
-      findsNothing,
-    );
+    expect(find.byType(LinearProgressIndicator), findsNothing);
   });
 
   testWidgets('empty transcript does not overflow when keyboard is open', (
