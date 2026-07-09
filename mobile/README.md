@@ -107,6 +107,10 @@ App 状态分两层：
 
 App 回到前台时会重新调用 `/api/status`。电脑端关闭后，App 保留配对信息，但显示“电脑端离线”，发送按钮禁用。
 
+## 新对话
+
+设置 sheet 里提供“开启新对话”。点击后 App 调用 `POST /api/new-conversation`，daemon 清空当前 `claudeSessionId`，App 清空当前 transcript。
+
 ## 下一步真机验证
 
 本地脚本模拟 App 已通过 WebSocket auth、单条 `pong`、长输出多段 `text`、`done` 和 `claudeSessionId` 写入。还需要真机 UI 验证。

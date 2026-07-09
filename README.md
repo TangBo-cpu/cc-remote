@@ -32,6 +32,7 @@
 - Flutter App 发送 prompt 到 daemon。
 - Flutter App 接收 `text`、`done`、`error`、`stopped`。
 - 本地脚本模拟 App 已验证 WebSocket auth、单条 `pong`、长输出多段 `text`、`done` 和 `claudeSessionId` 写入。
+- App 设置里可开启新对话，daemon 会清空当前 `claudeSessionId`。
 - Stop 按钮发送 WebSocket `{ "type": "stop" }`。
 - App 状态机区分“已配对”和“已连接”，daemon 离线时显示“电脑端离线”。
 - App 回到前台时重新探测 daemon 状态。
@@ -170,6 +171,7 @@ POST /api/pair
 发送 auth 消息
 发送 prompt
 接收 text/done/error/stopped
+POST /api/new-conversation
 发送 stop
 POST /api/logout
 ```
@@ -217,6 +219,7 @@ Authorization: Bearer <token>
 
 ```text
 GET  /api/status
+POST /api/new-conversation
 POST /api/stop
 POST /api/logout
 ```

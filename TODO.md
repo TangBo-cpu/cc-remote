@@ -17,6 +17,7 @@
 - [x] stale Claude Code session 报 `No conversation found with session ID` 时清理并新会话重试
 - [x] auth state 写入串行化，避免并发写 `.data/state.json` 临时文件 race
 - [x] Claude bridge 对重复 `session_id` 去重，避免同一轮 prompt 重复写状态
+- [x] `POST /api/new-conversation` 可清空当前 `claudeSessionId`
 - [x] 电脑端一键启动脚本：`cc-remote` / `.\cc-remote.cmd` / `npm run cc-remote`
 
 ### Flutter App
@@ -41,6 +42,7 @@
 - [x] daemon 离线时显示“电脑端离线”并禁用发送
 - [x] App 回到前台时重新探测 daemon 状态
 - [x] 不再在没有返回文本时留下空 assistant 气泡
+- [x] 设置里可开启新对话并清空当前 transcript
 
 ### 文档和保存点
 

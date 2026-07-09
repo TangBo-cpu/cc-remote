@@ -357,6 +357,44 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     setState(() => messages.add(TranscriptMessage.system('正在停止')));
   }
 
+  Future<void> beginNewConversation() async {
+    if (running) return;
+
+    if (widget.demoMode) {
+      setState(() {
+        messages
+          ..clear()
+          ..add(TranscriptMessage.system('已开启新对话'));
+      });
+      return;
+    }
+
+    final current = session;
+    if (current == null) return;
+
+    try {
+      final res = await httpClient
+          .post(
+            current.origin.resolve('/api/new-conversation'),
+            headers: {'Authorization': 'Bearer ${current.token}'},
+          )
+          .timeout(networkTimeout);
+      if (res.statusCode == 401) throw const UnauthorizedSession();
+      if (res.statusCode != 200) throw StateError('new_conversation_failed');
+      if (!mounted || session != current) return;
+      setState(() {
+        messages
+          ..clear()
+          ..add(TranscriptMessage.system('已开启新对话'));
+      });
+    } catch (_) {
+      if (!mounted || session != current) return;
+      setState(() {
+        messages.add(TranscriptMessage.system('开启新对话失败，请重试'));
+      });
+    }
+  }
+
   void fillPrompt(String text) {
     promptController.text = text;
     promptController.selection = TextSelection.collapsed(offset: text.length);
@@ -498,6 +536,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             onChanged: () => setState(() {}),
             onFillPrompt: fillPrompt,
             onReconnect: refreshConnection,
+            onNewConversation: beginNewConversation,
             onSend: sendPrompt,
             onStop: stopRun,
             onLogout: logoutPairedDevice,
@@ -780,6 +819,7 @@ class ChatScreen extends StatelessWidget {
     required this.onChanged,
     required this.onFillPrompt,
     required this.onReconnect,
+    required this.onNewConversation,
     required this.onSend,
     required this.onStop,
     required this.onLogout,
@@ -794,6 +834,7 @@ class ChatScreen extends StatelessWidget {
   final VoidCallback onChanged;
   final ValueChanged<String> onFillPrompt;
   final VoidCallback onReconnect;
+  final VoidCallback onNewConversation;
   final VoidCallback onSend;
   final VoidCallback onStop;
   final VoidCallback onLogout;
@@ -812,6 +853,7 @@ class ChatScreen extends StatelessWidget {
               connected: connected,
               offline: offline,
               onReconnect: onReconnect,
+              onNewConversation: onNewConversation,
               onLogout: onLogout,
             ),
             const SizedBox(height: 10),
@@ -846,6 +888,7 @@ class ConnectionHeader extends StatelessWidget {
     required this.connected,
     required this.offline,
     required this.onReconnect,
+    required this.onNewConversation,
     required this.onLogout,
   });
 
@@ -854,6 +897,7 @@ class ConnectionHeader extends StatelessWidget {
   final bool connected;
   final bool offline;
   final VoidCallback onReconnect;
+  final VoidCallback onNewConversation;
   final VoidCallback onLogout;
 
   @override
@@ -925,7 +969,9 @@ class ConnectionHeader extends StatelessWidget {
                   onPressed: () => showSettingsSheet(
                     context,
                     session,
+                    running,
                     onReconnect,
+                    onNewConversation,
                     onLogout,
                   ),
                   icon: const Icon(Icons.more_horiz_rounded, size: 23),
@@ -943,15 +989,20 @@ class ConnectionHeader extends StatelessWidget {
 Future<void> showSettingsSheet(
   BuildContext context,
   SavedSession? session,
+  bool running,
   VoidCallback onReconnect,
+  VoidCallback onNewConversation,
   VoidCallback onLogout,
 ) {
   return showModalBottomSheet<void>(
     context: context,
+    isScrollControlled: true,
     backgroundColor: Colors.transparent,
     builder: (context) => SettingsSheet(
       session: session,
+      running: running,
       onReconnect: onReconnect,
+      onNewConversation: onNewConversation,
       onLogout: onLogout,
     ),
   );
@@ -961,12 +1012,16 @@ class SettingsSheet extends StatelessWidget {
   const SettingsSheet({
     super.key,
     required this.session,
+    required this.running,
     required this.onReconnect,
+    required this.onNewConversation,
     required this.onLogout,
   });
 
   final SavedSession? session;
+  final bool running;
   final VoidCallback onReconnect;
+  final VoidCallback onNewConversation;
   final VoidCallback onLogout;
 
   @override
@@ -1019,6 +1074,20 @@ class SettingsSheet extends StatelessWidget {
                   },
                   icon: const Icon(Icons.refresh_rounded),
                   label: const Text('重新连接'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: running
+                      ? null
+                      : () {
+                          Navigator.pop(context);
+                          onNewConversation();
+                        },
+                  icon: const Icon(Icons.add_comment_rounded),
+                  label: const Text('开启新对话'),
                 ),
               ),
               const SizedBox(height: 8),

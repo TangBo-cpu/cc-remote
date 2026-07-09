@@ -37,6 +37,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('退出配对'), findsOneWidget);
     expect(find.text('重新连接'), findsOneWidget);
+    expect(find.text('开启新对话'), findsOneWidget);
     expect(find.text('扫描电脑终端里的二维码'), findsNothing);
 
     await tester.tap(find.text('退出配对'));
@@ -68,6 +69,29 @@ void main() {
     expect(find.textContaining('正在检查 `cc-remote` 的当前结构'), findsNothing);
   });
 
+  testWidgets('new conversation clears the current transcript', (tester) async {
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'ping');
+    await tester.pump();
+    await tester.tap(find.byTooltip('发送'));
+    await tester.pumpAndSettle();
+    expect(find.text('ping'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('设置'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('开启新对话'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('ping'), findsNothing);
+    expect(find.text('已开启新对话'), findsOneWidget);
+  });
+
   testWidgets('running state does not show a chat progress bar', (
     tester,
   ) async {
@@ -92,6 +116,7 @@ void main() {
             onChanged: () {},
             onFillPrompt: (_) {},
             onReconnect: () {},
+            onNewConversation: () {},
             onSend: () {},
             onStop: () {},
             onLogout: () {},

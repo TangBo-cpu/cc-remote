@@ -138,6 +138,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     return;
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/new-conversation') {
+    if (bridge.isRunning()) return sendJson(res, 409, { error: 'claude_is_busy' });
+    await auth.setClaudeSessionId(undefined);
+    broadcast({ type: 'status', authenticated: true, running: false, hasClaudeSessionId: false });
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/stop') {
     const stopped = bridge.stop();
     broadcast({ type: stopped ? 'stopped' : 'status', authenticated: true, running: false, hasClaudeSessionId: Boolean(auth.getClaudeSessionId()) });

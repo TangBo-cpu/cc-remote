@@ -38,6 +38,10 @@ test('pairing issues a bearer token and persists session id', async () => {
     const reloaded = await createAuthState(statePath);
     assert.deepEqual(reloaded.status(), { paired: true, hasClaudeSessionId: true });
     assert.equal(reloaded.getClaudeSessionId(), 'session-1');
+
+    await reloaded.setClaudeSessionId(undefined);
+    assert.deepEqual(reloaded.status(), { paired: true, hasClaudeSessionId: false });
+    assert.equal(reloaded.getClaudeSessionId(), undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
