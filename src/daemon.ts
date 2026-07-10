@@ -5,7 +5,7 @@ import { extname, join } from 'node:path';
 import qrcode from 'qrcode-terminal';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createAuthState } from './authState.js';
-import { ClaudeBridge, isMissingConversationError } from './claudeBridge.js';
+import { ClaudeBridge, extractClaudeActivities, isMissingConversationError } from './claudeBridge.js';
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 8787);
@@ -191,7 +191,11 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
   const runClaude = (sessionId: string | undefined) => bridge.run({
     prompt,
     sessionId,
-    onEvent: event => broadcast({ type: 'claude_event', event }),
+    onEvent: event => {
+      for (const activity of extractClaudeActivities(event)) {
+        broadcast({ type: 'activity', ...activity });
+      }
+    },
     onText: text => broadcast({ type: 'text', text }),
     onSessionId: sessionId => {
       void auth.setClaudeSessionId(sessionId);

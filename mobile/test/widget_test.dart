@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -19,19 +20,30 @@ void main() {
         TranscriptMessage.user('user text'),
         TranscriptMessage.assistant('assistant text'),
         TranscriptMessage.system('system text'),
+        TranscriptMessage.activity(
+          '正在读取文件',
+          id: 'tool-1',
+          kind: ActivityKind.tool,
+          state: ActivityState.running,
+          tool: 'Read',
+          detail: 'mobile/lib/main.dart',
+        ),
       ],
     );
 
     final restored = TranscriptSnapshot.fromJson(snapshot.toJson());
 
     expect(restored.running, isTrue);
-    expect(restored.messages, hasLength(3));
+    expect(restored.messages, hasLength(4));
     expect(restored.messages[0].role, MessageRole.user);
     expect(restored.messages[0].text, 'user text');
     expect(restored.messages[1].role, MessageRole.assistant);
     expect(restored.messages[1].text, 'assistant text');
     expect(restored.messages[2].role, MessageRole.system);
     expect(restored.messages[2].text, 'system text');
+    expect(restored.messages[3].role, MessageRole.activity);
+    expect(restored.messages[3].activityTool, 'Read');
+    expect(restored.messages[3].activityDetail, 'mobile/lib/main.dart');
   });
 
   test('transcript store round-trip and clear', () async {
@@ -187,6 +199,53 @@ void main() {
     );
   });
 
+  test('merges thinking, tool progress, and completion summary', () {
+    final messages = [TranscriptMessage.user('check project')];
+
+    mergeRemoteActivity(
+      messages,
+      const RemoteActivity(
+        id: 'thinking',
+        kind: ActivityKind.thinking,
+        state: ActivityState.running,
+      ),
+    );
+    mergeRemoteActivity(
+      messages,
+      const RemoteActivity(
+        id: 'tool-1',
+        kind: ActivityKind.tool,
+        state: ActivityState.running,
+        toolName: 'Read',
+        detail: 'mobile/lib/main.dart',
+      ),
+    );
+    mergeRemoteActivity(
+      messages,
+      const RemoteActivity(
+        id: 'tool-1',
+        kind: ActivityKind.tool,
+        state: ActivityState.done,
+      ),
+    );
+    mergeRemoteActivity(
+      messages,
+      const RemoteActivity(
+        id: 'summary',
+        kind: ActivityKind.summary,
+        state: ActivityState.done,
+        durationMs: 8100,
+        numTurns: 2,
+      ),
+    );
+
+    expect(messages[1].text, '已完成分析');
+    expect(messages[2].text, '已读取文件');
+    expect(messages[2].activityState, ActivityState.done);
+    expect(messages[3].text, '任务完成');
+    expect(messages[3].activityDetail, '8.1 秒 · 1 次工具调用 · 2 轮');
+  });
+
   testWidgets('running state does not show a chat progress bar', (
     tester,
   ) async {
@@ -225,7 +284,9 @@ void main() {
     expect(find.byType(LinearProgressIndicator), findsNothing);
   });
 
-  testWidgets('assistant replies are unframed selectable text', (tester) async {
+  testWidgets('assistant replies are unframed selectable markdown', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
@@ -239,10 +300,38 @@ void main() {
     final assistant = find.byKey(const ValueKey('assistant-message'));
     expect(assistant, findsOneWidget);
     expect(
-      find.descendant(of: assistant, matching: find.byType(SelectableText)),
+      find.descendant(of: assistant, matching: find.byType(MarkdownBody)),
       findsOneWidget,
     );
     expect(find.byKey(const ValueKey('user-message')), findsNothing);
+  });
+
+  testWidgets('tool activity expands to show its target', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBlock(
+            message: TranscriptMessage.activity(
+              '正在读取文件',
+              id: 'tool-1',
+              kind: ActivityKind.tool,
+              state: ActivityState.running,
+              tool: 'Read',
+              detail: 'mobile/lib/main.dart',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('正在读取文件'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(SelectableText), findsNothing);
+
+    await tester.tap(find.text('正在读取文件'));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.byType(SelectableText), findsOneWidget);
   });
 
   testWidgets('empty transcript does not overflow when keyboard is open', (

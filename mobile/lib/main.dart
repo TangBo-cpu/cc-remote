@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -338,9 +339,15 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         persistTranscriptSnapshotLater();
       case 'text':
         appendAssistantText(decoded['text'] as String? ?? '');
+      case 'activity':
+        final activity = RemoteActivity.tryParse(decoded);
+        if (activity == null) return;
+        setState(() => mergeRemoteActivity(messages, activity));
+        persistTranscriptSnapshotLater();
       case 'done':
         setState(() {
           running = false;
+          finishRunningActivities(messages, ActivityState.done);
           if (!hasAssistantReplyAfterLastUser(messages)) {
             messages.add(TranscriptMessage.system('本轮没有返回文本，请重试'));
           }
@@ -349,12 +356,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       case 'stopped':
         setState(() {
           running = false;
+          finishRunningActivities(messages, ActivityState.stopped);
           messages.add(TranscriptMessage.system('已停止'));
         });
         persistTranscriptSnapshotLater();
       case 'error':
         setState(() {
           running = false;
+          finishRunningActivities(messages, ActivityState.error);
           messages.add(
             TranscriptMessage.system('错误：${decoded['message'] ?? '未知错误'}'),
           );
@@ -385,6 +394,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remoteOffline = true;
       if (running) {
         running = false;
+        finishRunningActivities(messages, ActivityState.stopped);
         messages.add(TranscriptMessage.system(message));
       }
     });
@@ -1388,17 +1398,62 @@ class MessageBlock extends StatelessWidget {
       );
     }
 
+    if (message.role == MessageRole.activity) {
+      return ActivityBlock(message: message);
+    }
+
     final isUser = message.role == MessageRole.user;
     if (!isUser) {
       return Padding(
         key: const ValueKey('assistant-message'),
         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
-        child: SelectableText(
-          message.text,
-          style: const TextStyle(
-            height: 1.55,
-            fontSize: 15,
-            color: AppColors.ink,
+        child: MarkdownBody(
+          data: message.text,
+          selectable: true,
+          softLineBreak: true,
+          styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+            p: const TextStyle(
+              height: 1.55,
+              fontSize: 15,
+              color: AppColors.ink,
+            ),
+            a: const TextStyle(color: AppColors.accent),
+            code: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 13,
+              color: AppColors.ink,
+            ),
+            h1: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              color: AppColors.ink,
+            ),
+            h2: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: AppColors.ink,
+            ),
+            h3: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: AppColors.ink,
+            ),
+            blockSpacing: 10,
+            listIndent: 22,
+            codeblockPadding: const EdgeInsets.all(12),
+            codeblockDecoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.58),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: AppColors.shadow.withValues(alpha: 0.12),
+              ),
+            ),
+            blockquotePadding: const EdgeInsets.fromLTRB(12, 6, 10, 6),
+            blockquoteDecoration: const BoxDecoration(
+              border: Border(
+                left: BorderSide(color: AppColors.accent, width: 2),
+              ),
+            ),
           ),
         ),
       );
@@ -1427,6 +1482,99 @@ class MessageBlock extends StatelessWidget {
             style: const TextStyle(height: 1.45, color: AppColors.ink),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class ActivityBlock extends StatelessWidget {
+  const ActivityBlock({super.key, required this.message});
+
+  final TranscriptMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    final detail = message.activityDetail;
+    final title = Text(
+      message.text,
+      style: TextStyle(
+        color: message.activityState == ActivityState.error
+            ? AppColors.stop
+            : AppColors.muted,
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+    final icon = switch (message.activityState) {
+      ActivityState.running => const SizedBox.square(
+        dimension: 16,
+        child: CircularProgressIndicator(
+          strokeWidth: 1.8,
+          color: AppColors.accent,
+        ),
+      ),
+      ActivityState.done => const Icon(
+        Icons.check_rounded,
+        size: 17,
+        color: AppColors.muted,
+      ),
+      ActivityState.error => const Icon(
+        Icons.error_outline_rounded,
+        size: 17,
+        color: AppColors.stop,
+      ),
+      ActivityState.stopped => const Icon(
+        Icons.stop_rounded,
+        size: 17,
+        color: AppColors.muted,
+      ),
+      null => const SizedBox.square(dimension: 16),
+    };
+
+    if (detail == null || detail.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 5),
+        child: Row(
+          children: [
+            SizedBox(width: 22, child: Center(child: icon)),
+            const SizedBox(width: 6),
+            Expanded(child: title),
+          ],
+        ),
+      );
+    }
+
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: ExpansionTile(
+        dense: true,
+        visualDensity: VisualDensity.compact,
+        tilePadding: const EdgeInsets.symmetric(horizontal: 5),
+        childrenPadding: const EdgeInsets.fromLTRB(33, 0, 12, 10),
+        leading: SizedBox(width: 22, child: Center(child: icon)),
+        title: title,
+        subtitle: Text(
+          detail,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(color: AppColors.muted, fontSize: 12),
+        ),
+        shape: const Border(),
+        collapsedShape: const Border(),
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: SelectableText(
+              detail,
+              style: const TextStyle(
+                color: AppColors.ink,
+                fontFamily: 'monospace',
+                fontSize: 12,
+                height: 1.45,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1949,6 +2097,182 @@ bool hasAssistantReplyAfterLastUser(List<TranscriptMessage> messages) {
       .any((message) => message.role == MessageRole.assistant);
 }
 
+void mergeRemoteActivity(
+  List<TranscriptMessage> messages,
+  RemoteActivity activity,
+) {
+  final start =
+      messages.lastIndexWhere((message) => message.role == MessageRole.user) +
+      1;
+
+  if (activity.kind == ActivityKind.tool &&
+      activity.state == ActivityState.running) {
+    finishRunningActivities(
+      messages,
+      ActivityState.done,
+      start: start,
+      kind: ActivityKind.thinking,
+    );
+  }
+  if (activity.kind == ActivityKind.summary) {
+    finishRunningActivities(messages, ActivityState.done, start: start);
+  }
+
+  var existingIndex = -1;
+  for (var index = messages.length - 1; index >= start; index--) {
+    if (messages[index].activityId == activity.id) {
+      existingIndex = index;
+      break;
+    }
+  }
+
+  final existing = existingIndex >= 0 ? messages[existingIndex] : null;
+  final toolName = activity.toolName ?? existing?.activityTool;
+  var detail = activity.detail ?? existing?.activityDetail;
+  if (activity.kind == ActivityKind.summary) {
+    final toolCount = messages
+        .skip(start)
+        .where((message) => message.activityKind == ActivityKind.tool)
+        .length;
+    final parts = <String>[
+      if (activity.durationMs != null) formatDuration(activity.durationMs!),
+      if (toolCount > 0) '$toolCount 次工具调用',
+      if (activity.numTurns != null) '${activity.numTurns} 轮',
+      if ((activity.permissionDenials ?? 0) > 0)
+        '${activity.permissionDenials} 项权限未批准',
+    ];
+    detail = parts.isEmpty ? null : parts.join(' · ');
+  }
+
+  final next = TranscriptMessage.activity(
+    activityLabel(activity.kind, toolName, activity.state),
+    id: activity.id,
+    kind: activity.kind,
+    state: activity.state,
+    tool: toolName,
+    detail: detail,
+  );
+  if (existingIndex >= 0) {
+    messages[existingIndex] = next;
+  } else {
+    messages.add(next);
+  }
+}
+
+void finishRunningActivities(
+  List<TranscriptMessage> messages,
+  ActivityState state, {
+  int start = 0,
+  ActivityKind? kind,
+}) {
+  for (var index = start; index < messages.length; index++) {
+    final message = messages[index];
+    if (message.activityState != ActivityState.running ||
+        (kind != null && message.activityKind != kind)) {
+      continue;
+    }
+    messages[index] = TranscriptMessage.activity(
+      activityLabel(message.activityKind!, message.activityTool, state),
+      id: message.activityId!,
+      kind: message.activityKind!,
+      state: state,
+      tool: message.activityTool,
+      detail: message.activityDetail,
+    );
+  }
+}
+
+String activityLabel(ActivityKind kind, String? toolName, ActivityState state) {
+  if (kind == ActivityKind.thinking) {
+    return switch (state) {
+      ActivityState.running => '正在分析',
+      ActivityState.done => '已完成分析',
+      ActivityState.error => '分析失败',
+      ActivityState.stopped => '已停止分析',
+    };
+  }
+  if (kind == ActivityKind.summary) {
+    return state == ActivityState.error ? '任务未完成' : '任务完成';
+  }
+
+  final action = switch (toolName) {
+    'Read' => '读取文件',
+    'Edit' => '修改文件',
+    'Write' => '写入文件',
+    'Bash' => '运行命令',
+    'Grep' => '搜索内容',
+    'Glob' => '查找文件',
+    'Task' => '执行子任务',
+    'WebSearch' => '搜索网页',
+    'WebFetch' => '读取网页',
+    final String name when name.isNotEmpty => '调用 $name',
+    _ => '调用工具',
+  };
+  return switch (state) {
+    ActivityState.running => '正在$action',
+    ActivityState.done => '已$action',
+    ActivityState.error => '$action失败',
+    ActivityState.stopped => '已停止$action',
+  };
+}
+
+String formatDuration(int milliseconds) {
+  final seconds = milliseconds / 1000;
+  final text = seconds < 10
+      ? seconds.toStringAsFixed(1)
+      : seconds.round().toString();
+  return '$text 秒';
+}
+
+class RemoteActivity {
+  const RemoteActivity({
+    required this.id,
+    required this.kind,
+    required this.state,
+    this.toolName,
+    this.detail,
+    this.durationMs,
+    this.numTurns,
+    this.permissionDenials,
+  });
+
+  final String id;
+  final ActivityKind kind;
+  final ActivityState state;
+  final String? toolName;
+  final String? detail;
+  final int? durationMs;
+  final int? numTurns;
+  final int? permissionDenials;
+
+  static RemoteActivity? tryParse(Map<String, dynamic> json) {
+    final id = json['id'];
+    final kind = switch (json['kind']) {
+      'thinking' => ActivityKind.thinking,
+      'tool' => ActivityKind.tool,
+      'summary' => ActivityKind.summary,
+      _ => null,
+    };
+    final state = switch (json['state']) {
+      'running' => ActivityState.running,
+      'done' => ActivityState.done,
+      'error' => ActivityState.error,
+      _ => null,
+    };
+    if (id is! String || kind == null || state == null) return null;
+    return RemoteActivity(
+      id: id,
+      kind: kind,
+      state: state,
+      toolName: json['toolName'] as String?,
+      detail: json['detail'] as String?,
+      durationMs: (json['durationMs'] as num?)?.toInt(),
+      numTurns: (json['numTurns'] as num?)?.toInt(),
+      permissionDenials: (json['permissionDenials'] as num?)?.toInt(),
+    );
+  }
+}
+
 class TranscriptSnapshot {
   const TranscriptSnapshot({required this.messages, required this.running});
 
@@ -1985,7 +2309,15 @@ class TranscriptSnapshot {
 }
 
 class TranscriptMessage {
-  const TranscriptMessage(this.role, this.text);
+  const TranscriptMessage(
+    this.role,
+    this.text, {
+    this.activityId,
+    this.activityKind,
+    this.activityState,
+    this.activityTool,
+    this.activityDetail,
+  });
 
   factory TranscriptMessage.user(String text) =>
       TranscriptMessage(MessageRole.user, text);
@@ -1993,12 +2325,41 @@ class TranscriptMessage {
       TranscriptMessage(MessageRole.assistant, text);
   factory TranscriptMessage.system(String text) =>
       TranscriptMessage(MessageRole.system, text);
+  factory TranscriptMessage.activity(
+    String text, {
+    required String id,
+    required ActivityKind kind,
+    required ActivityState state,
+    String? tool,
+    String? detail,
+  }) => TranscriptMessage(
+    MessageRole.activity,
+    text,
+    activityId: id,
+    activityKind: kind,
+    activityState: state,
+    activityTool: tool,
+    activityDetail: detail,
+  );
 
   final MessageRole role;
   final String text;
+  final String? activityId;
+  final ActivityKind? activityKind;
+  final ActivityState? activityState;
+  final String? activityTool;
+  final String? activityDetail;
 
   Map<String, dynamic> toJson() {
-    return {'role': role.name, 'text': text};
+    return {
+      'role': role.name,
+      'text': text,
+      if (activityId != null) 'activityId': activityId,
+      if (activityKind != null) 'activityKind': activityKind!.name,
+      if (activityState != null) 'activityState': activityState!.name,
+      if (activityTool != null) 'activityTool': activityTool,
+      if (activityDetail != null) 'activityDetail': activityDetail,
+    };
   }
 
   static TranscriptMessage fromJson(Map<String, dynamic> json) {
@@ -2006,15 +2367,39 @@ class TranscriptMessage {
       'user' => MessageRole.user,
       'assistant' => MessageRole.assistant,
       'system' => MessageRole.system,
+      'activity' => MessageRole.activity,
       _ => throw const FormatException('bad_transcript_message'),
     };
     final text = json['text'];
     if (text is! String) throw const FormatException('bad_transcript_message');
-    return TranscriptMessage(role, text);
+    if (role != MessageRole.activity) return TranscriptMessage(role, text);
+
+    final id = json['activityId'];
+    final kind = ActivityKind.values.where(
+      (value) => value.name == json['activityKind'],
+    );
+    final state = ActivityState.values.where(
+      (value) => value.name == json['activityState'],
+    );
+    if (id is! String || kind.isEmpty || state.isEmpty) {
+      throw const FormatException('bad_transcript_message');
+    }
+    return TranscriptMessage.activity(
+      text,
+      id: id,
+      kind: kind.first,
+      state: state.first,
+      tool: json['activityTool'] as String?,
+      detail: json['activityDetail'] as String?,
+    );
   }
 }
 
-enum MessageRole { user, assistant, system }
+enum MessageRole { user, assistant, system, activity }
+
+enum ActivityKind { thinking, tool, summary }
+
+enum ActivityState { running, done, error, stopped }
 
 class AppColors {
   static const ink = Color(0xFF172026);

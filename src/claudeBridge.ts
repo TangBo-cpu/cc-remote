@@ -22,6 +22,17 @@ export type ClaudeRunResult = {
   stderr: string;
 };
 
+export type ClaudeActivity = {
+  id: string;
+  kind: 'thinking' | 'tool' | 'summary';
+  state: 'running' | 'done' | 'error';
+  toolName?: string;
+  detail?: string;
+  durationMs?: number;
+  numTurns?: number;
+  permissionDenials?: number;
+};
+
 type CurrentRun = {
   child: ChildProcessWithoutNullStreams;
   stopped: boolean;
@@ -168,6 +179,62 @@ export function isMissingConversationError(stderr: string): boolean {
   return /No conversation found with session ID/i.test(stderr);
 }
 
+export function extractClaudeActivities(event: unknown): ClaudeActivity[] {
+  if (!isRecord(event)) return [];
+
+  if (event.type === 'stream_event') {
+    const inner = isRecord(event.event) ? event.event : undefined;
+    const block = isRecord(inner?.content_block) ? inner.content_block : undefined;
+    if (inner?.type === 'content_block_start' && block?.type === 'thinking') {
+      return [{ id: 'thinking', kind: 'thinking', state: 'running' }];
+    }
+    return [];
+  }
+
+  if (event.type === 'assistant') {
+    const message = isRecord(event.message) ? event.message : undefined;
+    const content = Array.isArray(message?.content) ? message.content : [];
+    return content.flatMap(block => {
+      if (!isRecord(block) || block.type !== 'tool_use') return [];
+      if (typeof block.id !== 'string' || typeof block.name !== 'string') return [];
+      return [{
+        id: block.id,
+        kind: 'tool' as const,
+        state: 'running' as const,
+        toolName: block.name,
+        detail: summarizeToolInput(block.input),
+      }];
+    });
+  }
+
+  if (event.type === 'user') {
+    const message = isRecord(event.message) ? event.message : undefined;
+    const content = Array.isArray(message?.content) ? message.content : [];
+    return content.flatMap(block => {
+      if (!isRecord(block) || block.type !== 'tool_result') return [];
+      if (typeof block.tool_use_id !== 'string') return [];
+      return [{
+        id: block.tool_use_id,
+        kind: 'tool' as const,
+        state: block.is_error === true ? 'error' as const : 'done' as const,
+      }];
+    });
+  }
+
+  if (event.type === 'result') {
+    return [{
+      id: 'summary',
+      kind: 'summary',
+      state: event.is_error === true ? 'error' : 'done',
+      durationMs: typeof event.duration_ms === 'number' ? event.duration_ms : undefined,
+      numTurns: typeof event.num_turns === 'number' ? event.num_turns : undefined,
+      permissionDenials: Array.isArray(event.permission_denials) ? event.permission_denials.length : undefined,
+    }];
+  }
+
+  return [];
+}
+
 function extractTextDelta(event: unknown): string {
   if (!isRecord(event)) return '';
   if (event.type !== 'stream_event') return '';
@@ -207,6 +274,19 @@ function findSessionId(value: unknown): string | undefined {
     }
   }
   return undefined;
+}
+
+function summarizeToolInput(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  for (const key of ['file_path', 'path', 'command', 'pattern', 'query', 'description', 'url']) {
+    const item = value[key];
+    if (typeof item === 'string' && item.trim()) return truncate(item.trim(), 240);
+  }
+  return undefined;
+}
+
+function truncate(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}…`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
