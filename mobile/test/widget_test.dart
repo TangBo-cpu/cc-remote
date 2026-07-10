@@ -166,6 +166,28 @@ void main() {
     expect(snapshot.messages.map((message) => message.text), ['已开启新对话']);
   });
 
+  test('detects missing assistant reply after the latest user message', () {
+    expect(hasAssistantReplyAfterLastUser([]), isTrue);
+    expect(
+      hasAssistantReplyAfterLastUser([TranscriptMessage.user('hello')]),
+      isFalse,
+    );
+    expect(
+      hasAssistantReplyAfterLastUser([
+        TranscriptMessage.user('hello'),
+        TranscriptMessage.system('本轮没有返回文本，请重试'),
+      ]),
+      isFalse,
+    );
+    expect(
+      hasAssistantReplyAfterLastUser([
+        TranscriptMessage.user('hello'),
+        TranscriptMessage.assistant('hi'),
+      ]),
+      isTrue,
+    );
+  });
+
   testWidgets('running state does not show a chat progress bar', (
     tester,
   ) async {

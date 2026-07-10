@@ -339,7 +339,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       case 'text':
         appendAssistantText(decoded['text'] as String? ?? '');
       case 'done':
-        setState(() => running = false);
+        setState(() {
+          running = false;
+          if (!hasAssistantReplyAfterLastUser(messages)) {
+            messages.add(TranscriptMessage.system('本轮没有返回文本，请重试'));
+          }
+        });
         persistTranscriptSnapshotLater();
       case 'stopped':
         setState(() {
@@ -1942,6 +1947,16 @@ String errorText(Object err) {
   if (err is FormatException) return '这不是 CC Remote 配对二维码';
   if (err is TimeoutException) return '连接超时，请检查电脑端和隧道';
   return '配对失败，请重新生成二维码';
+}
+
+bool hasAssistantReplyAfterLastUser(List<TranscriptMessage> messages) {
+  final lastUser = messages.lastIndexWhere(
+    (message) => message.role == MessageRole.user,
+  );
+  if (lastUser < 0) return true;
+  return messages
+      .skip(lastUser + 1)
+      .any((message) => message.role == MessageRole.assistant);
 }
 
 class TranscriptSnapshot {
