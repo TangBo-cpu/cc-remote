@@ -5,7 +5,13 @@ import { extname, join } from 'node:path';
 import qrcode from 'qrcode-terminal';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createAuthState } from './authState.js';
-import { ClaudeBridge, extractClaudeActivities, isMissingConversationError } from './claudeBridge.js';
+import {
+  ClaudeBridge,
+  discoverClaudeCommands,
+  extractClaudeActivities,
+  extractClaudeCommands,
+  isMissingConversationError,
+} from './claudeBridge.js';
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 8787);
@@ -20,6 +26,8 @@ const auth = await createAuthState();
 const bridge = new ClaudeBridge({ claudeBin: CLAUDE_BIN, workspaceDir: WORKSPACE_DIR });
 const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_BODY_BYTES });
 const authedSockets = new Set<WebSocket>();
+let commandCache: string[] = [];
+let commandDiscovery: Promise<string[]> | undefined;
 
 const server = createServer(async (req, res) => {
   try {
@@ -72,6 +80,11 @@ wss.on('connection', ws => {
         authGeneration = auth.getAuthGeneration();
         authedSockets.add(ws);
         sendStatus(ws, true);
+        if (commandCache.length) {
+          send(ws, { type: 'commands', commands: commandCache });
+        } else {
+          void refreshCommands();
+        }
         return true;
       },
     }).catch(err => {
@@ -90,6 +103,7 @@ server.listen(PORT, HOST, () => {
   console.log('Scan this QR with the CC Remote mobile app:');
   console.log(pairQr);
   qrcode.generate(pairQr, { small: true });
+  void refreshCommands();
 });
 
 async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
@@ -192,6 +206,11 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     prompt,
     sessionId,
     onEvent: event => {
+      const commands = extractClaudeCommands(event);
+      if (commands.length && commands.join('\n') !== commandCache.join('\n')) {
+        commandCache = commands;
+        broadcast({ type: 'commands', commands });
+      }
       for (const activity of extractClaudeActivities(event)) {
         broadcast({ type: 'activity', ...activity });
       }
@@ -267,6 +286,23 @@ function sendJson(res: ServerResponse, status: number, data: unknown): void {
 
 function sendStatus(ws: WebSocket, authenticated: boolean): void {
   send(ws, { type: 'status', authenticated, running: bridge.isRunning(), hasClaudeSessionId: Boolean(auth.getClaudeSessionId()) });
+}
+
+function refreshCommands(): Promise<string[]> {
+  if (commandDiscovery) return commandDiscovery;
+  commandDiscovery = discoverClaudeCommands({
+    claudeBin: CLAUDE_BIN,
+    workspaceDir: WORKSPACE_DIR,
+  }).then(commands => {
+    if (commands.length) {
+      commandCache = commands;
+      broadcast({ type: 'commands', commands });
+    }
+    return commands;
+  }).finally(() => {
+    commandDiscovery = undefined;
+  });
+  return commandDiscovery;
 }
 
 function broadcast(data: unknown): void {

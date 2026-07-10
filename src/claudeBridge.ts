@@ -235,6 +235,57 @@ export function extractClaudeActivities(event: unknown): ClaudeActivity[] {
   return [];
 }
 
+export function extractClaudeCommands(event: unknown): string[] {
+  if (!isRecord(event) || event.type !== 'system' || event.subtype !== 'init') return [];
+  if (!Array.isArray(event.skills)) return [];
+  return [...new Set(event.skills
+    .filter((command): command is string => typeof command === 'string')
+    .map(command => command.trim().replace(/^\/+/, ''))
+    .filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+export async function discoverClaudeCommands(options: ClaudeBridgeOptions): Promise<string[]> {
+  const child = spawn(options.claudeBin, [
+    '-p',
+    '/help',
+    '--output-format', 'stream-json',
+    '--verbose',
+  ], {
+    cwd: options.workspaceDir,
+    shell: false,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    env: { ...process.env },
+  });
+  const decoder = new StringDecoder('utf8');
+  let buffer = '';
+  let commands: string[] = [];
+
+  const handleLine = (line: string) => {
+    try {
+      const found = extractClaudeCommands(JSON.parse(line));
+      if (found.length) commands = found;
+    } catch {}
+  };
+  child.stdout.on('data', (chunk: Buffer) => {
+    buffer += decoder.write(chunk);
+    let index: number;
+    while ((index = buffer.indexOf('\n')) >= 0) {
+      handleLine(buffer.slice(0, index));
+      buffer = buffer.slice(index + 1);
+    }
+  });
+  child.stderr.resume();
+
+  const timeout = setTimeout(() => child.kill(), 20_000);
+  timeout.unref();
+  await Promise.race([once(child, 'exit'), once(child, 'error')]).catch(() => {});
+  clearTimeout(timeout);
+  buffer += decoder.end();
+  if (buffer.trim()) handleLine(buffer);
+  return commands;
+}
+
 function extractTextDelta(event: unknown): string {
   if (!isRecord(event)) return '';
   if (event.type !== 'stream_event') return '';

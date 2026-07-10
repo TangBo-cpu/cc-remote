@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ClaudeBridge, extractClaudeActivities, isMissingConversationError } from '../src/claudeBridge.js';
+import {
+  ClaudeBridge,
+  extractClaudeActivities,
+  extractClaudeCommands,
+  isMissingConversationError,
+} from '../src/claudeBridge.js';
 
 test('ClaudeBridge reports a missing CLI as a run result instead of throwing', async () => {
   const bridge = new ClaudeBridge({ claudeBin: 'cc-remote-missing-claude-bin', workspaceDir: process.cwd() });
@@ -77,4 +82,19 @@ test('normalizes safe activity events without exposing thinking text or tool res
     numTurns: 2,
     permissionDenials: 0,
   }]);
+});
+
+test('extracts sorted invokable commands from Claude init events', () => {
+  assert.deepEqual(extractClaudeCommands({
+    type: 'system',
+    subtype: 'init',
+    slash_commands: ['help', 'compact', 'review'],
+    skills: ['review', '/frontend-design', 'review'],
+  }), ['frontend-design', 'review']);
+
+  assert.deepEqual(extractClaudeCommands({
+    type: 'system',
+    subtype: 'status',
+    skills: ['review'],
+  }), []);
 });

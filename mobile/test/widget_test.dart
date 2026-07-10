@@ -177,6 +177,35 @@ void main() {
     expect(snapshot.messages.map((message) => message.text), ['已开启新对话']);
   });
 
+  testWidgets('command picker searches and fills a synced command', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('指令'));
+    await tester.pumpAndSettle();
+    expect(find.text('Claude Code 指令'), findsOneWidget);
+    expect(find.text('caveman:caveman-help'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField).last, 'caveman');
+    await tester.pump();
+    expect(find.text('frontend-design'), findsNothing);
+
+    await tester.tap(find.text('caveman:caveman-help'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(TextField), findsOneWidget);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller?.text,
+      '/caveman:caveman-help ',
+    );
+  });
+
   test('detects missing assistant reply after the latest user message', () {
     expect(hasAssistantReplyAfterLastUser([]), isTrue);
     expect(
@@ -266,6 +295,7 @@ void main() {
             connected: true,
             offline: false,
             messages: [TranscriptMessage.user('你好')],
+            commands: const ['review'],
             promptController: controller,
             onChanged: () {},
             onFillPrompt: (_) {},

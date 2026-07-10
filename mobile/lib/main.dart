@@ -78,6 +78,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final http.Client httpClient = http.Client();
   final TextEditingController promptController = TextEditingController();
   final List<TranscriptMessage> messages = [];
+  final List<String> commands = [];
   Future<void> lastTranscriptWrite = Future<void>.value();
 
   @override
@@ -279,6 +280,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       wsReady = true;
       remoteOffline = false;
       messages.clear();
+      commands
+        ..clear()
+        ..addAll(['caveman:caveman-help', 'frontend-design', 'review']);
     });
   }
 
@@ -339,6 +343,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         persistTranscriptSnapshotLater();
       case 'text':
         appendAssistantText(decoded['text'] as String? ?? '');
+      case 'commands':
+        final items = decoded['commands'];
+        if (items is! List) return;
+        setState(() {
+          commands
+            ..clear()
+            ..addAll(items.whereType<String>());
+        });
       case 'activity':
         final activity = RemoteActivity.tryParse(decoded);
         if (activity == null) return;
@@ -384,6 +396,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remoteOffline = false;
       running = false;
       messages.clear();
+      commands.clear();
     });
   }
 
@@ -548,6 +561,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remoteOffline = false;
       pausedQrRaw = null;
       messages.clear();
+      commands.clear();
       promptController.clear();
     });
   }
@@ -640,6 +654,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         pausedQrRaw = null;
         pairError = null;
         messages.clear();
+        commands.clear();
       });
       connectWs(saved);
     } catch (err) {
@@ -671,6 +686,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             connected: wsReady,
             offline: remoteOffline,
             messages: messages,
+            commands: commands,
             promptController: promptController,
             onChanged: () => setState(() {}),
             onFillPrompt: fillPrompt,
@@ -954,6 +970,7 @@ class ChatScreen extends StatelessWidget {
     required this.connected,
     required this.offline,
     required this.messages,
+    required this.commands,
     required this.promptController,
     required this.onChanged,
     required this.onFillPrompt,
@@ -969,6 +986,7 @@ class ChatScreen extends StatelessWidget {
   final bool connected;
   final bool offline;
   final List<TranscriptMessage> messages;
+  final List<String> commands;
   final TextEditingController promptController;
   final VoidCallback onChanged;
   final ValueChanged<String> onFillPrompt;
@@ -1005,10 +1023,12 @@ class ChatScreen extends StatelessWidget {
             const SizedBox(height: 10),
             PromptBar(
               controller: promptController,
+              commands: commands,
               running: running,
               connected: connected,
               offline: offline,
               onChanged: onChanged,
+              onCommandSelected: (command) => onFillPrompt('/$command '),
               onSend: onSend,
               onStop: onStop,
             ),
@@ -1584,19 +1604,23 @@ class PromptBar extends StatelessWidget {
   const PromptBar({
     super.key,
     required this.controller,
+    required this.commands,
     required this.running,
     required this.connected,
     required this.offline,
     required this.onChanged,
+    required this.onCommandSelected,
     required this.onSend,
     required this.onStop,
   });
 
   final TextEditingController controller;
+  final List<String> commands;
   final bool running;
   final bool connected;
   final bool offline;
   final VoidCallback onChanged;
+  final ValueChanged<String> onCommandSelected;
   final VoidCallback onSend;
   final VoidCallback onStop;
 
@@ -1604,11 +1628,26 @@ class PromptBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final canSend = controller.text.trim().isNotEmpty && !running && connected;
     return GlassPanel(
-      padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+      padding: const EdgeInsets.fromLTRB(6, 8, 8, 8),
       radius: 24,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
+          SizedBox(
+            width: 38,
+            height: 40,
+            child: IconButton(
+              onPressed: running || commands.isEmpty
+                  ? null
+                  : () =>
+                        showCommandSheet(context, commands, onCommandSelected),
+              icon: const Text(
+                '/',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+              ),
+              tooltip: commands.isEmpty ? '指令同步中' : '指令',
+            ),
+          ),
           Expanded(
             child: TextField(
               controller: controller,
@@ -1653,6 +1692,116 @@ class PromptBar extends StatelessWidget {
       ),
     );
   }
+}
+
+Future<void> showCommandSheet(
+  BuildContext context,
+  List<String> commands,
+  ValueChanged<String> onSelected,
+) {
+  var query = '';
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setSheetState) {
+        final normalized = query.trim().toLowerCase();
+        final filtered = normalized.isEmpty
+            ? commands
+            : commands
+                  .where(
+                    (command) => command.toLowerCase().contains(normalized),
+                  )
+                  .toList();
+        return SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+            child: GlassPanel(
+              radius: 26,
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+              child: SizedBox(
+                height: MediaQuery.sizeOf(context).height * 0.70,
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        const Expanded(
+                          child: Text(
+                            'Claude Code 指令',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '${filtered.length}',
+                          style: const TextStyle(color: AppColors.muted),
+                        ),
+                        IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.close_rounded),
+                          tooltip: '关闭',
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    TextField(
+                      autofocus: true,
+                      onChanged: (value) => setSheetState(() => query = value),
+                      decoration: const InputDecoration(
+                        hintText: '搜索指令',
+                        prefixIcon: Icon(Icons.search_rounded),
+                        filled: true,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.all(Radius.circular(14)),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: filtered.isEmpty
+                          ? const Center(
+                              child: Text(
+                                '没有匹配的指令',
+                                style: TextStyle(color: AppColors.muted),
+                              ),
+                            )
+                          : ListView.builder(
+                              itemCount: filtered.length,
+                              itemBuilder: (context, index) {
+                                final command = filtered[index];
+                                return ListTile(
+                                  dense: true,
+                                  leading: const Text(
+                                    '/',
+                                    style: TextStyle(
+                                      color: AppColors.accent,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  title: Text(command),
+                                  onTap: () {
+                                    Navigator.pop(context);
+                                    onSelected(command);
+                                  },
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    ),
+  );
 }
 
 class ScanFrame extends StatelessWidget {
