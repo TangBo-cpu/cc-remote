@@ -54,6 +54,24 @@ flutter test
 flutter run
 ```
 
+## 真机安装
+
+HyperOS 会拦普通 `adb install` / `flutter install`，可能报 `INSTALL_FAILED_USER_RESTRICTED`。以后优先用 `adb push` 到手机临时目录，再用手机端 `pm install` 安装：
+
+```powershell
+cd E:\Code-All\cc-remote
+flutter build apk --debug
+adb push mobile\build\app\outputs\flutter-apk\app-debug.apk /data/local/tmp/CCRemote-debug.apk
+adb shell pm install -r /data/local/tmp/CCRemote-debug.apk
+adb shell monkey -p com.example.cc_remote -c android.intent.category.LAUNCHER 1
+```
+
+期望安装结果包含：
+
+```text
+Success
+```
+
 App 扫 daemon 终端里的二维码。
 
 ## 配对流程
