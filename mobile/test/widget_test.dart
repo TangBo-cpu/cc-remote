@@ -85,7 +85,8 @@ void main() {
 
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
-    expect(find.text('本机已连接'), findsOneWidget);
+    expect(find.text('有什么需要处理？'), findsOneWidget);
+    expect(find.byTooltip('新对话'), findsOneWidget);
 
     await TranscriptStore().save(
       TranscriptSnapshot(
@@ -98,7 +99,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('退出配对'), findsOneWidget);
     expect(find.text('重新连接'), findsOneWidget);
-    expect(find.text('开启新对话'), findsOneWidget);
+    expect(find.text('开启新对话'), findsNothing);
     expect(find.text('扫描电脑终端里的二维码'), findsNothing);
 
     await tester.tap(find.text('退出配对'));
@@ -152,9 +153,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('ping'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('设置'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('开启新对话'));
+    await tester.tap(find.byTooltip('新对话'));
     await tester.pumpAndSettle();
 
     expect(find.text('ping'), findsNothing);
@@ -226,6 +225,26 @@ void main() {
     expect(find.byType(LinearProgressIndicator), findsNothing);
   });
 
+  testWidgets('assistant replies are unframed selectable text', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: MessageBlock(
+            message: TranscriptMessage(MessageRole.assistant, 'reply'),
+          ),
+        ),
+      ),
+    );
+
+    final assistant = find.byKey(const ValueKey('assistant-message'));
+    expect(assistant, findsOneWidget);
+    expect(
+      find.descendant(of: assistant, matching: find.byType(SelectableText)),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('user-message')), findsNothing);
+  });
+
   testWidgets('empty transcript does not overflow when keyboard is open', (
     tester,
   ) async {
@@ -243,7 +262,7 @@ void main() {
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
 
-    expect(find.text('本机已连接'), findsOneWidget);
+    expect(find.text('有什么需要处理？'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

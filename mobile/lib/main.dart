@@ -1044,10 +1044,11 @@ class ConnectionHeader extends StatelessWidget {
         ? AppColors.stop
         : AppColors.muted;
     final workspace = session?.workspaceName ?? 'cc-remote';
+    final device = session?.deviceName ?? 'Jayson PC';
 
     return GlassPanel(
-      radius: 26,
-      padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
+      radius: 22,
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1065,29 +1066,49 @@ class ConnectionHeader extends StatelessWidget {
                         ),
                         tooltip: '重连',
                       )
-                    : const SizedBox.shrink(),
+                    : IconButton(
+                        onPressed: running ? null : onNewConversation,
+                        icon: const Icon(Icons.add_comment_rounded, size: 20),
+                        tooltip: '新对话',
+                      ),
               ),
               Expanded(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      session?.deviceName ?? 'Jayson PC',
+                      workspace,
                       style: const TextStyle(
-                        fontSize: 17,
+                        fontSize: 16,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '$workspace · $statusLabel',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: statusColor,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    const SizedBox(height: 1),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: statusColor,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        Flexible(
+                          child: Text(
+                            '$device · $statusLabel',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -1098,9 +1119,7 @@ class ConnectionHeader extends StatelessWidget {
                   onPressed: () => showSettingsSheet(
                     context,
                     session,
-                    running,
                     onReconnect,
-                    onNewConversation,
                     onLogout,
                   ),
                   icon: const Icon(Icons.more_horiz_rounded, size: 23),
@@ -1118,9 +1137,7 @@ class ConnectionHeader extends StatelessWidget {
 Future<void> showSettingsSheet(
   BuildContext context,
   SavedSession? session,
-  bool running,
   VoidCallback onReconnect,
-  VoidCallback onNewConversation,
   VoidCallback onLogout,
 ) {
   return showModalBottomSheet<void>(
@@ -1129,9 +1146,7 @@ Future<void> showSettingsSheet(
     backgroundColor: Colors.transparent,
     builder: (context) => SettingsSheet(
       session: session,
-      running: running,
       onReconnect: onReconnect,
-      onNewConversation: onNewConversation,
       onLogout: onLogout,
     ),
   );
@@ -1141,16 +1156,12 @@ class SettingsSheet extends StatelessWidget {
   const SettingsSheet({
     super.key,
     required this.session,
-    required this.running,
     required this.onReconnect,
-    required this.onNewConversation,
     required this.onLogout,
   });
 
   final SavedSession? session;
-  final bool running;
   final VoidCallback onReconnect;
-  final VoidCallback onNewConversation;
   final VoidCallback onLogout;
 
   @override
@@ -1203,20 +1214,6 @@ class SettingsSheet extends StatelessWidget {
                   },
                   icon: const Icon(Icons.refresh_rounded),
                   label: const Text('重新连接'),
-                ),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: running
-                      ? null
-                      : () {
-                          Navigator.pop(context);
-                          onNewConversation();
-                        },
-                  icon: const Icon(Icons.add_comment_rounded),
-                  label: const Text('开启新对话'),
                 ),
               ),
               const SizedBox(height: 8),
@@ -1314,22 +1311,14 @@ class TranscriptView extends StatelessWidget {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      SizedBox(
-                        width: 64,
-                        height: 64,
-                        child: GlassPanel(
-                          radius: 24,
-                          padding: EdgeInsets.zero,
-                          child: const Icon(
-                            Icons.terminal_rounded,
-                            size: 30,
-                            color: AppColors.accent,
-                          ),
-                        ),
+                      const Icon(
+                        Icons.terminal_rounded,
+                        size: 28,
+                        color: AppColors.accent,
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       const Text(
-                        '本机已连接',
+                        '有什么需要处理？',
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w700,
@@ -1337,7 +1326,7 @@ class TranscriptView extends StatelessWidget {
                       ),
                       const SizedBox(height: 8),
                       const Text(
-                        '可以发送任务给 Claude Code',
+                        '给 Claude Code 一个任务',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: AppColors.muted),
                       ),
@@ -1372,9 +1361,9 @@ class TranscriptView extends StatelessWidget {
     }
 
     return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(2, 16, 2, 16),
+      padding: const EdgeInsets.fromLTRB(4, 14, 4, 16),
       itemCount: messages.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      separatorBuilder: (_, _) => const SizedBox(height: 14),
       itemBuilder: (context, index) {
         final message = messages[index];
         return MessageBlock(message: message);
@@ -1400,36 +1389,42 @@ class MessageBlock extends StatelessWidget {
     }
 
     final isUser = message.role == MessageRole.user;
-    final maxWidth = MediaQuery.sizeOf(context).width * (isUser ? 0.74 : 0.84);
+    if (!isUser) {
+      return Padding(
+        key: const ValueKey('assistant-message'),
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+        child: SelectableText(
+          message.text,
+          style: const TextStyle(
+            height: 1.55,
+            fontSize: 15,
+            color: AppColors.ink,
+          ),
+        ),
+      );
+    }
+
+    final maxWidth = MediaQuery.sizeOf(context).width * 0.76;
     return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: Alignment.centerRight,
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth),
         child: Container(
-          padding: const EdgeInsets.fromLTRB(15, 12, 15, 12),
+          key: const ValueKey('user-message'),
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
           decoration: BoxDecoration(
-            color: isUser
-                ? AppColors.accent.withValues(alpha: 0.13)
-                : Colors.white.withValues(alpha: 0.50),
+            color: AppColors.accent.withValues(alpha: 0.12),
             borderRadius: BorderRadius.only(
-              topLeft: const Radius.circular(20),
-              topRight: const Radius.circular(20),
-              bottomLeft: Radius.circular(isUser ? 20 : 8),
-              bottomRight: Radius.circular(isUser ? 8 : 20),
+              topLeft: const Radius.circular(18),
+              topRight: const Radius.circular(18),
+              bottomLeft: const Radius.circular(18),
+              bottomRight: const Radius.circular(6),
             ),
-            border: Border.all(
-              color: isUser
-                  ? AppColors.accent.withValues(alpha: 0.22)
-                  : Colors.white.withValues(alpha: 0.62),
-            ),
+            border: Border.all(color: AppColors.accent.withValues(alpha: 0.16)),
           ),
           child: Text(
             message.text,
-            style: TextStyle(
-              height: 1.42,
-              color: AppColors.ink,
-              fontFamily: message.text.contains('`') ? 'monospace' : null,
-            ),
+            style: const TextStyle(height: 1.45, color: AppColors.ink),
           ),
         ),
       ),
@@ -1462,7 +1457,7 @@ class PromptBar extends StatelessWidget {
     final canSend = controller.text.trim().isNotEmpty && !running && connected;
     return GlassPanel(
       padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
-      radius: 28,
+      radius: 24,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
@@ -1475,7 +1470,7 @@ class PromptBar extends StatelessWidget {
               onChanged: (_) => onChanged(),
               decoration: InputDecoration(
                 hintText: connected
-                    ? '发送给 Claude Code'
+                    ? '发送消息'
                     : offline
                     ? '电脑端离线，请先重连'
                     : '正在连接电脑端',
@@ -1490,8 +1485,8 @@ class PromptBar extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           SizedBox(
-            width: 44,
-            height: 44,
+            width: 40,
+            height: 40,
             child: IconButton.filled(
               onPressed: running ? onStop : (canSend ? onSend : null),
               icon: Icon(
@@ -1502,7 +1497,7 @@ class PromptBar extends StatelessWidget {
                 backgroundColor: running ? AppColors.stop : AppColors.accent,
                 disabledBackgroundColor: const Color(0xFFDCE6EA),
                 foregroundColor: Colors.white,
-                fixedSize: const Size.square(44),
+                fixedSize: const Size.square(40),
               ),
             ),
           ),
@@ -1589,14 +1584,9 @@ class AppBackground extends StatelessWidget {
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFFFAFBFB),
-              Color(0xFFF0F7F8),
-              Color(0xFFF8FAF8),
-              Color(0xFFF4F3F7),
-            ],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFFAFBFB), Color(0xFFF5F8F8), Color(0xFFF7F7FA)],
           ),
         ),
         child: child,
@@ -1627,14 +1617,14 @@ class GlassPanel extends StatelessWidget {
           width: double.infinity,
           padding: padding,
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.46),
+            color: Colors.white.withValues(alpha: 0.60),
             borderRadius: BorderRadius.circular(radius),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.66)),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.76)),
             boxShadow: [
               BoxShadow(
-                color: AppColors.shadow.withValues(alpha: 0.09),
-                blurRadius: 24,
-                offset: const Offset(0, 10),
+                color: AppColors.shadow.withValues(alpha: 0.055),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
               ),
             ],
           ),
