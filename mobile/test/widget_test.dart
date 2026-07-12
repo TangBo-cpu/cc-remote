@@ -170,7 +170,7 @@ void main() {
     );
 
     expect(find.text('CC Remote'), findsOneWidget);
-    expect(find.text('正在检查本地配对信息'), findsOneWidget);
+    expect(find.text('正在检查本机连接'), findsOneWidget);
 
     await tester.pump(const Duration(seconds: 1));
 
@@ -188,7 +188,7 @@ void main() {
 
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
-    expect(find.text('有什么需要处理？'), findsOneWidget);
+    expect(find.text('本机已连接，可以发送任务给 Claude Code'), findsOneWidget);
     expect(find.byTooltip('工作区'), findsOneWidget);
     expect(find.byTooltip('新对话'), findsOneWidget);
 
@@ -733,7 +733,7 @@ void main() {
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
 
-    expect(find.text('有什么需要处理？'), findsOneWidget);
+    expect(find.text('本机已连接，可以发送任务给 Claude Code'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -754,9 +754,9 @@ void main() {
       ),
     );
 
-    expect(find.text('已暂停扫描，点刷新可重新确认'), findsOneWidget);
+    expect(find.text('已暂停扫描，点重新扫描可继续'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('重新扫描'));
+    await tester.tap(find.text('重新扫描'));
     await tester.pump();
 
     expect(resetCount, 1);

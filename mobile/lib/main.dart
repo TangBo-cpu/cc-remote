@@ -921,32 +921,69 @@ class BootstrapScreen extends StatelessWidget {
       key: const ValueKey('boot'),
       child: Padding(
         padding: const EdgeInsets.all(28),
-        child: GlassPanel(
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'CC Remote',
-                style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 84,
+              height: 84,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(26),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Colors.white.withValues(alpha: 0.92),
+                    Colors.white.withValues(alpha: 0.55),
+                  ],
+                ),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.86)),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppColors.shadow.withValues(alpha: 0.10),
+                    blurRadius: 28,
+                    offset: const Offset(0, 12),
+                  ),
+                ],
               ),
-              const SizedBox(height: 10),
-              const Text(
-                '正在检查本地配对信息',
-                style: TextStyle(color: AppColors.muted, fontSize: 15),
+              alignment: Alignment.center,
+              child: const Text(
+                'CC',
+                style: TextStyle(
+                  color: AppColors.accent,
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.8,
+                ),
               ),
-              const SizedBox(height: 26),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(999),
+            ),
+            const SizedBox(height: 22),
+            const Text(
+              'CC Remote',
+              style: TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.4,
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              '正在检查本机连接',
+              style: TextStyle(color: AppColors.muted, fontSize: 15),
+            ),
+            const SizedBox(height: 28),
+            SizedBox(
+              width: 148,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(AppRadii.pill),
                 child: const LinearProgressIndicator(
-                  minHeight: 4,
+                  minHeight: 3,
                   color: AppColors.accent,
                   backgroundColor: Color(0xFFE8F0F3),
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -978,12 +1015,55 @@ class PairScreen extends StatelessWidget {
     return SafeArea(
       key: const ValueKey('pair'),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(22, 18, 22, 18),
+        padding: const EdgeInsets.fromLTRB(18, 12, 18, 16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const ScreenTitle(title: 'CC Remote', subtitle: '扫描电脑终端里的二维码'),
-            const SizedBox(height: 26),
+            Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.62),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.8),
+                    ),
+                  ),
+                  child: const Icon(
+                    Icons.qr_code_scanner_rounded,
+                    size: 18,
+                    color: AppColors.accent,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '扫描电脑二维码',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.3,
+                        ),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        '扫描电脑终端里的二维码',
+                        style: TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 18),
             Expanded(
               child: Center(
                 child: AspectRatio(
@@ -1009,28 +1089,58 @@ class PairScreen extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 16),
             GlassPanel(
               padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    pairing ? '正在连接电脑' : '等待配对二维码',
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                    ),
+                  Row(
+                    children: [
+                      Container(
+                        width: 38,
+                        height: 38,
+                        decoration: BoxDecoration(
+                          color: AppColors.accent.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(
+                          Icons.desktop_windows_rounded,
+                          size: 19,
+                          color: AppColors.accent,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              pairing ? '正在连接电脑' : '等待配对二维码',
+                              style: const TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              error ??
+                                  (canResetScan
+                                      ? '已暂停扫描，点重新扫描可继续'
+                                      : '扫到后会确认设备信息再连接'),
+                              style: TextStyle(
+                                color: error == null
+                                    ? AppColors.muted
+                                    : AppColors.stop,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    error ??
-                        (canResetScan ? '已暂停扫描，点刷新可重新确认' : '扫到二维码后会先确认设备信息'),
-                    style: TextStyle(
-                      color: error == null ? AppColors.muted : AppColors.stop,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
+                  const SizedBox(height: 12),
                   StatusPill(
                     label: pairing
                         ? '配对中'
@@ -1043,33 +1153,45 @@ class PairScreen extends StatelessWidget {
                   ),
                   if (pairing) ...[
                     const SizedBox(height: 14),
-                    const LinearProgressIndicator(
-                      minHeight: 3,
-                      color: AppColors.accent,
-                      backgroundColor: Color(0xFFE8F3F6),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(AppRadii.pill),
+                      child: const LinearProgressIndicator(
+                        minHeight: 3,
+                        color: AppColors.accent,
+                        backgroundColor: Color(0xFFE8F3F6),
+                      ),
                     ),
                   ],
-                  const SizedBox(height: 18),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ActionButton(
-                          label: onDemoConnect == null ? '扫描中' : '连接这台电脑',
-                          icon: onDemoConnect == null
-                              ? Icons.qr_code_scanner_rounded
-                              : Icons.link_rounded,
-                          onPressed: onDemoConnect,
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ActionButton(
+                      label: onDemoConnect == null ? '扫描中' : '连接这台电脑',
+                      icon: onDemoConnect == null
+                          ? Icons.qr_code_scanner_rounded
+                          : Icons.link_rounded,
+                      onPressed: onDemoConnect,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton(
+                      onPressed: canResetScan || error != null
+                          ? onClearError
+                          : null,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.accent,
+                        minimumSize: const Size.fromHeight(46),
+                        side: BorderSide(
+                          color: AppColors.accent.withValues(alpha: 0.22),
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(AppRadii.pill),
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      IconButton.filledTonal(
-                        onPressed: canResetScan || error != null
-                            ? onClearError
-                            : null,
-                        icon: const Icon(Icons.refresh_rounded),
-                        tooltip: '重新扫描',
-                      ),
-                    ],
+                      child: const Text('重新扫描'),
+                    ),
                   ),
                 ],
               ),
@@ -1125,42 +1247,89 @@ class PairReviewSheet extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                '确认配对',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
-              ),
-              const SizedBox(height: 14),
-              InfoRow(label: '电脑', value: payload.deviceName),
-              InfoRow(label: '服务', value: payload.origin.toString()),
-              const SizedBox(height: 8),
-              StatusPill(
-                label: expired ? '二维码已过期' : '二维码仍有效',
-                color: expired ? AppColors.stop : AppColors.accent,
-              ),
-              const SizedBox(height: 18),
               Row(
                 children: [
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: expired
-                          ? null
-                          : () => Navigator.pop(context, true),
-                      icon: const Icon(Icons.link_rounded),
-                      label: const Text('连接这台电脑'),
-                      style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.accent,
-                        foregroundColor: Colors.white,
-                        minimumSize: const Size.fromHeight(48),
-                      ),
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      color: AppColors.accent.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(
+                      Icons.desktop_windows_rounded,
+                      size: 19,
+                      color: AppColors.accent,
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  IconButton.filledTonal(
-                    onPressed: () => Navigator.pop(context, false),
-                    icon: const Icon(Icons.close_rounded),
-                    tooltip: '取消',
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          payload.deviceName,
+                          style: const TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          payload.origin.toString(),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppColors.muted,
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ],
+              ),
+              const SizedBox(height: 12),
+              StatusPill(
+                label: expired ? '二维码已过期' : '二维码有效',
+                color: expired ? AppColors.stop : AppColors.accent,
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton(
+                  onPressed: expired
+                      ? null
+                      : () => Navigator.pop(context, true),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.accent,
+                    foregroundColor: Colors.white,
+                    minimumSize: const Size.fromHeight(48),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppRadii.pill),
+                    ),
+                  ),
+                  child: const Text('连接这台电脑'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.accent,
+                    minimumSize: const Size.fromHeight(46),
+                    side: BorderSide(
+                      color: AppColors.accent.withValues(alpha: 0.22),
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppRadii.pill),
+                    ),
+                  ),
+                  child: const Text('重新扫描'),
+                ),
               ),
             ],
           ),
@@ -1327,7 +1496,7 @@ class ConnectionHeader extends StatelessWidget {
     final device = session?.deviceName ?? 'Jayson PC';
 
     return GlassPanel(
-      radius: 22,
+      radius: AppRadii.panel,
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -1467,7 +1636,7 @@ class SessionMetric extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
       decoration: BoxDecoration(
         color: AppColors.accent.withValues(alpha: 0.075),
-        borderRadius: BorderRadius.circular(999),
+        borderRadius: BorderRadius.circular(AppRadii.pill),
         border: Border.all(color: AppColors.accent.withValues(alpha: 0.10)),
       ),
       child: Row(
@@ -1586,6 +1755,16 @@ class SettingsSheet extends StatelessWidget {
                   },
                   icon: const Icon(Icons.refresh_rounded),
                   label: const Text('重新连接'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.accent,
+                    minimumSize: const Size.fromHeight(46),
+                    side: BorderSide(
+                      color: AppColors.accent.withValues(alpha: 0.22),
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppRadii.pill),
+                    ),
+                  ),
                 ),
               ),
               const SizedBox(height: 8),
@@ -1598,6 +1777,10 @@ class SettingsSheet extends StatelessWidget {
                   style: FilledButton.styleFrom(
                     backgroundColor: AppColors.stop,
                     foregroundColor: Colors.white,
+                    minimumSize: const Size.fromHeight(48),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(AppRadii.pill),
+                    ),
                   ),
                 ),
               ),
@@ -1682,6 +1865,12 @@ class TranscriptView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (messages.isEmpty && pendingPermissions.isEmpty) {
+      final title = connected
+          ? '本机已连接，可以发送任务给 Claude Code'
+          : '等待电脑端连接';
+      final subtitle = connected
+          ? '从下方输入，或先点一个快捷任务'
+          : '恢复连接后即可发送任务';
       return LayoutBuilder(
         builder: (context, constraints) {
           return SingleChildScrollView(
@@ -1689,49 +1878,91 @@ class TranscriptView extends StatelessWidget {
               constraints: BoxConstraints(minHeight: constraints.maxHeight),
               child: Center(
                 child: Padding(
-                  padding: const EdgeInsets.all(20),
+                  padding: const EdgeInsets.fromLTRB(18, 12, 18, 20),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      const Icon(
-                        Icons.terminal_rounded,
-                        size: 28,
-                        color: AppColors.accent,
+                      Container(
+                        width: 72,
+                        height: 72,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(22),
+                          gradient: LinearGradient(
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                            colors: [
+                              Colors.white.withValues(alpha: 0.62),
+                              Colors.white.withValues(alpha: 0.28),
+                            ],
+                          ),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.58),
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: AppColors.shadow.withValues(alpha: 0.04),
+                              blurRadius: 16,
+                              offset: const Offset(0, 6),
+                            ),
+                          ],
+                        ),
+                        child: Icon(
+                          connected
+                              ? Icons.terminal_rounded
+                              : Icons.cloud_off_rounded,
+                          size: 30,
+                          color: connected
+                              ? AppColors.accent
+                              : AppColors.muted,
+                        ),
                       ),
-                      const SizedBox(height: 14),
-                      const Text(
-                        '有什么需要处理？',
-                        style: TextStyle(
-                          fontSize: 18,
+                      const SizedBox(height: 18),
+                      Text(
+                        title,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 16,
                           fontWeight: FontWeight.w700,
+                          height: 1.35,
+                          letterSpacing: -0.2,
                         ),
                       ),
                       const SizedBox(height: 8),
-                      const Text(
-                        '给 Claude Code 一个任务',
+                      Text(
+                        subtitle,
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: AppColors.muted),
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 13,
+                        ),
                       ),
-                      const SizedBox(height: 18),
-                      Wrap(
-                        alignment: WrapAlignment.center,
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          PromptChip(
-                            label: '检查这个项目',
-                            onTap: () => onFillPrompt('检查这个项目'),
+                      if (connected) ...[
+                        const SizedBox(height: 20),
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 360),
+                          child: Column(
+                            children: [
+                              PromptChip(
+                                icon: Icons.search_rounded,
+                                label: '检查这个项目',
+                                onTap: () => onFillPrompt('检查这个项目'),
+                              ),
+                              const SizedBox(height: 8),
+                              PromptChip(
+                                icon: Icons.play_arrow_rounded,
+                                label: '运行测试',
+                                onTap: () => onFillPrompt('运行测试并总结结果'),
+                              ),
+                              const SizedBox(height: 8),
+                              PromptChip(
+                                icon: Icons.folder_outlined,
+                                label: '总结当前目录',
+                                onTap: () => onFillPrompt('总结当前目录结构'),
+                              ),
+                            ],
                           ),
-                          PromptChip(
-                            label: '运行测试',
-                            onTap: () => onFillPrompt('运行测试并总结结果'),
-                          ),
-                          PromptChip(
-                            label: '总结当前目录',
-                            onTap: () => onFillPrompt('总结当前目录结构'),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -1784,7 +2015,7 @@ class PermissionRequestCard extends StatelessWidget {
     final enabled = connected && !responding;
     return GlassPanel(
       key: ValueKey('permission-request-${request.requestId}'),
-      radius: 18,
+      radius: AppRadii.control,
       padding: const EdgeInsets.all(14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1942,8 +2173,8 @@ class MessageBlock extends StatelessWidget {
             listIndent: 22,
             codeblockPadding: const EdgeInsets.all(12),
             codeblockDecoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.58),
-              borderRadius: BorderRadius.circular(8),
+              color: const Color(0xFFEEF3F6),
+              borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: AppColors.shadow.withValues(alpha: 0.12),
               ),
@@ -1968,18 +2199,22 @@ class MessageBlock extends StatelessWidget {
           key: const ValueKey('user-message'),
           padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
           decoration: BoxDecoration(
-            color: AppColors.accent.withValues(alpha: 0.12),
-            borderRadius: BorderRadius.only(
-              topLeft: const Radius.circular(18),
-              topRight: const Radius.circular(18),
-              bottomLeft: const Radius.circular(18),
-              bottomRight: const Radius.circular(6),
+            color: AppColors.accent.withValues(alpha: 0.10),
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(AppRadii.bubble),
+              topRight: Radius.circular(AppRadii.bubble),
+              bottomLeft: Radius.circular(AppRadii.bubble),
+              bottomRight: Radius.circular(6),
             ),
-            border: Border.all(color: AppColors.accent.withValues(alpha: 0.16)),
+            border: Border.all(color: AppColors.accent.withValues(alpha: 0.10)),
           ),
           child: Text(
             message.text,
-            style: const TextStyle(height: 1.45, color: AppColors.ink),
+            style: const TextStyle(
+              height: 1.45,
+              color: AppColors.ink,
+              fontWeight: FontWeight.w500,
+            ),
           ),
         ),
       ),
@@ -2001,38 +2236,14 @@ class AssistantBubbleFrame extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final maxWidth = MediaQuery.sizeOf(context).width * 0.86;
+    final maxWidth = MediaQuery.sizeOf(context).width * 0.82;
     return Align(
       alignment: Alignment.centerLeft,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            key: const ValueKey('assistant-avatar'),
-            width: 30,
-            height: 30,
-            decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Color(0xFF178DA5), Color(0xFF4DB5B4)],
-              ),
-              borderRadius: BorderRadius.circular(10),
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.accent.withValues(alpha: 0.18),
-                  blurRadius: 12,
-                  offset: const Offset(0, 5),
-                ),
-              ],
-            ),
-            child: const Icon(
-              Icons.auto_awesome_rounded,
-              size: 16,
-              color: Colors.white,
-            ),
-          ),
+          const AssistantAvatar(),
           const SizedBox(width: 9),
           Flexible(
             child: ConstrainedBox(
@@ -2043,21 +2254,21 @@ class AssistantBubbleFrame extends StatelessWidget {
                     ? const EdgeInsets.fromLTRB(13, 10, 14, 10)
                     : const EdgeInsets.fromLTRB(15, 13, 15, 13),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.82),
+                  color: const Color(0xE6F7FAFC),
                   borderRadius: const BorderRadius.only(
                     topLeft: Radius.circular(7),
-                    topRight: Radius.circular(19),
-                    bottomLeft: Radius.circular(19),
-                    bottomRight: Radius.circular(19),
+                    topRight: Radius.circular(AppRadii.bubble),
+                    bottomLeft: Radius.circular(AppRadii.bubble),
+                    bottomRight: Radius.circular(AppRadii.bubble),
                   ),
                   border: Border.all(
-                    color: AppColors.shadow.withValues(alpha: 0.10),
+                    color: const Color(0x66FFFFFF),
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: AppColors.shadow.withValues(alpha: 0.06),
-                      blurRadius: 18,
-                      offset: const Offset(0, 7),
+                      color: AppColors.shadow.withValues(alpha: 0.03),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
                     ),
                   ],
                 ),
@@ -2066,6 +2277,52 @@ class AssistantBubbleFrame extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class AssistantAvatar extends StatelessWidget {
+  const AssistantAvatar({super.key});
+
+  static const assetPath = 'assets/assistant_avatar.jpg';
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('assistant-avatar'),
+      width: 32,
+      height: 32,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(11),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.92)),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.shadow.withValues(alpha: 0.10),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Image.asset(
+          assetPath,
+          fit: BoxFit.cover,
+          // Face sits lower in this portrait; bias crop toward it.
+          alignment: const Alignment(0, 0.35),
+          errorBuilder: (context, error, stackTrace) {
+            return Container(
+              color: Colors.white.withValues(alpha: 0.72),
+              alignment: Alignment.center,
+              child: const Icon(
+                Icons.terminal_rounded,
+                size: 16,
+                color: AppColors.accent,
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -2153,46 +2410,43 @@ class ActivityBlock extends StatelessWidget {
     };
 
     if (message.activityKind == ActivityKind.summary) {
-      return Padding(
-        padding: const EdgeInsets.only(left: 39),
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(12, 10, 13, 10),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.54),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: AppColors.shadow.withValues(alpha: 0.08)),
-          ),
-          child: Row(
-            children: [
-              icon,
-              const SizedBox(width: 9),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    title,
-                    if (detail != null && detail.isNotEmpty) ...[
-                      const SizedBox(height: 3),
-                      Text(
-                        detail,
-                        style: const TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 12,
-                        ),
+      return Container(
+        padding: const EdgeInsets.fromLTRB(12, 10, 13, 10),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.54),
+          borderRadius: BorderRadius.circular(AppRadii.control),
+          border: Border.all(color: AppColors.shadow.withValues(alpha: 0.08)),
+        ),
+        child: Row(
+          children: [
+            icon,
+            const SizedBox(width: 9),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  title,
+                  if (detail != null && detail.isNotEmpty) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      detail,
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 12,
                       ),
-                    ],
+                    ),
                   ],
-                ),
+                ],
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       );
     }
 
     if (detail == null || detail.isEmpty) {
       return Padding(
-        padding: const EdgeInsets.fromLTRB(39, 5, 5, 5),
+        padding: const EdgeInsets.fromLTRB(4, 5, 5, 5),
         child: Row(
           children: [
             SizedBox(width: 22, child: Center(child: icon)),
@@ -2205,44 +2459,41 @@ class ActivityBlock extends StatelessWidget {
 
     return Theme(
       data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-      child: Padding(
-        padding: const EdgeInsets.only(left: 39),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.42),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: AppColors.shadow.withValues(alpha: 0.07)),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.42),
+          borderRadius: BorderRadius.circular(AppRadii.control),
+          border: Border.all(color: AppColors.shadow.withValues(alpha: 0.07)),
+        ),
+        child: ExpansionTile(
+          dense: true,
+          visualDensity: VisualDensity.compact,
+          tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+          leading: SizedBox(width: 20, child: Center(child: icon)),
+          title: title,
+          subtitle: Text(
+            detail,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(color: AppColors.muted, fontSize: 12),
           ),
-          child: ExpansionTile(
-            dense: true,
-            visualDensity: VisualDensity.compact,
-            tilePadding: const EdgeInsets.symmetric(horizontal: 12),
-            childrenPadding: const EdgeInsets.fromLTRB(42, 0, 12, 10),
-            leading: SizedBox(width: 20, child: Center(child: icon)),
-            title: title,
-            subtitle: Text(
-              detail,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: AppColors.muted, fontSize: 12),
-            ),
-            shape: const Border(),
-            collapsedShape: const Border(),
-            children: [
-              Align(
-                alignment: Alignment.centerLeft,
-                child: SelectableText(
-                  detail,
-                  style: const TextStyle(
-                    color: AppColors.ink,
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                    height: 1.45,
-                  ),
+          shape: const Border(),
+          collapsedShape: const Border(),
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: SelectableText(
+                detail,
+                style: const TextStyle(
+                  color: AppColors.ink,
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  height: 1.45,
                 ),
               ),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );
@@ -2402,7 +2653,7 @@ class PromptBar extends StatelessWidget {
         const SizedBox(height: 7),
         GlassPanel(
           padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
-          radius: 24,
+          radius: AppRadii.input,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.end,
             children: [
@@ -2414,11 +2665,17 @@ class PromptBar extends StatelessWidget {
                   maxLines: 4,
                   onChanged: (_) => onChanged(),
                   decoration: InputDecoration(
-                    hintText: connected
-                        ? '发送消息'
+                    hintText: running
+                        ? 'Claude 正在输出…'
+                        : connected
+                        ? '输入要发给 Claude Code 的内容'
                         : offline
                         ? '电脑端离线，请先重连'
                         : '正在连接电脑端',
+                    hintStyle: TextStyle(
+                      color: AppColors.muted.withValues(alpha: 0.9),
+                      fontSize: 14,
+                    ),
                     border: InputBorder.none,
                     isDense: true,
                     contentPadding: const EdgeInsets.symmetric(
@@ -2429,25 +2686,40 @@ class PromptBar extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              SizedBox(
-                width: 40,
-                height: 40,
-                child: IconButton.filled(
-                  onPressed: running ? onStop : (canSend ? onSend : null),
-                  icon: Icon(
-                    running ? Icons.stop_rounded : Icons.arrow_upward_rounded,
+              if (running)
+                SizedBox(
+                  height: 40,
+                  child: FilledButton.icon(
+                    onPressed: onStop,
+                    icon: const Icon(Icons.stop_rounded, size: 18),
+                    label: const Text('停止'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.stop,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppRadii.pill),
+                      ),
+                    ),
                   ),
-                  tooltip: running ? '停止' : '发送',
-                  style: IconButton.styleFrom(
-                    backgroundColor: running
-                        ? AppColors.stop
-                        : AppColors.accent,
-                    disabledBackgroundColor: const Color(0xFFDCE6EA),
-                    foregroundColor: Colors.white,
-                    fixedSize: const Size.square(40),
+                )
+              else
+                SizedBox(
+                  width: 40,
+                  height: 40,
+                  child: IconButton.filled(
+                    onPressed: canSend ? onSend : null,
+                    icon: const Icon(Icons.send_rounded, size: 18),
+                    tooltip: '发送',
+                    style: IconButton.styleFrom(
+                      backgroundColor: AppColors.accent,
+                      disabledBackgroundColor: const Color(0xFFDCE6EA),
+                      foregroundColor: Colors.white,
+                      fixedSize: const Size.square(40),
+                      shape: const CircleBorder(),
+                    ),
                   ),
                 ),
-              ),
             ],
           ),
         ),
@@ -2516,26 +2788,42 @@ class PermissionModeChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final danger = mode == PermissionMode.bypassPermissions;
-    return ActionChip(
-      key: const ValueKey('permission-mode-chip'),
-      avatar: Icon(
-        mode.icon,
-        size: 16,
-        color: danger ? AppColors.stop : AppColors.accent,
-      ),
-      label: Text(mode.label),
-      onPressed: enabled ? onPressed : null,
-      visualDensity: VisualDensity.compact,
-      side: BorderSide(
-        color: (danger ? AppColors.stop : AppColors.accent).withValues(
-          alpha: 0.2,
+    final tone = danger ? AppColors.stop : AppColors.accent;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        key: const ValueKey('permission-mode-chip'),
+        onTap: enabled ? onPressed : null,
+        borderRadius: BorderRadius.circular(AppRadii.pill),
+        child: Ink(
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: enabled ? 0.62 : 0.40),
+            borderRadius: BorderRadius.circular(AppRadii.pill),
+            border: Border.all(color: tone.withValues(alpha: 0.16)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(mode.icon, size: 15, color: tone),
+              const SizedBox(width: 6),
+              Text(
+                mode.label,
+                style: TextStyle(
+                  color: danger ? AppColors.stop : AppColors.muted,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: 2),
+              Icon(
+                Icons.keyboard_arrow_down_rounded,
+                size: 16,
+                color: AppColors.muted.withValues(alpha: 0.8),
+              ),
+            ],
+          ),
         ),
-      ),
-      backgroundColor: Colors.white.withValues(alpha: 0.58),
-      labelStyle: TextStyle(
-        color: danger ? AppColors.stop : AppColors.muted,
-        fontSize: 12,
-        fontWeight: FontWeight.w600,
       ),
     );
   }
@@ -2655,7 +2943,7 @@ class CommandSuggestions extends StatelessWidget {
   Widget build(BuildContext context) {
     return GlassPanel(
       key: const ValueKey('command-suggestions'),
-      radius: 18,
+      radius: AppRadii.control,
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxHeight: 292),
@@ -2787,14 +3075,10 @@ class AppBackground extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       resizeToAvoidBottomInset: true,
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFFFAFBFB), Color(0xFFF5F8F8), Color(0xFFF7F7FA)],
-          ),
-        ),
+      // Flat cool fog — no vertical hue split, no competing blobs.
+      backgroundColor: AppColors.bgMid,
+      body: ColoredBox(
+        color: AppColors.bgMid,
         child: child,
       ),
     );
@@ -2806,7 +3090,7 @@ class GlassPanel extends StatelessWidget {
     super.key,
     required this.child,
     this.padding = const EdgeInsets.all(16),
-    this.radius = 22,
+    this.radius = AppRadii.panel,
   });
 
   final Widget child;
@@ -2815,26 +3099,65 @@ class GlassPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
-        child: Container(
-          width: double.infinity,
-          padding: padding,
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.60),
-            borderRadius: BorderRadius.circular(radius),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.76)),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.shadow.withValues(alpha: 0.055),
-                blurRadius: 18,
-                offset: const Offset(0, 8),
-              ),
-            ],
+    return Container(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(radius),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.shadow.withValues(alpha: 0.045),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
           ),
-          child: child,
+        ],
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(radius),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(radius),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.62),
+              ),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  Colors.white.withValues(alpha: 0.52),
+                  Colors.white.withValues(alpha: 0.34),
+                ],
+              ),
+            ),
+            child: Stack(
+              children: [
+                Padding(
+                  padding: padding,
+                  child: SizedBox(width: double.infinity, child: child),
+                ),
+                Positioned(
+                  left: 12,
+                  right: 12,
+                  top: 0,
+                  height: 1,
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(1),
+                        gradient: LinearGradient(
+                          colors: [
+                            Colors.white.withValues(alpha: 0.0),
+                            Colors.white.withValues(alpha: 0.55),
+                            Colors.white.withValues(alpha: 0.0),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -2877,8 +3200,9 @@ class StatusPill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(999),
+        color: color.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(AppRadii.pill),
+        border: Border.all(color: color.withValues(alpha: 0.14)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -2925,26 +3249,73 @@ class ActionButton extends StatelessWidget {
         backgroundColor: AppColors.accent,
         foregroundColor: Colors.white,
         minimumSize: const Size.fromHeight(48),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadii.pill),
+        ),
       ),
     );
   }
 }
 
 class PromptChip extends StatelessWidget {
-  const PromptChip({super.key, required this.label, required this.onTap});
+  const PromptChip({
+    super.key,
+    required this.label,
+    required this.onTap,
+    this.icon,
+  });
 
   final String label;
   final VoidCallback onTap;
+  final IconData? icon;
 
   @override
   Widget build(BuildContext context) {
-    return ActionChip(
-      onPressed: onTap,
-      label: Text(label),
-      side: BorderSide(color: AppColors.accent.withValues(alpha: 0.14)),
-      shape: const StadiumBorder(),
-      backgroundColor: Colors.white.withValues(alpha: 0.58),
-      labelStyle: const TextStyle(color: AppColors.ink, fontSize: 13),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(AppRadii.control),
+        child: Ink(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.58),
+            borderRadius: BorderRadius.circular(AppRadii.control),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.78)),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.shadow.withValues(alpha: 0.05),
+                blurRadius: 14,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              if (icon != null) ...[
+                Icon(icon, size: 18, color: AppColors.accent),
+                const SizedBox(width: 10),
+              ],
+              Expanded(
+                child: Text(
+                  label,
+                  style: const TextStyle(
+                    color: AppColors.ink,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Icon(
+                Icons.chevron_right_rounded,
+                size: 18,
+                color: AppColors.muted.withValues(alpha: 0.8),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -3561,10 +3932,22 @@ enum ActivityKind { thinking, tool, summary }
 
 enum ActivityState { running, done, error, stopped }
 
+class AppRadii {
+  static const panel = 22.0;
+  static const bubble = 16.0;
+  static const input = 16.0;
+  static const control = 14.0;
+  static const pill = 999.0;
+}
+
 class AppColors {
   static const ink = Color(0xFF172026);
   static const muted = Color(0xFF6B7880);
   static const accent = Color(0xFF168EB0);
   static const stop = Color(0xFFD96B6B);
   static const shadow = Color(0xFF7B8B96);
+  // Single cool fog plate. Top/mid/bottom stay identical to kill banding.
+  static const bgTop = Color(0xFFF3F6F8);
+  static const bgMid = Color(0xFFF3F6F8);
+  static const bgBottom = Color(0xFFF3F6F8);
 }
