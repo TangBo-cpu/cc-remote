@@ -31,6 +31,10 @@
 - Flutter App WebSocket 连接 `/ws` 并发送首条 `{ "type": "auth", "token": "..." }`。
 - Flutter App 发送 prompt 到 daemon。
 - Flutter App 接收 `text`、`done`、`error`、`stopped`。
+- 输入框键入 `/` 可读取 Claude Code 的真实斜杠指令，支持搜索和滚动选择。
+- 对话使用左右消息气泡，任务运行时显示思考动效、状态文字和实时计时。
+- 运行中显示安全化的工具调用状态，任务结束后自动收起本轮活动卡片。
+- 顶部显示当前 Claude 模型和剩余上下文。
 - 本地脚本模拟 App 已验证 WebSocket auth、单条 `pong`、长输出多段 `text`、`done` 和 `claudeSessionId` 写入。
 - App 设置里可开启新对话，daemon 会清空当前 `claudeSessionId`。
 - Stop 按钮发送 WebSocket `{ "type": "stop" }`。
@@ -43,13 +47,11 @@
 
 未完成：
 
-- 还没做完整真机 UI 端到端验证 Claude Code 流式输出。
-- 还没做连续对话 `--resume <claudeSessionId>` 语义验证。
-- 还没做 Stop 中断长任务验证。
 - 还没做 transcript 持久化。
 - 还没做断线期间输出恢复。
+- 还没做多设备管理和手机端权限审批流。
 
-下一步最小任务：启动 `cc-remote` 后，在真机 App 发 `回复 pong，只输出 pong`，验证 UI 能显示 Claude Code 真实输出和完成状态。
+最新 Android 调试版已完成真机安装和核心对话流程验证。
 
 ## 一键启动电脑端
 
@@ -170,7 +172,10 @@ POST /api/pair
 连接 wss://tbhaoshuai.ccwu.cc/ws
 发送 auth 消息
 发送 prompt
+输入 `/` 搜索 Claude Code 指令
 接收 text/done/error/stopped
+显示思考计时和运行中的工具调用
+显示当前模型和剩余上下文
 POST /api/new-conversation
 发送 stop
 POST /api/logout
@@ -251,8 +256,10 @@ wss://tbhaoshuai.ccwu.cc/ws
 服务端会发送：
 
 ```text
-status, claude_event, text, done, stopped, error
+status, commands, session_info, activity, claude_event, text, done, stopped, error
 ```
+
+`commands` 提供 Claude Code 可调用的斜杠指令。`session_info` 提供当前模型、上下文窗口和剩余 token。`activity` 只暴露思考状态、工具名称和安全化摘要，不传递私有思考文本或工具结果正文。
 
 注意：daemon 和 Flutter App 已接入这套 WebSocket 协议。App 会在回到前台时重新探测 daemon；电脑端离线时保留配对态，但显示“电脑端离线”并禁止发送。
 

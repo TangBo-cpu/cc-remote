@@ -22,6 +22,11 @@ Flutter 手机 App，用于扫码配对本机 CC Remote daemon，并远程发送
 - 区分“已配对”和“已连接”。
 - daemon 离线时显示“电脑端离线”并禁用发送。
 - App 回到前台时重新探测 daemon 状态。
+- 输入 `/` 获取 Claude Code 真实指令，支持搜索和滚动选择。
+- 用户与 Claude 回复使用左右消息气泡。
+- 发送任务后显示 Claude 风格的思考动效、状态文字和实时计时。
+- 运行中显示工具调用，完成后移除思考与工具卡片，只保留最终对话。
+- 顶部显示当前模型和剩余上下文。
 
 未实现：
 
@@ -107,10 +112,15 @@ connect wss://tbhaoshuai.ccwu.cc/ws
 send { "type": "auth", "token": "..." }
 wait status authenticated=true
 send { "type": "prompt", "text": "..." }
+receive commands / session_info / activity
 append server text events
 handle done/error/stopped
 send { "type": "stop" }
 ```
+
+输入框以 `/` 开头时会打开指令建议。后续字符用于实时筛选，点击指令后回填输入框。建议列表有独立滚动区域。
+
+任务运行时，`activity` 消息驱动思考计时和工具调用卡片。任务结束后这些临时状态会移除。`session_info` 用于显示模型名和剩余上下文，数据来自 Claude Code 的 init 与 result 事件。
 
 ## 连接状态
 
@@ -129,19 +139,6 @@ App 回到前台时会重新调用 `/api/status`。电脑端关闭后，App 保�
 
 设置 sheet 里提供“开启新对话”。点击后 App 调用 `POST /api/new-conversation`，daemon 清空当前 `claudeSessionId`，App 清空当前 transcript。
 
-## 下一步真机验证
+## 真机验证状态
 
-本地脚本模拟 App 已通过 WebSocket auth、单条 `pong`、长输出多段 `text`、`done` 和 `claudeSessionId` 写入。还需要真机 UI 验证。
-
-发送：
-
-```text
-回复 pong，只输出 pong
-```
-
-确认：
-
-- 真机 App 显示真实 Claude Code 输出。
-- 真机 App 收到 `done` 并回到可发送状态。
-- 第二条 prompt 使用 `--resume <claudeSessionId>` 生效。
-- Stop 可以中断长任务。
+最新 Android 调试版已安装到真机。扫码配对、真实指令加载与筛选、列表滚动、流式回复、消息气泡、思考计时、工具调用、模型和剩余上下文均已完成真机验证。

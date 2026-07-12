@@ -216,7 +216,7 @@ App 停止任务。
 }
 ```
 
-服务端会发送这些消息。`text` 直接追加到当前 assistant message。`claude_event` 第一版可以先记录或忽略，不需要进入主 UI。`done`、`stopped`、`error` 用来结束当前运行态并更新 transcript。
+服务端会发送这些消息。`commands` 提供 Claude Code 真实斜杠指令。`session_info` 提供当前模型、上下文窗口和剩余 token。`activity` 提供安全化的思考与工具调用状态，不暴露私有思考文本或工具结果正文。`text` 直接追加到当前 assistant message。`done`、`stopped`、`error` 用来结束当前运行态并更新 transcript。
 
 ```json
 { "type": "text", "text": "..." }
@@ -322,17 +322,17 @@ daemon 的 App token 主协议已经在代码里，Flutter App 也已经完成�
 1. 创建 `mobile/` Flutter 项目，接入基础依赖和浅色毛玻璃 UI 骨架。
 2. 实现扫码配对。解析 JSON QR，校验 `type`、`version`、`origin`、`nonce` 和 `expiresAt`，展示配对确认 sheet，确认后调用 `/api/pair`，把 `origin`、`token`、`deviceName` 存进 Secure Storage。
 3. 实现状态恢复。App 重启后读取本地 session，调用 `/api/status`。成功进入主控制台；daemon 离线时保留配对态并显示“电脑端离线”；401 时清 token 并回到配对页。
-4. 实现 WebSocket 聊天。连接 `/ws`，发送 `auth`，处理 `status`、`text`、`done`、`stopped`、`error`，把文本流追加到当前 assistant message。
+4. 实现 WebSocket 聊天。连接 `/ws`，发送 `auth`，处理 `status`、`commands`、`session_info`、`activity`、`text`、`done`、`stopped`、`error`，把文本流追加到当前 assistant message。
 5. 实现 Stop、重新连接和 Logout。Stop 走 WebSocket `stop`。Logout 先调 `/api/logout`，再清本地 token，最后回到扫码页。
 6. 电脑端新增一键启动命令：`cc-remote` / `.\cc-remote.cmd` / `npm run cc-remote`。
 7. daemon 修复 auth state 并发写 race，stale Claude Code session 会自动清理并用新会话重试一次。
 
-待验证：真机 Claude 输出、`done`、`--resume` 和 Stop 中断长任务。
+真机已验证真实指令、流式输出、`done`、消息气泡、思考计时、工具调用、模型和剩余上下文。`--resume` 和 Stop 中断长任务仍待专项验证。
 
 ## 第一版验收
 
-已满足：电脑端 daemon 能显示 JSON 二维码。Flutter App 能扫码并展示确认 sheet。确认后 App 能保存 token，并在关闭重开后恢复已配对状态。主控制台能显示设备名、工作目录、连接状态和 transcript。App 能发送 prompt，Logout 后旧 WebSocket 失效，旧 token 不能继续控制电脑。daemon 离线时 App 能显示“电脑端离线”。
+已满足：电脑端 daemon 能显示 JSON 二维码。Flutter App 能扫码并展示确认 sheet。确认后 App 能保存 token，并在关闭重开后恢复已配对状态。主控制台能显示设备名、工作目录、连接状态、当前模型、剩余上下文和 transcript。输入框能发现、筛选并滚动选择 Claude Code 指令。App 能发送 prompt，并在运行中显示思考计时和工具调用。Logout 后旧 WebSocket 失效，旧 token 不能继续控制电脑。daemon 离线时 App 能显示“电脑端离线”。
 
-待真机验证：daemon 调用本机 Claude Code 后，App 能流式显示真实输出；收到 `done`；第二条 prompt 通过 `--resume <claudeSessionId>` 延续上下文；运行中 Stop 能中断任务且没有残留 Claude 进程。
+待专项验证：第二条 prompt 通过 `--resume <claudeSessionId>` 延续上下文；运行中 Stop 能中断任务且没有残留 Claude 进程。
 
 第一版到这里就够。多设备、历史持久化、文件能力、推送和上架材料等核心链路稳定后再补。

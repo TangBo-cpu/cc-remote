@@ -43,16 +43,22 @@
 - [x] App 回到前台时重新探测 daemon 状态
 - [x] 不再在没有返回文本时留下空 assistant 气泡
 - [x] 设置里可开启新对话并清空当前 transcript
+- [x] 输入 `/` 获取 Claude Code 真实斜杠指令并实时筛选
+- [x] 指令建议列表支持独立滚动
+- [x] 用户与 assistant 使用左右消息气泡
+- [x] 任务运行时显示思考动效、状态文字和实时计时
+- [x] 运行中显示工具调用，结束后清理临时活动卡片
+- [x] 显示当前模型和剩余上下文
 
 ### 文档和保存点
 
 - [x] README 更新为 App-first token 协议
 - [x] mobile README 更新为真实 WebSocket 对话流程
-- [x] 当前功能分支已合并回 `master`：`a0f182f merge: mobile pairing and remote chat`
+- [x] 移动端活动与会话上下文功能已合并回 `master`：`3cad17f merge: mobile activity and session context UI`
 
-## 当前未完成：真机 UI Claude 输出验证
+## 真机 UI 验证
 
-本地脚本模拟 App 已通过 WebSocket auth、单条 `pong`、长输出多段 `text`、`done` 和 `claudeSessionId` 写入。还需要完整真机 UI 端到端验证 Claude Code 真实输出：
+本地脚本和真机 App 已完成 WebSocket auth、流式输出、`done`、指令列表与会话上下文展示验证。连续会话和 Stop 中断仍需单独验证：
 
 - [x] 本地启动 daemon 并通过 `/api/health`
 - [x] 本地脚本模拟 App 调用 `/api/pair`
@@ -63,9 +69,11 @@
 - [x] 本地脚本模拟 App 收到 `done`
 - [x] `.data/state.json` 写入 `claudeSessionId`
 - [x] 本地脚本模拟 App 验证长输出多段 `text`
-- [ ] 真机 App 扫新二维码并显示已连接
-- [ ] 真机 App 显示真实 `pong` 输出
-- [ ] 真机 App 收到 `done`
+- [x] 真机 App 扫新二维码并显示已连接
+- [x] 真机 App 显示真实 Claude Code 流式输出
+- [x] 真机 App 收到 `done`
+- [x] 真机 App 获取真实斜杠指令并支持筛选和滚动
+- [x] 真机 App 显示思考计时、工具调用、模型和剩余上下文
 - [ ] 第二条 prompt 验证 `--resume <claudeSessionId>` 生效
 - [ ] Stop 可中断长任务
 - [ ] Stop 后无残留 Claude 进程
@@ -89,7 +97,7 @@
 - [x] 电脑端访问 `https://tbhaoshuai.ccwu.cc/api/health` 成功
 - [ ] 手机浏览器访问 `https://tbhaoshuai.ccwu.cc/api/health` 成功
 - [x] 手机 App 经域名配对成功
-- [ ] 手机 App 经 `wss://tbhaoshuai.ccwu.cc/ws` 连接成功并 auth
+- [x] 手机 App 经 `wss://tbhaoshuai.ccwu.cc/ws` 连接成功并 auth
 - [ ] 验证错误 Origin 无法调用 mutating API
 - [ ] 验证错误 Host 被拒绝
 
@@ -103,8 +111,8 @@
 - [x] 本地脚本模拟 App 发送 prompt 后 daemon 启动本机 `claude` CLI
 - [x] 本地脚本模拟 App 能收到流式 `text`
 - [x] 本地脚本模拟 App 能收到 `done`
-- [ ] 真机 App 能显示真实流式 `text`
-- [ ] 真机 App 能显示 `done` 后的完成态
+- [x] 真机 App 能显示真实流式 `text`
+- [x] 真机 App 能在 `done` 后恢复可发送状态
 - [ ] Stop 可中断长任务
 - [ ] Stop 后无残留 Claude 进程
 
@@ -113,7 +121,6 @@
 - [ ] 只有单设备授权态，没有多设备管理
 - [ ] 只有单项目工作目录，通过 `WORKSPACE_DIR` 固定
 - [ ] 网页/PWA 只作为调试壳，不是主产品入口
-- [ ] 真机 UI Claude 输出仍未完整端到端验证
 - [ ] 没有文件上传/下载
 - [ ] 没有手机端权限审批流
 - [ ] 没有任务历史持久化，重开 App 不恢复 transcript

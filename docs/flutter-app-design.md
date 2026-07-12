@@ -31,6 +31,9 @@ Flutter App 是 CC Remote 的主入口，不是网页壳。
 - Stop 当前任务。
 - Logout / 清除配对。
 - 基础错误展示和手动重连。
+- Claude Code 斜杠指令发现、搜索和选择。
+- 思考计时和运行中的工具调用状态。
+- 当前模型和剩余上下文展示。
 
 ### 暂不做
 
@@ -339,6 +342,24 @@ class StatusMessage extends ServerMessage {
   final bool hasClaudeSessionId;
 }
 
+class CommandsMessage extends ServerMessage {
+  final List<String> commands;
+}
+
+class SessionInfoMessage extends ServerMessage {
+  final String? model;
+  final int? contextWindow;
+  final int? remainingTokens;
+}
+
+class ActivityMessage extends ServerMessage {
+  final String id;
+  final String kind;
+  final String state;
+  final String? toolName;
+  final String? detail;
+}
+
 class TextMessage extends ServerMessage {
   final String text;
 }
@@ -564,6 +585,9 @@ class ChatController extends ChangeNotifier {}
 - assistant 消息左侧。
 - system 消息居中小字。
 - `text` event 追加到当前 assistant 消息。
+- 输入框以 `/` 开头时展示可搜索、可滚动的 Claude Code 指令列表。
+- 任务运行时展示思考计时和工具调用，结束后移除这些临时状态。
+- 顶部展示当前模型和剩余上下文。
 - `done` 后 assistant message 状态变 done。
 - `stopped` 后状态变 stopped。
 
@@ -638,7 +662,7 @@ flutter pub add mobile_scanner flutter_secure_storage web_socket_channel http
 电脑终端二维码 -> 手机扫码 -> App 显示已连接 Jayson PC
 ```
 
-### Step 4：实现 WebSocket 聊天（已完成，真机 Claude 输出待验证）
+### Step 4：实现 WebSocket 聊天（已完成并通过真机验证）
 
 - `RemoteWs.connect`
 - auth 消息
@@ -673,7 +697,9 @@ Logout 后旧 App 不能继续控制电脑
 - [x] 关闭重开 App 后自动恢复已配对状态。
 - [x] daemon 离线时 App 显示“电脑端离线”。
 - [x] App 可发送 prompt 到 WebSocket。
-- [ ] App 可在真机显示 Claude 真实流式输出。
+- [x] App 可在真机显示 Claude 真实流式输出。
+- [x] App 可获取、搜索并滚动选择 Claude Code 斜杠指令。
+- [x] App 可显示思考计时、工具调用、当前模型和剩余上下文。
 - [ ] App 可真机 Stop Claude 长任务。
 - [x] App 可 Logout。
 - [x] Logout 后旧 WebSocket 失效。
