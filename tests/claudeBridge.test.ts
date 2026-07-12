@@ -4,17 +4,22 @@ import {
   ClaudeBridge,
   extractClaudeActivities,
   extractClaudeCommands,
+  extractClaudePermissionRequest,
   extractClaudeSessionInfo,
   isMissingConversationError,
+  permissionControlResponse,
 } from '../src/claudeBridge.js';
 
 test('ClaudeBridge reports a missing CLI as a run result instead of throwing', async () => {
   const bridge = new ClaudeBridge({ claudeBin: 'cc-remote-missing-claude-bin', workspaceDir: process.cwd() });
   const result = await bridge.run({
     prompt: 'test',
+    permissionMode: 'manual',
     onEvent: () => {},
     onText: () => {},
     onSessionId: () => {},
+    onPermissionRequest: () => {},
+    onPermissionClosed: () => {},
   });
 
   assert.equal(result.exitCode, null);
@@ -123,5 +128,54 @@ test('extracts the active model and exact remaining context', () => {
     contextWindow: 200000,
     usedTokens: 25081,
     remainingTokens: 174919,
+  });
+});
+
+test('normalizes permission control requests and builds one-time decisions', () => {
+  const request = extractClaudePermissionRequest({
+    type: 'control_request',
+    request_id: 'permission-1',
+    request: {
+      subtype: 'can_use_tool',
+      tool_name: 'Bash',
+      input: { command: 'npm test', description: 'Run tests' },
+      title: 'Run command',
+      display_name: 'Bash',
+      description: 'Run the project tests',
+    },
+  });
+
+  assert.deepEqual(request, {
+    requestId: 'permission-1',
+    toolName: 'Bash',
+    input: { command: 'npm test', description: 'Run tests' },
+    detail: 'npm test',
+    title: 'Run command',
+    displayName: 'Bash',
+    description: 'Run the project tests',
+    decisionReason: undefined,
+  });
+  assert.deepEqual(permissionControlResponse(request!, 'allow'), {
+    type: 'control_response',
+    response: {
+      subtype: 'success',
+      request_id: 'permission-1',
+      response: {
+        behavior: 'allow',
+        updatedInput: { command: 'npm test', description: 'Run tests' },
+      },
+    },
+  });
+  assert.deepEqual(permissionControlResponse(request!, 'deny'), {
+    type: 'control_response',
+    response: {
+      subtype: 'success',
+      request_id: 'permission-1',
+      response: {
+        behavior: 'deny',
+        message: '用户在手机端拒绝了这个操作',
+        interrupt: false,
+      },
+    },
   });
 });

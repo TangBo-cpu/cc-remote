@@ -5,6 +5,7 @@ import { extname, join } from 'node:path';
 import qrcode from 'qrcode-terminal';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createAuthState } from './authState.js';
+import { createTranscriptState } from './transcriptState.js';
 import {
   ClaudeBridge,
   discoverClaudeCommands,
@@ -12,6 +13,8 @@ import {
   extractClaudeCommands,
   extractClaudeSessionInfo,
   isMissingConversationError,
+  type ClaudePermissionMode,
+  type ClaudePermissionRequest,
   type ClaudeSessionInfo,
 } from './claudeBridge.js';
 
@@ -21,16 +24,22 @@ const PUBLIC_ORIGIN = (process.env.PUBLIC_ORIGIN || `http://${HOST}:${PORT}`).re
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR || process.cwd();
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const DEVICE_NAME = process.env.DEVICE_NAME || hostname();
+const ALLOW_BYPASS_PERMISSIONS = process.env.ALLOW_BYPASS_PERMISSIONS === '1';
 const MAX_BODY_BYTES = 64 * 1024;
 
 const publicUrl = new URL(PUBLIC_ORIGIN);
 const auth = await createAuthState();
-const bridge = new ClaudeBridge({ claudeBin: CLAUDE_BIN, workspaceDir: WORKSPACE_DIR });
+const transcript = await createTranscriptState();
+const bridge = new ClaudeBridge({
+  claudeBin: CLAUDE_BIN,
+  workspaceDir: WORKSPACE_DIR,
+  allowBypassPermissions: ALLOW_BYPASS_PERMISSIONS,
+});
 const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_BODY_BYTES });
 const authedSockets = new Set<WebSocket>();
 let commandCache: string[] = [];
 let commandDiscovery: Promise<string[]> | undefined;
-let sessionInfo: ClaudeSessionInfo = {};
+let sessionInfo: ClaudeSessionInfo = transcript.snapshot().sessionInfo;
 
 const server = createServer(async (req, res) => {
   try {
@@ -91,6 +100,8 @@ wss.on('connection', ws => {
         if (Object.keys(sessionInfo).length) {
           send(ws, { type: 'session_info', ...sessionInfo });
         }
+        send(ws, { type: 'transcript_snapshot', ...transcript.snapshot() });
+        send(ws, { type: 'permission_capabilities', allowBypassPermissions: ALLOW_BYPASS_PERMISSIONS });
         return true;
       },
     }).catch(err => {
@@ -161,15 +172,18 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   if (req.method === 'POST' && url.pathname === '/api/new-conversation') {
     if (bridge.isRunning()) return sendJson(res, 409, { error: 'claude_is_busy' });
     await auth.setClaudeSessionId(undefined);
+    await transcript.clear();
     sessionInfo = {};
     broadcast({ type: 'status', authenticated: true, running: false, hasClaudeSessionId: false });
     broadcast({ type: 'session_info', model: null, contextWindow: null, usedTokens: null, remainingTokens: null });
+    broadcast({ type: 'transcript_snapshot', ...transcript.snapshot() });
     sendJson(res, 200, { ok: true });
     return;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/stop') {
     const stopped = bridge.stop();
+    if (stopped) await transcript.finishStopped();
     broadcast({ type: stopped ? 'stopped' : 'status', authenticated: true, running: false, hasClaudeSessionId: Boolean(auth.getClaudeSessionId()) });
     sendJson(res, 200, { stopped });
     return;
@@ -185,7 +199,14 @@ type WsSession = {
 
 async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): Promise<void> {
   if (raw.length > MAX_BODY_BYTES) throw new Error('message_too_large');
-  const msg = JSON.parse(raw) as { type?: string; text?: string; token?: string };
+  const msg = JSON.parse(raw) as {
+    type?: string;
+    text?: string;
+    token?: string;
+    permissionMode?: string;
+    requestId?: string;
+    decision?: string;
+  };
 
   if (!session.isAuthenticated()) {
     if (msg.type !== 'auth') throw new Error('auth_required');
@@ -202,17 +223,33 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     return;
   }
 
+  if (msg.type === 'permission_response') {
+    if (typeof msg.requestId !== 'string' || (msg.decision !== 'allow' && msg.decision !== 'deny')) {
+      throw new Error('invalid_permission_response');
+    }
+    if (!bridge.respondToPermission(msg.requestId, msg.decision)) {
+      send(ws, { type: 'permission_expired', requestId: msg.requestId });
+    }
+    return;
+  }
+
   if (msg.type !== 'prompt') throw new Error('unknown_message_type');
   const prompt = (msg.text || '').trim();
   if (!prompt) return;
   if (prompt.length > MAX_BODY_BYTES) throw new Error('prompt_too_large');
   if (bridge.isRunning()) throw new Error('claude_is_busy');
+  const permissionMode = parsePermissionMode(msg.permissionMode);
+  if (permissionMode === 'bypassPermissions' && !ALLOW_BYPASS_PERMISSIONS) {
+    throw new Error('bypass_permissions_disabled');
+  }
 
+  transcript.beginPrompt(prompt, permissionMode);
   broadcast({ type: 'status', authenticated: true, running: true, hasClaudeSessionId: Boolean(auth.getClaudeSessionId()) });
 
   const runClaude = (sessionId: string | undefined) => bridge.run({
     prompt,
     sessionId,
+    permissionMode,
     onEvent: event => {
       const commands = extractClaudeCommands(event);
       if (commands.length && commands.join('\n') !== commandCache.join('\n')) {
@@ -222,15 +259,29 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
       const nextSessionInfo = extractClaudeSessionInfo(event);
       if (nextSessionInfo) {
         sessionInfo = { ...sessionInfo, ...nextSessionInfo };
+        transcript.setSessionInfo(nextSessionInfo);
         broadcast({ type: 'session_info', ...sessionInfo });
       }
       for (const activity of extractClaudeActivities(event)) {
+        transcript.mergeActivity(activity);
         broadcast({ type: 'activity', ...activity });
       }
     },
-    onText: text => broadcast({ type: 'text', text }),
+    onText: text => {
+      transcript.appendText(text);
+      broadcast({ type: 'text', text });
+    },
     onSessionId: sessionId => {
+      transcript.setClaudeSessionId(sessionId);
       void auth.setClaudeSessionId(sessionId);
+    },
+    onPermissionRequest: request => {
+      transcript.addPermission(request);
+      broadcast(permissionRequestMessage(request));
+    },
+    onPermissionClosed: requestId => {
+      transcript.removePermission(requestId);
+      broadcast({ type: 'permission_resolved', requestId });
     },
   });
 
@@ -238,14 +289,24 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
   let result = await runClaude(previousSessionId);
   if (previousSessionId && result.exitCode !== 0 && isMissingConversationError(result.stderr)) {
     await auth.setClaudeSessionId(undefined);
+    transcript.setClaudeSessionId(undefined);
     result = await runClaude(undefined);
   }
 
-  if (result.sessionId) await auth.setClaudeSessionId(result.sessionId);
+  if (result.sessionId) {
+    transcript.setClaudeSessionId(result.sessionId);
+    await auth.setClaudeSessionId(result.sessionId);
+  }
   if (result.stopped) {
+    await transcript.finishStopped();
     broadcast({ type: 'stopped' });
   } else {
-    if (result.exitCode !== 0 && result.stderr) broadcast({ type: 'error', message: result.stderr });
+    if (result.exitCode !== 0 && result.stderr) {
+      await transcript.finishError(result.stderr);
+      broadcast({ type: 'error', message: result.stderr });
+    } else {
+      await transcript.finishDone();
+    }
     broadcast({ type: 'done', exitCode: result.exitCode, claudeSessionId: result.sessionId });
   }
   broadcast({ type: 'status', authenticated: true, running: false, hasClaudeSessionId: Boolean(auth.getClaudeSessionId()) });
@@ -329,6 +390,30 @@ function closeAllSockets(): void {
 
 function send(ws: WebSocket, data: unknown): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
+}
+
+function parsePermissionMode(value: string | undefined): ClaudePermissionMode {
+  if (value === 'acceptEdits'
+    || value === 'auto'
+    || value === 'dontAsk'
+    || value === 'plan'
+    || value === 'bypassPermissions') {
+    return value;
+  }
+  return 'manual';
+}
+
+function permissionRequestMessage(request: ClaudePermissionRequest): Record<string, unknown> {
+  return {
+    type: 'permission_request',
+    requestId: request.requestId,
+    toolName: request.toolName,
+    detail: request.detail,
+    title: request.title,
+    displayName: request.displayName,
+    description: request.description,
+    decisionReason: request.decisionReason,
+  };
 }
 
 function isAllowedHost(req: IncomingMessage): boolean {

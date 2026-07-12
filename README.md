@@ -35,6 +35,10 @@
 - 对话使用左右消息气泡，任务运行时显示思考动效、状态文字和实时计时。
 - 运行中显示安全化的工具调用状态，任务结束后自动收起本轮活动卡片。
 - 顶部显示当前 Claude 模型和剩余上下文。
+- daemon 原子保存当前对话快照，App 重连后补回断线期间的输出。
+- daemon 重启后恢复当前对话；未完成任务会归一化为已中断。
+- 支持 Claude Code `manual`、`acceptEdits`、`auto`、`dontAsk`、`plan` 和 `bypassPermissions` 模式。
+- `manual` 模式下可在手机端允许一次或拒绝 Claude Code 工具请求。
 - 本地脚本模拟 App 已验证 WebSocket auth、单条 `pong`、长输出多段 `text`、`done` 和 `claudeSessionId` 写入。
 - App 设置里可开启新对话，daemon 会清空当前 `claudeSessionId`。
 - Stop 按钮发送 WebSocket `{ "type": "stop" }`。
@@ -47,8 +51,7 @@
 
 未完成：
 
-- 还没做 transcript 持久化。
-- 还没做断线期间输出恢复。
+- 还没做多会话历史列表和搜索。
 - 还没做多设备管理和手机端权限审批流。
 
 最新 Android 调试版已完成真机安装和核心对话流程验证。
@@ -83,6 +86,7 @@ npm run cc-remote
 ```powershell
 .\cc-remote.cmd -NoTunnel
 .\cc-remote.cmd -WorkspaceDir "E:\\Code-All\\cc-remote" -DeviceName "tb"
+.\cc-remote.cmd -AllowBypassPermissions
 ```
 
 ## 手动运行 daemon
@@ -246,7 +250,7 @@ wss://tbhaoshuai.ccwu.cc/ws
 鉴权成功后可发送：
 
 ```json
-{ "type": "prompt", "text": "帮我检查这个项目" }
+{ "type": "prompt", "text": "帮我检查这个项目", "permissionMode": "manual" }
 ```
 
 ```json
@@ -256,10 +260,18 @@ wss://tbhaoshuai.ccwu.cc/ws
 服务端会发送：
 
 ```text
-status, commands, session_info, activity, claude_event, text, done, stopped, error
+status, transcript_snapshot, permission_capabilities, permission_request, permission_resolved, permission_expired, commands, session_info, activity, claude_event, text, done, stopped, error
 ```
 
-`commands` 提供 Claude Code 可调用的斜杠指令。`session_info` 提供当前模型、上下文窗口和剩余 token。`activity` 只暴露思考状态、工具名称和安全化摘要，不传递私有思考文本或工具结果正文。
+`transcript_snapshot` 在鉴权后发送 daemon 保存的当前对话，用于重连恢复。`commands` 提供 Claude Code 可调用的斜杠指令。`session_info` 提供当前模型、上下文窗口和剩余 token。`activity` 只暴露思考状态、工具名称和安全化摘要，不传递私有思考文本或工具结果正文。
+
+收到 `permission_request` 后，App 可发送一次性审批结果：
+
+```json
+{ "type": "permission_response", "requestId": "...", "decision": "allow" }
+```
+
+`decision` 只接受 `allow` 或 `deny`。原始工具输入保留在 daemon，手机不能修改执行参数。
 
 注意：daemon 和 Flutter App 已接入这套 WebSocket 协议。App 会在回到前台时重新探测 daemon；电脑端离线时保留配对态，但显示“电脑端离线”并禁止发送。
 
@@ -273,6 +285,7 @@ status, commands, session_info, activity, claude_event, text, done, stopped, err
 | `WORKSPACE_DIR` | 当前目录 | Claude Code 工作目录 |
 | `CLAUDE_BIN` | `claude` | Claude Code CLI 可执行文件 |
 | `DEVICE_NAME` | 当前主机名 | 二维码和 App 内显示的电脑名 |
+| `ALLOW_BYPASS_PERMISSIONS` | `0` | 设为 `1` 后允许手机为单次任务选择 `bypassPermissions` |
 
 ## 校验
 
@@ -297,6 +310,7 @@ flutter test
 - 手机端不能修改 `WORKSPACE_DIR`。
 - 不开放任意 shell API。
 - 不默认加 `--dangerously-skip-permissions`。
+- `bypassPermissions` 需要电脑端显式开启，并在手机端二次确认；任务结束后恢复 `manual`。
 
 ## 重置配对
 

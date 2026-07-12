@@ -73,6 +73,96 @@ void main() {
     expect(await store.load(), isNull);
   });
 
+  test('remote transcript snapshot restores messages and session context', () {
+    final snapshot = RemoteTranscriptSnapshot.tryParse({
+      'version': 1,
+      'revision': 8,
+      'running': true,
+      'permissionMode': 'manual',
+      'pendingPermissions': [
+        {
+          'requestId': 'permission-1',
+          'toolName': 'Bash',
+          'detail': 'npm test',
+          'description': 'Run tests',
+        },
+      ],
+      'sessionInfo': {
+        'model': 'claude-opus-4-8',
+        'contextWindow': 200000,
+        'remainingTokens': 175000,
+      },
+      'messages': [
+        {'role': 'user', 'text': '检查项目'},
+        {'role': 'assistant', 'text': '正在处理'},
+        {
+          'role': 'activity',
+          'text': '正在读取文件',
+          'activityId': 'tool-1',
+          'activityKind': 'tool',
+          'activityState': 'running',
+          'activityTool': 'Read',
+          'activityDetail': 'README.md',
+        },
+      ],
+    });
+
+    expect(snapshot, isNotNull);
+    expect(snapshot!.revision, 8);
+    expect(snapshot.running, isTrue);
+    expect(snapshot.messages, hasLength(3));
+    expect(snapshot.messages.last.activityTool, 'Read');
+    expect(snapshot.modelName, 'claude-opus-4-8');
+    expect(snapshot.remainingContext, 175000);
+    expect(snapshot.permissionMode, PermissionMode.manual);
+    expect(snapshot.pendingPermissions.single.detail, 'npm test');
+  });
+
+  test(
+    'remote transcript migration keeps local history until daemon has data',
+    () {
+      const emptyRemote = RemoteTranscriptSnapshot(
+        revision: 0,
+        running: false,
+        messages: [],
+        permissionMode: PermissionMode.manual,
+        pendingPermissions: [],
+      );
+      const persistedRemote = RemoteTranscriptSnapshot(
+        revision: 3,
+        running: false,
+        messages: [],
+        permissionMode: PermissionMode.manual,
+        pendingPermissions: [],
+      );
+
+      expect(
+        shouldApplyRemoteTranscriptSnapshot(
+          snapshot: emptyRemote,
+          currentRevision: 0,
+          hasLocalMessages: true,
+        ),
+        isFalse,
+      );
+      expect(
+        shouldApplyRemoteTranscriptSnapshot(
+          snapshot: persistedRemote,
+          currentRevision: 0,
+          hasLocalMessages: true,
+        ),
+        isTrue,
+      );
+      expect(
+        shouldApplyRemoteTranscriptSnapshot(
+          snapshot: persistedRemote,
+          currentRevision: 4,
+          hasLocalMessages: false,
+        ),
+        isFalse,
+      );
+    },
+  );
+
   testWidgets('shows the app shell and advances to pairing', (tester) async {
     await tester.pumpWidget(
       const CcRemoteApp(enableCamera: false, demoMode: true),
@@ -226,7 +316,10 @@ void main() {
                 running: false,
                 connected: true,
                 offline: false,
+                permissionMode: PermissionMode.manual,
+                allowBypassPermissions: false,
                 onChanged: () {},
+                onPermissionModeSelected: (_) {},
                 onCommandSelected: (_) {},
                 onSend: () {},
                 onStop: () {},
@@ -246,6 +339,81 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('command-8').hitTestable(), findsOneWidget);
+  });
+
+  testWidgets('permission mode picker confirms bypass for one task', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    PermissionMode? selected;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PromptBar(
+            controller: controller,
+            commands: const [],
+            running: false,
+            connected: true,
+            offline: false,
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: true,
+            onChanged: () {},
+            onPermissionModeSelected: (mode) => selected = mode,
+            onCommandSelected: (_) {},
+            onSend: () {},
+            onStop: () {},
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('permission-mode-chip')));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('permission-mode-bypassPermissions')),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('permission-mode-bypassPermissions')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('本次任务跳过权限检查'), findsOneWidget);
+
+    await tester.tap(find.text('仅本次开启'));
+    await tester.pumpAndSettle();
+    expect(selected, PermissionMode.bypassPermissions);
+  });
+
+  testWidgets('permission request card submits one-time approval', (
+    tester,
+  ) async {
+    var allowed = false;
+    const request = RemotePermissionRequest(
+      requestId: 'permission-1',
+      toolName: 'Bash',
+      detail: 'npm test',
+      description: 'Run tests',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PermissionRequestCard(
+            request: request,
+            responding: false,
+            connected: true,
+            onAllow: () => allowed = true,
+            onDeny: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('等待权限确认'), findsOneWidget);
+    expect(find.text('npm test'), findsOneWidget);
+    await tester.tap(find.text('允许一次'));
+    expect(allowed, isTrue);
   });
 
   test('detects missing assistant reply after the latest user message', () {
@@ -385,11 +553,18 @@ void main() {
             remainingContext: 174919,
             messages: [TranscriptMessage.user('你好')],
             commands: const ['review'],
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: false,
+            pendingPermissions: const [],
+            respondingPermissionIds: const {},
             promptController: controller,
             onChanged: () {},
             onFillPrompt: (_) {},
             onReconnect: () {},
             onNewConversation: () {},
+            onPermissionModeSelected: (_) {},
+            onPermissionAllow: (_) {},
+            onPermissionDeny: (_) {},
             onSend: () {},
             onStop: () {},
             onLogout: () {},

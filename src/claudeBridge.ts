@@ -5,14 +5,37 @@ import { StringDecoder } from 'node:string_decoder';
 export type ClaudeBridgeOptions = {
   claudeBin: string;
   workspaceDir: string;
+  allowBypassPermissions?: boolean;
+};
+
+export type ClaudePermissionMode =
+  | 'manual'
+  | 'acceptEdits'
+  | 'auto'
+  | 'dontAsk'
+  | 'plan'
+  | 'bypassPermissions';
+
+export type ClaudePermissionRequest = {
+  requestId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  detail?: string;
+  title?: string;
+  displayName?: string;
+  description?: string;
+  decisionReason?: string;
 };
 
 export type ClaudeRunOptions = {
   prompt: string;
   sessionId?: string;
+  permissionMode: ClaudePermissionMode;
   onEvent: (event: unknown) => void;
   onText: (text: string) => void;
   onSessionId: (sessionId: string) => void;
+  onPermissionRequest: (request: ClaudePermissionRequest) => void;
+  onPermissionClosed: (requestId: string) => void;
 };
 
 export type ClaudeRunResult = {
@@ -44,6 +67,8 @@ type CurrentRun = {
   child: ChildProcessWithoutNullStreams;
   stopped: boolean;
   settled: boolean;
+  pendingPermissions: Map<string, ClaudePermissionRequest>;
+  onPermissionClosed: (requestId: string) => void;
 };
 
 export class ClaudeBridge {
@@ -55,6 +80,16 @@ export class ClaudeBridge {
     return this.current !== null;
   }
 
+  respondToPermission(requestId: string, decision: 'allow' | 'deny'): boolean {
+    const run = this.current;
+    const request = run?.pendingPermissions.get(requestId);
+    if (!run || !request || run.child.stdin.destroyed) return false;
+    run.pendingPermissions.delete(requestId);
+    run.child.stdin.write(JSON.stringify(permissionControlResponse(request, decision)) + '\n');
+    run.onPermissionClosed(requestId);
+    return true;
+  }
+
   async run(options: ClaudeRunOptions): Promise<ClaudeRunResult> {
     if (this.current) throw new Error('Claude is already running');
 
@@ -64,7 +99,13 @@ export class ClaudeBridge {
       '--output-format', 'stream-json',
       '--verbose',
       '--include-partial-messages',
+      '--permission-prompt-tool', 'stdio',
+      '--permission-mode', options.permissionMode,
     ];
+    if (options.permissionMode === 'bypassPermissions') {
+      if (!this.options.allowBypassPermissions) throw new Error('bypass_permissions_disabled');
+      args.push('--allow-dangerously-skip-permissions');
+    }
     if (options.sessionId) args.push('--resume', options.sessionId);
 
     const child = spawn(this.options.claudeBin, args, {
@@ -79,7 +120,13 @@ export class ClaudeBridge {
       once(child.stdin, 'error').then(([err]) => err instanceof Error ? err : new Error(String(err))),
     ]);
 
-    const run: CurrentRun = { child, stopped: false, settled: false };
+    const run: CurrentRun = {
+      child,
+      stopped: false,
+      settled: false,
+      pendingPermissions: new Map(),
+      onPermissionClosed: options.onPermissionClosed,
+    };
     this.current = run;
 
     let stderr = '';
@@ -87,6 +134,13 @@ export class ClaudeBridge {
     let sessionId = options.sessionId;
     let sawDelta = false;
     const decoder = new StringDecoder('utf8');
+    const initializeRequestId = `cc-remote-init-${Date.now()}`;
+    let initializeResolve: (() => void) | undefined;
+    let initializeReject: ((error: Error) => void) | undefined;
+    const initialized = new Promise<void>((resolve, reject) => {
+      initializeResolve = resolve;
+      initializeReject = reject;
+    });
 
     const handleLine = (line: string) => {
       const trimmed = line.trim();
@@ -96,6 +150,30 @@ export class ClaudeBridge {
         event = JSON.parse(trimmed);
       } catch {
         options.onEvent({ type: 'parse_error', line: trimmed });
+        return;
+      }
+
+      if (isRecord(event) && event.type === 'control_response') {
+        const response = isRecord(event.response) ? event.response : undefined;
+        if (response?.request_id === initializeRequestId) {
+          if (response.subtype === 'error') {
+            initializeReject?.(new Error(String(response.error || 'claude_initialize_failed')));
+          } else {
+            initializeResolve?.();
+          }
+          return;
+        }
+      }
+
+      const permissionRequest = extractClaudePermissionRequest(event);
+      if (permissionRequest) {
+        run.pendingPermissions.set(permissionRequest.requestId, permissionRequest);
+        options.onPermissionRequest(permissionRequest);
+        return;
+      }
+
+      if (isRecord(event) && event.type === 'control_cancel_request' && typeof event.request_id === 'string') {
+        if (run.pendingPermissions.delete(event.request_id)) options.onPermissionClosed(event.request_id);
         return;
       }
 
@@ -124,6 +202,10 @@ export class ClaudeBridge {
       if (resultText && !sawDelta) {
         options.onText(resultText);
       }
+
+      if (isRecord(event) && event.type === 'result' && !child.stdin.destroyed) {
+        child.stdin.end();
+      }
     };
 
     child.stdout.on('data', (chunk: Buffer) => {
@@ -143,13 +225,28 @@ export class ClaudeBridge {
 
     try {
       child.stdin.write(JSON.stringify({
+        type: 'control_request',
+        request_id: initializeRequestId,
+        request: { subtype: 'initialize', hooks: null },
+      }) + '\n');
+      await Promise.race([
+        initialized,
+        exitOrError.then(result => {
+          if (result instanceof Error) throw result;
+          throw new Error('claude_exited_before_initialize');
+        }),
+        new Promise<never>((_, reject) => {
+          const timer = setTimeout(() => reject(new Error('claude_initialize_timeout')), 15_000);
+          timer.unref();
+        }),
+      ]);
+      child.stdin.write(JSON.stringify({
         type: 'user',
         message: {
           role: 'user',
           content: [{ type: 'text', text: options.prompt }],
         },
       }) + '\n');
-      child.stdin.end();
       const result = await exitOrError;
       if (result instanceof Error) throw result;
       const [exitCode] = result;
@@ -161,6 +258,8 @@ export class ClaudeBridge {
     } catch (err) {
       return { exitCode: null, stopped: run.stopped, sessionId, stderr: err instanceof Error ? err.message : String(err) };
     } finally {
+      for (const requestId of run.pendingPermissions.keys()) options.onPermissionClosed(requestId);
+      run.pendingPermissions.clear();
       if (this.current === run) this.current = null;
     }
   }
@@ -180,6 +279,40 @@ export class ClaudeBridge {
     }
     return true;
   }
+}
+
+export function extractClaudePermissionRequest(event: unknown): ClaudePermissionRequest | null {
+  if (!isRecord(event) || event.type !== 'control_request' || typeof event.request_id !== 'string') return null;
+  const request = isRecord(event.request) ? event.request : undefined;
+  if (request?.subtype !== 'can_use_tool' || typeof request.tool_name !== 'string' || !isRecord(request.input)) {
+    return null;
+  }
+  return {
+    requestId: event.request_id,
+    toolName: request.tool_name,
+    input: request.input,
+    detail: summarizeToolInput(request.input),
+    title: stringValue(request.title),
+    displayName: stringValue(request.display_name),
+    description: stringValue(request.description),
+    decisionReason: stringValue(request.decision_reason),
+  };
+}
+
+export function permissionControlResponse(
+  request: ClaudePermissionRequest,
+  decision: 'allow' | 'deny',
+): Record<string, unknown> {
+  return {
+    type: 'control_response',
+    response: {
+      subtype: 'success',
+      request_id: request.requestId,
+      response: decision === 'allow'
+        ? { behavior: 'allow', updatedInput: request.input }
+        : { behavior: 'deny', message: '用户在手机端拒绝了这个操作', interrupt: false },
+    },
+  };
 }
 
 export function isMissingConversationError(stderr: string): boolean {
@@ -374,6 +507,10 @@ function truncate(value: string, maxLength: number): string {
 
 function tokenValue(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
