@@ -73,6 +73,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   String? modelName;
   int? contextWindow;
   int? remainingContext;
+  int remoteTranscriptRevision = 0;
+  bool allowBypassPermissions = false;
+  PermissionMode selectedPermissionMode = PermissionMode.manual;
+  PermissionMode activePermissionMode = PermissionMode.manual;
   SavedSession? session;
   WebSocketChannel? ws;
   StreamSubscription<dynamic>? wsSubscription;
@@ -82,6 +86,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final TextEditingController promptController = TextEditingController();
   final List<TranscriptMessage> messages = [];
   final List<String> commands = [];
+  final List<RemotePermissionRequest> pendingPermissions = [];
+  final Set<String> respondingPermissionIds = {};
   Future<void> lastTranscriptWrite = Future<void>.value();
 
   @override
@@ -353,6 +359,77 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           if (!running) removeInterruptedRunNotice();
         });
         persistTranscriptSnapshotLater();
+      case 'transcript_snapshot':
+        final snapshot = RemoteTranscriptSnapshot.tryParse(decoded);
+        if (snapshot == null ||
+            !shouldApplyRemoteTranscriptSnapshot(
+              snapshot: snapshot,
+              currentRevision: remoteTranscriptRevision,
+              hasLocalMessages: messages.isNotEmpty,
+            )) {
+          return;
+        }
+        setState(() {
+          remoteTranscriptRevision = snapshot.revision;
+          running = snapshot.running;
+          messages
+            ..clear()
+            ..addAll(snapshot.messages);
+          modelName = snapshot.modelName;
+          contextWindow = snapshot.contextWindow;
+          remainingContext = snapshot.remainingContext;
+          activePermissionMode = snapshot.permissionMode;
+          pendingPermissions
+            ..clear()
+            ..addAll(snapshot.pendingPermissions);
+          respondingPermissionIds.removeWhere(
+            (requestId) => !pendingPermissions.any(
+              (request) => request.requestId == requestId,
+            ),
+          );
+        });
+        persistTranscriptSnapshotLater();
+      case 'permission_capabilities':
+        setState(() {
+          allowBypassPermissions = decoded['allowBypassPermissions'] == true;
+          if (!allowBypassPermissions &&
+              selectedPermissionMode == PermissionMode.bypassPermissions) {
+            selectedPermissionMode = PermissionMode.manual;
+          }
+        });
+      case 'permission_request':
+        final request = RemotePermissionRequest.tryParse(decoded);
+        if (request == null) return;
+        setState(() {
+          final index = pendingPermissions.indexWhere(
+            (item) => item.requestId == request.requestId,
+          );
+          if (index >= 0) {
+            pendingPermissions[index] = request;
+          } else {
+            pendingPermissions.add(request);
+          }
+        });
+      case 'permission_resolved':
+        final requestId = decoded['requestId'];
+        if (requestId is! String) return;
+        setState(() {
+          pendingPermissions.removeWhere(
+            (request) => request.requestId == requestId,
+          );
+          respondingPermissionIds.remove(requestId);
+        });
+      case 'permission_expired':
+        final requestId = decoded['requestId'];
+        if (requestId is! String) return;
+        setState(() {
+          pendingPermissions.removeWhere(
+            (request) => request.requestId == requestId,
+          );
+          respondingPermissionIds.remove(requestId);
+          messages.add(TranscriptMessage.system('这个审批请求已失效'));
+        });
+        persistTranscriptSnapshotLater();
       case 'text':
         appendAssistantText(decoded['text'] as String? ?? '');
       case 'commands':
@@ -377,6 +454,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       case 'done':
         setState(() {
           running = false;
+          activePermissionMode = PermissionMode.manual;
+          pendingPermissions.clear();
+          respondingPermissionIds.clear();
           removeCurrentTurnActivities(messages);
           if (!hasAssistantReplyAfterLastUser(messages)) {
             messages.add(TranscriptMessage.system('本轮没有返回文本，请重试'));
@@ -386,6 +466,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       case 'stopped':
         setState(() {
           running = false;
+          activePermissionMode = PermissionMode.manual;
+          pendingPermissions.clear();
+          respondingPermissionIds.clear();
           finishRunningActivities(messages, ActivityState.stopped);
           messages.add(TranscriptMessage.system('已停止'));
         });
@@ -393,6 +476,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       case 'error':
         setState(() {
           running = false;
+          activePermissionMode = PermissionMode.manual;
+          pendingPermissions.clear();
+          respondingPermissionIds.clear();
           finishRunningActivities(messages, ActivityState.error);
           messages.add(
             TranscriptMessage.system('错误：${decoded['message'] ?? '未知错误'}'),
@@ -415,6 +501,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       running = false;
       messages.clear();
       commands.clear();
+      remoteTranscriptRevision = 0;
+      allowBypassPermissions = false;
+      selectedPermissionMode = PermissionMode.manual;
+      activePermissionMode = PermissionMode.manual;
+      pendingPermissions.clear();
+      respondingPermissionIds.clear();
     });
   }
 
@@ -491,10 +583,45 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     setState(() {
       promptController.clear();
       running = true;
+      activePermissionMode = selectedPermissionMode;
       beginPrompt(messages, text);
+      if (selectedPermissionMode == PermissionMode.bypassPermissions) {
+        selectedPermissionMode = PermissionMode.manual;
+      }
     });
     persistTranscriptSnapshotLater();
-    channel.sink.add(jsonEncode({'type': 'prompt', 'text': text}));
+    channel.sink.add(
+      jsonEncode({
+        'type': 'prompt',
+        'text': text,
+        'permissionMode': activePermissionMode.wireName,
+      }),
+    );
+  }
+
+  void selectPermissionMode(PermissionMode mode) {
+    if (running ||
+        (mode == PermissionMode.bypassPermissions && !allowBypassPermissions)) {
+      return;
+    }
+    setState(() => selectedPermissionMode = mode);
+  }
+
+  void respondToPermission(RemotePermissionRequest request, String decision) {
+    final channel = ws;
+    if (channel == null ||
+        !wsReady ||
+        respondingPermissionIds.contains(request.requestId)) {
+      return;
+    }
+    setState(() => respondingPermissionIds.add(request.requestId));
+    channel.sink.add(
+      jsonEncode({
+        'type': 'permission_response',
+        'requestId': request.requestId,
+        'decision': decision,
+      }),
+    );
   }
 
   void stopRun() {
@@ -600,6 +727,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remainingContext = null;
       messages.clear();
       commands.clear();
+      remoteTranscriptRevision = 0;
+      allowBypassPermissions = false;
+      selectedPermissionMode = PermissionMode.manual;
+      activePermissionMode = PermissionMode.manual;
+      pendingPermissions.clear();
+      respondingPermissionIds.clear();
       promptController.clear();
     });
   }
@@ -696,6 +829,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         remainingContext = null;
         messages.clear();
         commands.clear();
+        remoteTranscriptRevision = 0;
+        allowBypassPermissions = false;
+        selectedPermissionMode = PermissionMode.manual;
+        activePermissionMode = PermissionMode.manual;
+        pendingPermissions.clear();
+        respondingPermissionIds.clear();
       });
       connectWs(saved);
     } catch (err) {
@@ -731,11 +870,21 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             remainingContext: remainingContext,
             messages: messages,
             commands: commands,
+            permissionMode: running
+                ? activePermissionMode
+                : selectedPermissionMode,
+            allowBypassPermissions: allowBypassPermissions,
+            pendingPermissions: pendingPermissions,
+            respondingPermissionIds: respondingPermissionIds,
             promptController: promptController,
             onChanged: () => setState(() {}),
             onFillPrompt: fillPrompt,
             onReconnect: refreshConnection,
             onNewConversation: beginNewConversation,
+            onPermissionModeSelected: selectPermissionMode,
+            onPermissionAllow: (request) =>
+                respondToPermission(request, 'allow'),
+            onPermissionDeny: (request) => respondToPermission(request, 'deny'),
             onSend: sendPrompt,
             onStop: stopRun,
             onLogout: logoutPairedDevice,
@@ -1018,11 +1167,18 @@ class ChatScreen extends StatelessWidget {
     required this.remainingContext,
     required this.messages,
     required this.commands,
+    required this.permissionMode,
+    required this.allowBypassPermissions,
+    required this.pendingPermissions,
+    required this.respondingPermissionIds,
     required this.promptController,
     required this.onChanged,
     required this.onFillPrompt,
     required this.onReconnect,
     required this.onNewConversation,
+    required this.onPermissionModeSelected,
+    required this.onPermissionAllow,
+    required this.onPermissionDeny,
     required this.onSend,
     required this.onStop,
     required this.onLogout,
@@ -1037,11 +1193,18 @@ class ChatScreen extends StatelessWidget {
   final int? remainingContext;
   final List<TranscriptMessage> messages;
   final List<String> commands;
+  final PermissionMode permissionMode;
+  final bool allowBypassPermissions;
+  final List<RemotePermissionRequest> pendingPermissions;
+  final Set<String> respondingPermissionIds;
   final TextEditingController promptController;
   final VoidCallback onChanged;
   final ValueChanged<String> onFillPrompt;
   final VoidCallback onReconnect;
   final VoidCallback onNewConversation;
+  final ValueChanged<PermissionMode> onPermissionModeSelected;
+  final ValueChanged<RemotePermissionRequest> onPermissionAllow;
+  final ValueChanged<RemotePermissionRequest> onPermissionDeny;
   final VoidCallback onSend;
   final VoidCallback onStop;
   final VoidCallback onLogout;
@@ -1070,7 +1233,12 @@ class ChatScreen extends StatelessWidget {
             Expanded(
               child: TranscriptView(
                 messages: messages,
+                pendingPermissions: pendingPermissions,
+                respondingPermissionIds: respondingPermissionIds,
+                connected: connected,
                 onFillPrompt: onFillPrompt,
+                onPermissionAllow: onPermissionAllow,
+                onPermissionDeny: onPermissionDeny,
               ),
             ),
             const SizedBox(height: 10),
@@ -1080,7 +1248,10 @@ class ChatScreen extends StatelessWidget {
               running: running,
               connected: connected,
               offline: offline,
+              permissionMode: permissionMode,
+              allowBypassPermissions: allowBypassPermissions,
               onChanged: onChanged,
+              onPermissionModeSelected: onPermissionModeSelected,
               onCommandSelected: (command) => onFillPrompt('/$command '),
               onSend: onSend,
               onStop: onStop,
@@ -1456,15 +1627,25 @@ class TranscriptView extends StatelessWidget {
   const TranscriptView({
     super.key,
     required this.messages,
+    required this.pendingPermissions,
+    required this.respondingPermissionIds,
+    required this.connected,
     required this.onFillPrompt,
+    required this.onPermissionAllow,
+    required this.onPermissionDeny,
   });
 
   final List<TranscriptMessage> messages;
+  final List<RemotePermissionRequest> pendingPermissions;
+  final Set<String> respondingPermissionIds;
+  final bool connected;
   final ValueChanged<String> onFillPrompt;
+  final ValueChanged<RemotePermissionRequest> onPermissionAllow;
+  final ValueChanged<RemotePermissionRequest> onPermissionDeny;
 
   @override
   Widget build(BuildContext context) {
-    if (messages.isEmpty) {
+    if (messages.isEmpty && pendingPermissions.isEmpty) {
       return LayoutBuilder(
         builder: (context, constraints) {
           return SingleChildScrollView(
@@ -1525,14 +1706,143 @@ class TranscriptView extends StatelessWidget {
       );
     }
 
+    final items = <Object>[...messages, ...pendingPermissions];
     return ListView.separated(
       padding: const EdgeInsets.fromLTRB(4, 14, 4, 16),
-      itemCount: messages.length,
+      itemCount: items.length,
       separatorBuilder: (_, _) => const SizedBox(height: 14),
       itemBuilder: (context, index) {
-        final message = messages[index];
-        return MessageBlock(message: message);
+        final item = items[index];
+        if (item is TranscriptMessage) return MessageBlock(message: item);
+        final request = item as RemotePermissionRequest;
+        return PermissionRequestCard(
+          request: request,
+          responding: respondingPermissionIds.contains(request.requestId),
+          connected: connected,
+          onAllow: () => onPermissionAllow(request),
+          onDeny: () => onPermissionDeny(request),
+        );
       },
+    );
+  }
+}
+
+class PermissionRequestCard extends StatelessWidget {
+  const PermissionRequestCard({
+    super.key,
+    required this.request,
+    required this.responding,
+    required this.connected,
+    required this.onAllow,
+    required this.onDeny,
+  });
+
+  final RemotePermissionRequest request;
+  final bool responding;
+  final bool connected;
+  final VoidCallback onAllow;
+  final VoidCallback onDeny;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = connected && !responding;
+    return GlassPanel(
+      key: ValueKey('permission-request-${request.requestId}'),
+      radius: 18,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: AppColors.stop.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(11),
+                ),
+                child: const Icon(
+                  Icons.shield_outlined,
+                  size: 19,
+                  color: AppColors.stop,
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '等待权限确认',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      request.displayName ?? request.toolName,
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (responding)
+                const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+            ],
+          ),
+          if (request.description != null) ...[
+            const SizedBox(height: 10),
+            Text(request.description!),
+          ],
+          if (request.detail != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.58),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(
+                  color: AppColors.shadow.withValues(alpha: 0.12),
+                ),
+              ),
+              child: SelectableText(
+                request.detail!,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+              ),
+            ),
+          ],
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: enabled ? onDeny : null,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.stop,
+                  ),
+                  child: const Text('拒绝'),
+                ),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: FilledButton(
+                  onPressed: enabled ? onAllow : null,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.accent,
+                  ),
+                  child: const Text('允许一次'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -1998,7 +2308,10 @@ class PromptBar extends StatelessWidget {
     required this.running,
     required this.connected,
     required this.offline,
+    required this.permissionMode,
+    required this.allowBypassPermissions,
     required this.onChanged,
+    required this.onPermissionModeSelected,
     required this.onCommandSelected,
     required this.onSend,
     required this.onStop,
@@ -2009,7 +2322,10 @@ class PromptBar extends StatelessWidget {
   final bool running;
   final bool connected;
   final bool offline;
+  final PermissionMode permissionMode;
+  final bool allowBypassPermissions;
   final VoidCallback onChanged;
+  final ValueChanged<PermissionMode> onPermissionModeSelected;
   final ValueChanged<String> onCommandSelected;
   final VoidCallback onSend;
   final VoidCallback onStop;
@@ -2034,6 +2350,20 @@ class PromptBar extends StatelessWidget {
           ),
           const SizedBox(height: 8),
         ],
+        Align(
+          alignment: Alignment.centerLeft,
+          child: PermissionModeChip(
+            mode: permissionMode,
+            enabled: !running,
+            onPressed: () => showPermissionModePicker(
+              context,
+              selected: permissionMode,
+              allowBypassPermissions: allowBypassPermissions,
+              onSelected: onPermissionModeSelected,
+            ),
+          ),
+        ),
+        const SizedBox(height: 7),
         GlassPanel(
           padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
           radius: 24,
@@ -2088,6 +2418,171 @@ class PromptBar extends StatelessWidget {
       ],
     );
   }
+}
+
+enum PermissionMode {
+  manual,
+  acceptEdits,
+  auto,
+  dontAsk,
+  plan,
+  bypassPermissions;
+
+  String get wireName => name;
+
+  String get label => switch (this) {
+    PermissionMode.manual => '询问权限',
+    PermissionMode.acceptEdits => '自动编辑',
+    PermissionMode.auto => '自动判断',
+    PermissionMode.dontAsk => '不询问',
+    PermissionMode.plan => '规划模式',
+    PermissionMode.bypassPermissions => '跳过权限',
+  };
+
+  String get description => switch (this) {
+    PermissionMode.manual => '需要授权时在手机上确认',
+    PermissionMode.acceptEdits => '自动允许文件编辑，其他操作仍询问',
+    PermissionMode.auto => '交给 Claude Code 判断权限',
+    PermissionMode.dontAsk => '未预先允许的操作直接拒绝',
+    PermissionMode.plan => '只分析和规划，不执行修改',
+    PermissionMode.bypassPermissions => '本次任务跳过全部权限检查',
+  };
+
+  IconData get icon => switch (this) {
+    PermissionMode.manual => Icons.shield_outlined,
+    PermissionMode.acceptEdits => Icons.edit_note_rounded,
+    PermissionMode.auto => Icons.auto_mode_rounded,
+    PermissionMode.dontAsk => Icons.do_not_disturb_alt_rounded,
+    PermissionMode.plan => Icons.route_outlined,
+    PermissionMode.bypassPermissions => Icons.warning_amber_rounded,
+  };
+
+  static PermissionMode fromWire(Object? value) {
+    return PermissionMode.values.firstWhere(
+      (mode) => mode.wireName == value,
+      orElse: () => PermissionMode.manual,
+    );
+  }
+}
+
+class PermissionModeChip extends StatelessWidget {
+  const PermissionModeChip({
+    super.key,
+    required this.mode,
+    required this.enabled,
+    required this.onPressed,
+  });
+
+  final PermissionMode mode;
+  final bool enabled;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final danger = mode == PermissionMode.bypassPermissions;
+    return ActionChip(
+      key: const ValueKey('permission-mode-chip'),
+      avatar: Icon(
+        mode.icon,
+        size: 16,
+        color: danger ? AppColors.stop : AppColors.accent,
+      ),
+      label: Text(mode.label),
+      onPressed: enabled ? onPressed : null,
+      visualDensity: VisualDensity.compact,
+      side: BorderSide(
+        color: (danger ? AppColors.stop : AppColors.accent).withValues(
+          alpha: 0.2,
+        ),
+      ),
+      backgroundColor: Colors.white.withValues(alpha: 0.58),
+      labelStyle: TextStyle(
+        color: danger ? AppColors.stop : AppColors.muted,
+        fontSize: 12,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+  }
+}
+
+Future<void> showPermissionModePicker(
+  BuildContext context, {
+  required PermissionMode selected,
+  required bool allowBypassPermissions,
+  required ValueChanged<PermissionMode> onSelected,
+}) async {
+  final mode = await showModalBottomSheet<PermissionMode>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (sheetContext) => SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Claude Code 权限模式',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            for (final item in PermissionMode.values)
+              ListTile(
+                key: ValueKey('permission-mode-${item.wireName}'),
+                enabled:
+                    item != PermissionMode.bypassPermissions ||
+                    allowBypassPermissions,
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  item.icon,
+                  color: item == PermissionMode.bypassPermissions
+                      ? AppColors.stop
+                      : AppColors.accent,
+                ),
+                title: Text(item.label),
+                subtitle: Text(
+                  item == PermissionMode.bypassPermissions &&
+                          !allowBypassPermissions
+                      ? '电脑端未开启 ALLOW_BYPASS_PERMISSIONS'
+                      : item.description,
+                ),
+                trailing: item == selected
+                    ? const Icon(Icons.check_rounded, color: AppColors.accent)
+                    : null,
+                onTap:
+                    item == PermissionMode.bypassPermissions &&
+                        !allowBypassPermissions
+                    ? null
+                    : () => Navigator.pop(sheetContext, item),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
+  if (mode == null || !context.mounted) return;
+  if (mode == PermissionMode.bypassPermissions) {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('本次任务跳过权限检查'),
+        content: const Text('Claude Code 将能直接修改文件和执行命令。任务结束后会自动恢复询问权限。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.stop),
+            child: const Text('仅本次开启'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+  }
+  onSelected(mode);
 }
 
 String? commandQuery(String text) {
@@ -2797,6 +3292,109 @@ class RemoteActivity {
       permissionDenials: (json['permissionDenials'] as num?)?.toInt(),
     );
   }
+}
+
+class RemotePermissionRequest {
+  const RemotePermissionRequest({
+    required this.requestId,
+    required this.toolName,
+    this.detail,
+    this.title,
+    this.displayName,
+    this.description,
+    this.decisionReason,
+  });
+
+  final String requestId;
+  final String toolName;
+  final String? detail;
+  final String? title;
+  final String? displayName;
+  final String? description;
+  final String? decisionReason;
+
+  static RemotePermissionRequest? tryParse(Map<String, dynamic> json) {
+    final requestId = json['requestId'];
+    final toolName = json['toolName'];
+    if (requestId is! String || toolName is! String) return null;
+    return RemotePermissionRequest(
+      requestId: requestId,
+      toolName: toolName,
+      detail: json['detail'] as String?,
+      title: json['title'] as String?,
+      displayName: json['displayName'] as String?,
+      description: json['description'] as String?,
+      decisionReason: json['decisionReason'] as String?,
+    );
+  }
+}
+
+class RemoteTranscriptSnapshot {
+  const RemoteTranscriptSnapshot({
+    required this.revision,
+    required this.running,
+    required this.messages,
+    required this.permissionMode,
+    required this.pendingPermissions,
+    this.modelName,
+    this.contextWindow,
+    this.remainingContext,
+  });
+
+  final int revision;
+  final bool running;
+  final List<TranscriptMessage> messages;
+  final PermissionMode permissionMode;
+  final List<RemotePermissionRequest> pendingPermissions;
+  final String? modelName;
+  final int? contextWindow;
+  final int? remainingContext;
+
+  static RemoteTranscriptSnapshot? tryParse(Map<String, dynamic> json) {
+    if (json['version'] != 1 || json['revision'] is! num) return null;
+    final rawMessages = json['messages'];
+    if (rawMessages is! List) return null;
+    final rawSessionInfo = json['sessionInfo'];
+    final sessionInfo = rawSessionInfo is Map<String, dynamic>
+        ? rawSessionInfo
+        : const <String, dynamic>{};
+    try {
+      return RemoteTranscriptSnapshot(
+        revision: (json['revision'] as num).toInt(),
+        running: json['running'] == true,
+        messages: rawMessages
+            .map(
+              (message) => TranscriptMessage.fromJson(
+                Map<String, dynamic>.from(message as Map),
+              ),
+            )
+            .toList(),
+        permissionMode: PermissionMode.fromWire(json['permissionMode']),
+        pendingPermissions: (json['pendingPermissions'] as List? ?? const [])
+            .map(
+              (item) => RemotePermissionRequest.tryParse(
+                Map<String, dynamic>.from(item as Map),
+              ),
+            )
+            .whereType<RemotePermissionRequest>()
+            .toList(),
+        modelName: sessionInfo['model'] as String?,
+        contextWindow: (sessionInfo['contextWindow'] as num?)?.toInt(),
+        remainingContext: (sessionInfo['remainingTokens'] as num?)?.toInt(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+}
+
+bool shouldApplyRemoteTranscriptSnapshot({
+  required RemoteTranscriptSnapshot snapshot,
+  required int currentRevision,
+  required bool hasLocalMessages,
+}) {
+  if (snapshot.revision < currentRevision) return false;
+  return snapshot.revision != 0 || !hasLocalMessages;
 }
 
 class TranscriptSnapshot {

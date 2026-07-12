@@ -34,6 +34,7 @@ Flutter App 是 CC Remote 的主入口，不是网页壳。
 - Claude Code 斜杠指令发现、搜索和选择。
 - 思考计时和运行中的工具调用状态。
 - 当前模型和剩余上下文展示。
+- Claude Code 权限模式选择和工具审批卡。
 
 ### 暂不做
 
@@ -261,7 +262,7 @@ booting
 | `disconnected` | WS 断开 | 显示重连 |
 | `error` | 当前操作失败 | 显示错误 |
 
-MVP 不做自动任务恢复：断线期间 Claude 可能还在跑，但 App 不保证补回输出。
+App 断线期间 Claude 可以继续运行。重新鉴权后 daemon 发送当前对话快照，App 用它补回缺失输出。daemon 自身重启时无法续跑旧进程，会把未完成任务标记为已中断。
 
 ## 7. 数据模型
 
@@ -327,7 +328,7 @@ class ChatMessage {
 }
 ```
 
-MVP 可以只放内存，不持久化 transcript。
+App 本地保存当前 transcript 作为离线缓存，daemon 保存权威快照。当前版本只恢复一份当前对话，不提供多会话历史列表。
 
 ### 7.4 ServerMessage
 
@@ -712,7 +713,7 @@ Logout 后旧 App 不能继续控制电脑
 
 - 多电脑管理。
 - 给电脑设置别名。
-- transcript 本地持久化。
+- 多会话历史列表和搜索。
 - 文件上传。
 - 权限审批 UI。
 - 后台通知。

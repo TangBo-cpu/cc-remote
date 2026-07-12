@@ -216,7 +216,7 @@ App 停止任务。
 }
 ```
 
-服务端会发送这些消息。`commands` 提供 Claude Code 真实斜杠指令。`session_info` 提供当前模型、上下文窗口和剩余 token。`activity` 提供安全化的思考与工具调用状态，不暴露私有思考文本或工具结果正文。`text` 直接追加到当前 assistant message。`done`、`stopped`、`error` 用来结束当前运行态并更新 transcript。
+服务端会发送这些消息。鉴权后先发送 `transcript_snapshot`，恢复 daemon 持久化的当前对话、断线期间输出和待审批请求。`permission_request` 由 Claude Code stdio 控制协议产生，App 只能返回允许一次或拒绝，不能修改原始工具输入。`commands` 提供 Claude Code 真实斜杠指令。`session_info` 提供当前模型、上下文窗口和剩余 token。`activity` 提供安全化的思考与工具调用状态，不暴露私有思考文本或工具结果正文。`text` 直接追加到当前 assistant message。`done`、`stopped`、`error` 用来结束当前运行态并更新 transcript。
 
 ```json
 { "type": "text", "text": "..." }
@@ -279,7 +279,7 @@ mobile/lib/
 
 启动时进入 `booting`，读取 Secure Storage。没有 token 进入 `unpaired`。有 token 就调用 `/api/status`：成功进入主控制台并建立 WebSocket；失败但 token 未过期时保留已配对态，显示 `offline`；401 时清 token 并回到扫码配对。扫码后先进入配对确认 sheet，用户确认后才调用 `/api/pair`。配对成功保存 `origin`、`token` 和 `deviceName`，再进入主控制台。
 
-运行时状态分两层：已配对不等于已连接。`connected` 代表 WebSocket 已 auth，可发送 prompt。`running` 禁用发送并显示 Stop。`offline` 保留本地配对信息，禁用输入，显示“电脑端离线”和重新连接。App 回到前台会重新调用 `/api/status` 探测 daemon。`authExpired` 清理 token 并回到扫码配对。`error` 只显示当前操作错误，不清空 transcript。
+运行时状态分两层：已配对不等于已连接。`connected` 代表 WebSocket 已 auth，可发送 prompt。`running` 禁用发送并显示 Stop。`offline` 保留本地 transcript 缓存，禁用输入，显示“电脑端离线”和重新连接。App 回到前台会重新调用 `/api/status` 探测 daemon，鉴权后用 daemon 快照恢复完整 transcript。`authExpired` 清理 token 并回到扫码配对。`error` 只显示当前操作错误，不清空 transcript。
 
 ```text
 booting
@@ -311,7 +311,7 @@ docs/mobile-ui-reference/05-running-transcript.png
 
 daemon 默认只监听 loopback。公网入口只通过 Cloudflare Tunnel。二维码里只有短期 nonce，没有长期 secret。token 明文只返回给 App 一次。App 只能把 token 存进 Secure Storage。HTTP 使用 Bearer token。WebSocket 未鉴权前只接受 `auth`。Logout 和重新配对都会撤销旧 token 和旧连接。
 
-App 不提供修改 `WORKSPACE_DIR` 的入口，不开放任意 shell 命令，不默认启用 `--dangerously-skip-permissions`，不绕过 Claude Code 自己的权限系统。
+App 不提供修改 `WORKSPACE_DIR` 的入口，不开放任意 shell 命令。权限模式直接映射 Claude Code 原生模式。`bypassPermissions` 需要电脑端显式开启、手机二次确认，并只对单次任务生效。
 
 ## 当前实现状态
 
@@ -335,4 +335,4 @@ daemon 的 App token 主协议已经在代码里，Flutter App 也已经完成�
 
 待专项验证：第二条 prompt 通过 `--resume <claudeSessionId>` 延续上下文；运行中 Stop 能中断任务且没有残留 Claude 进程。
 
-第一版到这里就够。多设备、历史持久化、文件能力、推送和上架材料等核心链路稳定后再补。
+当前只持久化一份当前对话，不提供多会话历史列表。多设备、历史搜索、文件能力、推送和上架材料等核心链路稳定后再补。

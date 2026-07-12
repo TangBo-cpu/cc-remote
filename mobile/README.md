@@ -27,11 +27,13 @@ Flutter 手机 App，用于扫码配对本机 CC Remote daemon，并远程发送
 - 发送任务后显示 Claude 风格的思考动效、状态文字和实时计时。
 - 运行中显示工具调用，完成后移除思考与工具卡片，只保留最终对话。
 - 顶部显示当前模型和剩余上下文。
+- 本地缓存当前 transcript，连接 daemon 后用权威快照补回断线输出。
+- 可选择 Claude Code 六种权限模式。
+- `manual` 模式下显示工具审批卡，支持允许一次和拒绝。
 
 未实现：
 
-- transcript 持久化。
-- 断线期间输出恢复。
+- 多会话历史列表和搜索。
 - 多设备管理。
 - 手机端权限审批流。
 
@@ -111,8 +113,9 @@ QR payload：
 connect wss://tbhaoshuai.ccwu.cc/ws
 send { "type": "auth", "token": "..." }
 wait status authenticated=true
-send { "type": "prompt", "text": "..." }
-receive commands / session_info / activity
+send { "type": "prompt", "text": "...", "permissionMode": "manual" }
+receive transcript_snapshot / permission_request / commands / session_info / activity
+send { "type": "permission_response", "requestId": "...", "decision": "allow|deny" }
 append server text events
 handle done/error/stopped
 send { "type": "stop" }
@@ -121,6 +124,10 @@ send { "type": "stop" }
 输入框以 `/` 开头时会打开指令建议。后续字符用于实时筛选，点击指令后回填输入框。建议列表有独立滚动区域。
 
 任务运行时，`activity` 消息驱动思考计时和工具调用卡片。任务结束后这些临时状态会移除。`session_info` 用于显示模型名和剩余上下文，数据来自 Claude Code 的 init 与 result 事件。
+
+App 离线时先显示本地缓存。WebSocket 鉴权后收到 `transcript_snapshot`，若 daemon 已有快照则以 daemon 为准，从而补回断线期间的输出。daemon 没有快照时保留升级前的本地内容。
+
+权限模式入口位于输入框上方。`bypassPermissions` 只有电脑端使用 `-AllowBypassPermissions` 启动时可选，并且只对下一次任务生效。
 
 ## 连接状态
 

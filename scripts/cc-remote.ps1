@@ -3,7 +3,8 @@ param(
   [string]$WorkspaceDir = "",
   [string]$DeviceName = "tb",
   [int]$Port = 8787,
-  [switch]$NoTunnel
+  [switch]$NoTunnel,
+  [switch]$AllowBypassPermissions
 )
 
 $ErrorActionPreference = "Stop"
@@ -60,10 +61,12 @@ try {
   $env:WORKSPACE_DIR = $WorkspaceDir
   $env:DEVICE_NAME = $DeviceName
   $env:PORT = "$Port"
+  $env:ALLOW_BYPASS_PERMISSIONS = if ($AllowBypassPermissions) { "1" } else { "0" }
 
   Write-Host "PUBLIC_ORIGIN=$env:PUBLIC_ORIGIN"
   Write-Host "WORKSPACE_DIR=$env:WORKSPACE_DIR"
   Write-Host "DEVICE_NAME=$env:DEVICE_NAME"
+  Write-Host "ALLOW_BYPASS_PERMISSIONS=$env:ALLOW_BYPASS_PERMISSIONS"
   Write-Host "Starting daemon. Press Ctrl+C to stop daemon and tunnel."
 
   Push-Location $root
