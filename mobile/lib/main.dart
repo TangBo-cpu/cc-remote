@@ -1627,181 +1627,169 @@ class PromptBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final canSend = controller.text.trim().isNotEmpty && !running && connected;
-    return GlassPanel(
-      padding: const EdgeInsets.fromLTRB(6, 8, 8, 8),
-      radius: 24,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          SizedBox(
-            width: 38,
-            height: 40,
-            child: IconButton(
-              onPressed: running || commands.isEmpty
-                  ? null
-                  : () =>
-                        showCommandSheet(context, commands, onCommandSelected),
-              icon: const Text(
-                '/',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-              ),
-              tooltip: commands.isEmpty ? '指令同步中' : '指令',
-            ),
+    final query = commandQuery(controller.text);
+    final matchingCommands = query == null
+        ? const <String>[]
+        : filterCommands(commands, query);
+    final showSuggestions = query != null && !running && connected;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (showSuggestions) ...[
+          CommandSuggestions(
+            commands: matchingCommands,
+            loading: commands.isEmpty,
+            onSelected: onCommandSelected,
           ),
-          Expanded(
-            child: TextField(
-              controller: controller,
-              enabled: !running,
-              minLines: 1,
-              maxLines: 4,
-              onChanged: (_) => onChanged(),
-              decoration: InputDecoration(
-                hintText: connected
-                    ? '发送消息'
-                    : offline
-                    ? '电脑端离线，请先重连'
-                    : '正在连接电脑端',
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 12,
+          const SizedBox(height: 8),
+        ],
+        GlassPanel(
+          padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+          radius: 24,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  enabled: !running,
+                  minLines: 1,
+                  maxLines: 4,
+                  onChanged: (_) => onChanged(),
+                  decoration: InputDecoration(
+                    hintText: connected
+                        ? '发送消息'
+                        : offline
+                        ? '电脑端离线，请先重连'
+                        : '正在连接电脑端',
+                    border: InputBorder.none,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 12,
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 40,
-            height: 40,
-            child: IconButton.filled(
-              onPressed: running ? onStop : (canSend ? onSend : null),
-              icon: Icon(
-                running ? Icons.stop_rounded : Icons.arrow_upward_rounded,
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 40,
+                height: 40,
+                child: IconButton.filled(
+                  onPressed: running ? onStop : (canSend ? onSend : null),
+                  icon: Icon(
+                    running ? Icons.stop_rounded : Icons.arrow_upward_rounded,
+                  ),
+                  tooltip: running ? '停止' : '发送',
+                  style: IconButton.styleFrom(
+                    backgroundColor: running
+                        ? AppColors.stop
+                        : AppColors.accent,
+                    disabledBackgroundColor: const Color(0xFFDCE6EA),
+                    foregroundColor: Colors.white,
+                    fixedSize: const Size.square(40),
+                  ),
+                ),
               ),
-              tooltip: running ? '停止' : '发送',
-              style: IconButton.styleFrom(
-                backgroundColor: running ? AppColors.stop : AppColors.accent,
-                disabledBackgroundColor: const Color(0xFFDCE6EA),
-                foregroundColor: Colors.white,
-                fixedSize: const Size.square(40),
-              ),
-            ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
 
-Future<void> showCommandSheet(
-  BuildContext context,
-  List<String> commands,
-  ValueChanged<String> onSelected,
-) {
-  var query = '';
-  return showModalBottomSheet<void>(
-    context: context,
-    isScrollControlled: true,
-    backgroundColor: Colors.transparent,
-    builder: (context) => StatefulBuilder(
-      builder: (context, setSheetState) {
-        final normalized = query.trim().toLowerCase();
-        final filtered = normalized.isEmpty
-            ? commands
-            : commands
-                  .where(
-                    (command) => command.toLowerCase().contains(normalized),
-                  )
-                  .toList();
-        return SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-            child: GlassPanel(
-              radius: 26,
-              padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
-              child: SizedBox(
-                height: MediaQuery.sizeOf(context).height * 0.70,
-                child: Column(
+String? commandQuery(String text) {
+  if (!text.startsWith('/')) return null;
+  final query = text.substring(1);
+  if (query.contains(RegExp(r'\s'))) return null;
+  return query.toLowerCase();
+}
+
+List<String> filterCommands(List<String> commands, String query) {
+  final prefixMatches = commands
+      .where((command) => command.toLowerCase().startsWith(query))
+      .toList();
+  final containsMatches = commands.where((command) {
+    final normalized = command.toLowerCase();
+    return !normalized.startsWith(query) && normalized.contains(query);
+  });
+  return [...prefixMatches, ...containsMatches];
+}
+
+class CommandSuggestions extends StatelessWidget {
+  const CommandSuggestions({
+    super.key,
+    required this.commands,
+    required this.loading,
+    required this.onSelected,
+  });
+
+  final List<String> commands;
+  final bool loading;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      key: const ValueKey('command-suggestions'),
+      radius: 18,
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 292),
+        child: loading
+            ? const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Row(
                   children: [
-                    Row(
-                      children: [
-                        const Expanded(
-                          child: Text(
-                            'Claude Code 指令',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        Text(
-                          '${filtered.length}',
-                          style: const TextStyle(color: AppColors.muted),
-                        ),
-                        IconButton(
-                          onPressed: () => Navigator.pop(context),
-                          icon: const Icon(Icons.close_rounded),
-                          tooltip: '关闭',
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    TextField(
-                      autofocus: true,
-                      onChanged: (value) => setSheetState(() => query = value),
-                      decoration: const InputDecoration(
-                        hintText: '搜索指令',
-                        prefixIcon: Icon(Icons.search_rounded),
-                        filled: true,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.all(Radius.circular(14)),
-                          borderSide: BorderSide.none,
-                        ),
+                    SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.8,
+                        color: AppColors.accent,
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Expanded(
-                      child: filtered.isEmpty
-                          ? const Center(
-                              child: Text(
-                                '没有匹配的指令',
-                                style: TextStyle(color: AppColors.muted),
-                              ),
-                            )
-                          : ListView.builder(
-                              itemCount: filtered.length,
-                              itemBuilder: (context, index) {
-                                final command = filtered[index];
-                                return ListTile(
-                                  dense: true,
-                                  leading: const Text(
-                                    '/',
-                                    style: TextStyle(
-                                      color: AppColors.accent,
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                  title: Text(command),
-                                  onTap: () {
-                                    Navigator.pop(context);
-                                    onSelected(command);
-                                  },
-                                );
-                              },
-                            ),
+                    SizedBox(width: 10),
+                    Text(
+                      '正在获取 Claude Code 指令',
+                      style: TextStyle(color: AppColors.muted),
                     ),
                   ],
                 ),
+              )
+            : commands.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Text(
+                  '没有匹配的指令',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+              )
+            : ListView.builder(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                itemCount: commands.length,
+                itemBuilder: (context, index) {
+                  final command = commands[index];
+                  return ListTile(
+                    dense: true,
+                    visualDensity: VisualDensity.compact,
+                    leading: const Text(
+                      '/',
+                      style: TextStyle(
+                        color: AppColors.accent,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    title: Text(command),
+                    onTap: () => onSelected(command),
+                  );
+                },
               ),
-            ),
-          ),
-        );
-      },
-    ),
-  );
+      ),
+    );
+  }
 }
 
 class ScanFrame extends StatelessWidget {

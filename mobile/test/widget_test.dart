@@ -177,7 +177,7 @@ void main() {
     expect(snapshot.messages.map((message) => message.text), ['已开启新对话']);
   });
 
-  testWidgets('command picker searches and fills a synced command', (
+  testWidgets('typing slash shows and filters synced commands inline', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -187,12 +187,13 @@ void main() {
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('指令'));
-    await tester.pumpAndSettle();
-    expect(find.text('Claude Code 指令'), findsOneWidget);
+    await tester.enterText(find.byType(TextField), '/');
+    await tester.pump();
+    expect(find.byKey(const ValueKey('command-suggestions')), findsOneWidget);
     expect(find.text('caveman:caveman-help'), findsOneWidget);
+    expect(find.text('frontend-design'), findsOneWidget);
 
-    await tester.enterText(find.byType(TextField).last, 'caveman');
+    await tester.enterText(find.byType(TextField), '/caveman');
     await tester.pump();
     expect(find.text('frontend-design'), findsNothing);
 
@@ -204,6 +205,47 @@ void main() {
       tester.widget<TextField>(find.byType(TextField)).controller?.text,
       '/caveman:caveman-help ',
     );
+  });
+
+  testWidgets('slash command suggestions can scroll past the first six', (
+    tester,
+  ) async {
+    final controller = TextEditingController(text: '/');
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.bottomCenter,
+            child: SizedBox(
+              width: 400,
+              child: PromptBar(
+                controller: controller,
+                commands: List.generate(10, (index) => 'command-${index + 1}'),
+                running: false,
+                connected: true,
+                offline: false,
+                onChanged: () {},
+                onCommandSelected: (_) {},
+                onSend: () {},
+                onStop: () {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('command-8').hitTestable(), findsNothing);
+    await tester.drag(
+      find.byKey(const ValueKey('command-suggestions')),
+      const Offset(0, -240),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('command-8').hitTestable(), findsOneWidget);
   });
 
   test('detects missing assistant reply after the latest user message', () {
