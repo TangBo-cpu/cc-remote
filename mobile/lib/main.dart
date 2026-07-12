@@ -9,6 +9,8 @@ import 'package:http/http.dart' as http;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'workspace_drawer.dart';
+
 void main() {
   runApp(const CcRemoteApp());
 }
@@ -774,6 +776,18 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     return RemoteStatus.fromJson(jsonDecode(res.body) as Map<String, dynamic>);
   }
 
+  void openWorkspace() {
+    final current = session;
+    if (current == null) return;
+    showWorkspaceDrawer(
+      context,
+      origin: current.origin,
+      token: current.token,
+      workspaceName: current.workspaceName,
+      demoMode: widget.demoMode,
+    );
+  }
+
   Future<void> handleQr(String raw) async {
     if (handlingQr || pairing || raw == pausedQrRaw) return;
     setState(() {
@@ -881,6 +895,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             onFillPrompt: fillPrompt,
             onReconnect: refreshConnection,
             onNewConversation: beginNewConversation,
+            onOpenWorkspace: openWorkspace,
             onPermissionModeSelected: selectPermissionMode,
             onPermissionAllow: (request) =>
                 respondToPermission(request, 'allow'),
@@ -1176,6 +1191,7 @@ class ChatScreen extends StatelessWidget {
     required this.onFillPrompt,
     required this.onReconnect,
     required this.onNewConversation,
+    required this.onOpenWorkspace,
     required this.onPermissionModeSelected,
     required this.onPermissionAllow,
     required this.onPermissionDeny,
@@ -1202,6 +1218,7 @@ class ChatScreen extends StatelessWidget {
   final ValueChanged<String> onFillPrompt;
   final VoidCallback onReconnect;
   final VoidCallback onNewConversation;
+  final VoidCallback onOpenWorkspace;
   final ValueChanged<PermissionMode> onPermissionModeSelected;
   final ValueChanged<RemotePermissionRequest> onPermissionAllow;
   final ValueChanged<RemotePermissionRequest> onPermissionDeny;
@@ -1227,6 +1244,7 @@ class ChatScreen extends StatelessWidget {
               remainingContext: remainingContext,
               onReconnect: onReconnect,
               onNewConversation: onNewConversation,
+              onOpenWorkspace: onOpenWorkspace,
               onLogout: onLogout,
             ),
             const SizedBox(height: 10),
@@ -1275,6 +1293,7 @@ class ConnectionHeader extends StatelessWidget {
     required this.remainingContext,
     required this.onReconnect,
     required this.onNewConversation,
+    required this.onOpenWorkspace,
     required this.onLogout,
   });
 
@@ -1287,6 +1306,7 @@ class ConnectionHeader extends StatelessWidget {
   final int? remainingContext;
   final VoidCallback onReconnect;
   final VoidCallback onNewConversation;
+  final VoidCallback onOpenWorkspace;
   final VoidCallback onLogout;
 
   @override
@@ -1315,22 +1335,33 @@ class ConnectionHeader extends StatelessWidget {
           Row(
             children: [
               SizedBox(
-                width: 44,
-                child: !connected && !running
-                    ? IconButton(
-                        onPressed: onReconnect,
-                        icon: Icon(
-                          Icons.refresh_rounded,
-                          color: statusColor,
-                          size: 21,
-                        ),
-                        tooltip: '重连',
-                      )
-                    : IconButton(
-                        onPressed: running ? null : onNewConversation,
-                        icon: const Icon(Icons.add_comment_rounded, size: 20),
-                        tooltip: '新对话',
+                width: 96,
+                child: Row(
+                  children: [
+                    IconButton(
+                      onPressed: onOpenWorkspace,
+                      constraints: const BoxConstraints.tightFor(
+                        width: 44,
+                        height: 44,
                       ),
+                      padding: EdgeInsets.zero,
+                      icon: const Icon(Icons.folder_open_rounded, size: 21),
+                      tooltip: '工作区',
+                    ),
+                    IconButton(
+                      onPressed: connected && !running
+                          ? onNewConversation
+                          : null,
+                      constraints: const BoxConstraints.tightFor(
+                        width: 44,
+                        height: 44,
+                      ),
+                      padding: EdgeInsets.zero,
+                      icon: const Icon(Icons.add_comment_rounded, size: 20),
+                      tooltip: '新对话',
+                    ),
+                  ],
+                ),
               ),
               Expanded(
                 child: Column(
@@ -1338,6 +1369,8 @@ class ConnectionHeader extends StatelessWidget {
                   children: [
                     Text(
                       workspace,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
@@ -1374,16 +1407,19 @@ class ConnectionHeader extends StatelessWidget {
                 ),
               ),
               SizedBox(
-                width: 44,
-                child: IconButton(
-                  onPressed: () => showSettingsSheet(
-                    context,
-                    session,
-                    onReconnect,
-                    onLogout,
+                width: 96,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: IconButton(
+                    onPressed: () => showSettingsSheet(
+                      context,
+                      session,
+                      onReconnect,
+                      onLogout,
+                    ),
+                    icon: const Icon(Icons.more_horiz_rounded, size: 23),
+                    tooltip: '设置',
                   ),
-                  icon: const Icon(Icons.more_horiz_rounded, size: 23),
-                  tooltip: '设置',
                 ),
               ),
             ],

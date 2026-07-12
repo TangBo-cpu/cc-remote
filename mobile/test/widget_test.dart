@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:cc_remote/main.dart';
+import 'package:cc_remote/workspace_drawer.dart';
 
 void main() {
   setUp(() {
@@ -188,6 +189,7 @@ void main() {
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
     expect(find.text('有什么需要处理？'), findsOneWidget);
+    expect(find.byTooltip('工作区'), findsOneWidget);
     expect(find.byTooltip('新对话'), findsOneWidget);
 
     await TranscriptStore().save(
@@ -266,6 +268,61 @@ void main() {
     expect(snapshot!.running, isFalse);
     expect(snapshot.messages.map((message) => message.text), ['已开启新对话']);
   });
+
+  testWidgets('workspace drawer shows files and git diff', (tester) async {
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('工作区'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('workspace-files')), findsOneWidget);
+    expect(find.textContaining('codex/workspace-sidebar'), findsOneWidget);
+
+    await tester.tap(find.text('修改 2'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('workspace-changes')), findsOneWidget);
+
+    await tester.tap(find.text('daemon.ts'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('workspace-diff')), findsOneWidget);
+    expect(find.textContaining("workspace_drawer.dart"), findsOneWidget);
+  });
+
+  testWidgets(
+    'workspace file preview virtualizes long content and closes its api',
+    (tester) async {
+      final api = ReviewWorkspaceApi();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: WorkspaceDrawer(
+            origin: Uri.parse('https://example.test'),
+            token: 'test',
+            workspaceName: 'review',
+            api: api,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('large.txt'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('workspace-file-lines')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('[本行过长，已截断]'), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      expect(api.closed, isTrue);
+    },
+  );
 
   testWidgets('typing slash shows and filters synced commands inline', (
     tester,
@@ -562,6 +619,7 @@ void main() {
             onFillPrompt: (_) {},
             onReconnect: () {},
             onNewConversation: () {},
+            onOpenWorkspace: () {},
             onPermissionModeSelected: (_) {},
             onPermissionAllow: (_) {},
             onPermissionDeny: (_) {},
@@ -726,4 +784,39 @@ void main() {
   test('network timeout gets a useful pairing error', () {
     expect(errorText(TimeoutException('slow')), '连接超时，请检查电脑端和隧道');
   });
+}
+
+class ReviewWorkspaceApi extends WorkspaceApi {
+  ReviewWorkspaceApi()
+    : super(origin: Uri.parse('https://example.test'), token: 'test');
+
+  bool closed = false;
+
+  @override
+  Future<WorkspaceSnapshot> snapshot() async {
+    return const WorkspaceSnapshot(
+      rootName: 'review',
+      gitAvailable: true,
+      files: ['large.txt'],
+      changes: [],
+    );
+  }
+
+  @override
+  Future<WorkspaceDocument> file(String path) async {
+    return WorkspaceDocument.file(
+      path,
+      List.filled(20000, 'x').join(),
+      truncated: false,
+    );
+  }
+
+  @override
+  Future<String> diff(String path, {required bool staged}) async => '';
+
+  @override
+  void close() {
+    closed = true;
+    super.close();
+  }
 }

@@ -6,6 +6,7 @@ import qrcode from 'qrcode-terminal';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createAuthState } from './authState.js';
 import { createTranscriptState } from './transcriptState.js';
+import { WorkspaceService } from './workspaceService.js';
 import {
   ClaudeBridge,
   discoverClaudeCommands,
@@ -30,6 +31,7 @@ const MAX_BODY_BYTES = 64 * 1024;
 const publicUrl = new URL(PUBLIC_ORIGIN);
 const auth = await createAuthState();
 const transcript = await createTranscriptState();
+const workspace = new WorkspaceService(WORKSPACE_DIR);
 const bridge = new ClaudeBridge({
   claudeBin: CLAUDE_BIN,
   workspaceDir: WORKSPACE_DIR,
@@ -159,6 +161,24 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       workspaceDir: WORKSPACE_DIR,
       ...auth.status(),
     });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/workspace') {
+    sendJson(res, 200, await workspace.snapshot());
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/workspace/file') {
+    const path = url.searchParams.get('path') || '';
+    sendJson(res, 200, await workspace.readFile(path));
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/workspace/diff') {
+    const path = url.searchParams.get('path') || '';
+    const staged = url.searchParams.get('staged') === '1';
+    sendJson(res, 200, { path, staged, diff: await workspace.diff(path, staged) });
     return;
   }
 

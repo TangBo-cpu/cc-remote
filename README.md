@@ -35,6 +35,7 @@
 - 对话使用左右消息气泡，任务运行时显示思考动效、状态文字和实时计时。
 - 运行中显示安全化的工具调用状态，任务结束后自动收起本轮活动卡片。
 - 顶部显示当前 Claude 模型和剩余上下文。
+- 左侧工作区抽屉可浏览当前目录文件、查看 Git 修改和 diff。
 - daemon 原子保存当前对话快照，App 重连后补回断线期间的输出。
 - daemon 重启后恢复当前对话；未完成任务会归一化为已中断。
 - 支持 Claude Code `manual`、`acceptEdits`、`auto`、`dontAsk`、`plan` 和 `bypassPermissions` 模式。
@@ -232,6 +233,17 @@ POST /api/new-conversation
 POST /api/stop
 POST /api/logout
 ```
+
+工作区读取接口同样需要 Bearer token，只允许访问启动时固定的 `WORKSPACE_DIR`：
+
+```text
+GET /api/workspace
+GET /api/workspace/file?path=src/daemon.ts
+GET /api/workspace/diff?path=src/daemon.ts
+GET /api/workspace/diff?path=src/daemon.ts&staged=1
+```
+
+文件列表遵循 Git 忽略规则。文件与 diff 只读，不提供远程编辑、暂存或提交入口。
 
 ## WebSocket 协议
 
