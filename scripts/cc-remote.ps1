@@ -4,7 +4,8 @@ param(
   [string]$DeviceName = "tb",
   [int]$Port = 8787,
   [switch]$NoTunnel,
-  [switch]$AllowBypassPermissions
+  [switch]$AllowBypassPermissions,
+  [switch]$DisableBypassPermissions
 )
 
 $ErrorActionPreference = "Stop"
@@ -61,7 +62,7 @@ try {
   $env:WORKSPACE_DIR = $WorkspaceDir
   $env:DEVICE_NAME = $DeviceName
   $env:PORT = "$Port"
-  $env:ALLOW_BYPASS_PERMISSIONS = if ($AllowBypassPermissions) { "1" } else { "0" }
+  $env:ALLOW_BYPASS_PERMISSIONS = if ($DisableBypassPermissions) { "0" } else { "1" }
 
   Write-Host "PUBLIC_ORIGIN=$env:PUBLIC_ORIGIN"
   Write-Host "WORKSPACE_DIR=$env:WORKSPACE_DIR"

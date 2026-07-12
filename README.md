@@ -86,7 +86,7 @@ npm run cc-remote
 ```powershell
 .\cc-remote.cmd -NoTunnel
 .\cc-remote.cmd -WorkspaceDir "E:\\Code-All\\cc-remote" -DeviceName "tb"
-.\cc-remote.cmd -AllowBypassPermissions
+.\cc-remote.cmd -DisableBypassPermissions
 ```
 
 ## 手动运行 daemon
@@ -285,7 +285,7 @@ status, transcript_snapshot, permission_capabilities, permission_request, permis
 | `WORKSPACE_DIR` | 当前目录 | Claude Code 工作目录 |
 | `CLAUDE_BIN` | `claude` | Claude Code CLI 可执行文件 |
 | `DEVICE_NAME` | 当前主机名 | 二维码和 App 内显示的电脑名 |
-| `ALLOW_BYPASS_PERMISSIONS` | `0` | 设为 `1` 后允许手机为单次任务选择 `bypassPermissions` |
+| `ALLOW_BYPASS_PERMISSIONS` | `1` | 默认允许手机为单次任务选择 `bypassPermissions`；设为 `0` 可关闭 |
 
 ## 校验
 

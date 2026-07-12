@@ -24,7 +24,7 @@ const PUBLIC_ORIGIN = (process.env.PUBLIC_ORIGIN || `http://${HOST}:${PORT}`).re
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR || process.cwd();
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const DEVICE_NAME = process.env.DEVICE_NAME || hostname();
-const ALLOW_BYPASS_PERMISSIONS = process.env.ALLOW_BYPASS_PERMISSIONS === '1';
+const ALLOW_BYPASS_PERMISSIONS = process.env.ALLOW_BYPASS_PERMISSIONS !== '0';
 const MAX_BODY_BYTES = 64 * 1024;
 
 const publicUrl = new URL(PUBLIC_ORIGIN);
