@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -19,19 +20,30 @@ void main() {
         TranscriptMessage.user('user text'),
         TranscriptMessage.assistant('assistant text'),
         TranscriptMessage.system('system text'),
+        TranscriptMessage.activity(
+          '正在读取文件',
+          id: 'tool-1',
+          kind: ActivityKind.tool,
+          state: ActivityState.running,
+          tool: 'Read',
+          detail: 'mobile/lib/main.dart',
+        ),
       ],
     );
 
     final restored = TranscriptSnapshot.fromJson(snapshot.toJson());
 
     expect(restored.running, isTrue);
-    expect(restored.messages, hasLength(3));
+    expect(restored.messages, hasLength(4));
     expect(restored.messages[0].role, MessageRole.user);
     expect(restored.messages[0].text, 'user text');
     expect(restored.messages[1].role, MessageRole.assistant);
     expect(restored.messages[1].text, 'assistant text');
     expect(restored.messages[2].role, MessageRole.system);
     expect(restored.messages[2].text, 'system text');
+    expect(restored.messages[3].role, MessageRole.activity);
+    expect(restored.messages[3].activityTool, 'Read');
+    expect(restored.messages[3].activityDetail, 'mobile/lib/main.dart');
   });
 
   test('transcript store round-trip and clear', () async {
@@ -85,7 +97,8 @@ void main() {
 
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
-    expect(find.text('本机已连接'), findsOneWidget);
+    expect(find.text('有什么需要处理？'), findsOneWidget);
+    expect(find.byTooltip('新对话'), findsOneWidget);
 
     await TranscriptStore().save(
       TranscriptSnapshot(
@@ -98,7 +111,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('退出配对'), findsOneWidget);
     expect(find.text('重新连接'), findsOneWidget);
-    expect(find.text('开启新对话'), findsOneWidget);
+    expect(find.text('开启新对话'), findsNothing);
     expect(find.text('扫描电脑终端里的二维码'), findsNothing);
 
     await tester.tap(find.text('退出配对'));
@@ -152,9 +165,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('ping'), findsOneWidget);
 
-    await tester.tap(find.byTooltip('设置'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('开启新对话'));
+    await tester.tap(find.byTooltip('新对话'));
     await tester.pumpAndSettle();
 
     expect(find.text('ping'), findsNothing);
@@ -164,6 +175,77 @@ void main() {
     expect(snapshot, isNotNull);
     expect(snapshot!.running, isFalse);
     expect(snapshot.messages.map((message) => message.text), ['已开启新对话']);
+  });
+
+  testWidgets('typing slash shows and filters synced commands inline', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), '/');
+    await tester.pump();
+    expect(find.byKey(const ValueKey('command-suggestions')), findsOneWidget);
+    expect(find.text('caveman:caveman-help'), findsOneWidget);
+    expect(find.text('frontend-design'), findsOneWidget);
+
+    await tester.enterText(find.byType(TextField), '/caveman');
+    await tester.pump();
+    expect(find.text('frontend-design'), findsNothing);
+
+    await tester.tap(find.text('caveman:caveman-help'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(TextField), findsOneWidget);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller?.text,
+      '/caveman:caveman-help ',
+    );
+  });
+
+  testWidgets('slash command suggestions can scroll past the first six', (
+    tester,
+  ) async {
+    final controller = TextEditingController(text: '/');
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.bottomCenter,
+            child: SizedBox(
+              width: 400,
+              child: PromptBar(
+                controller: controller,
+                commands: List.generate(10, (index) => 'command-${index + 1}'),
+                running: false,
+                connected: true,
+                offline: false,
+                onChanged: () {},
+                onCommandSelected: (_) {},
+                onSend: () {},
+                onStop: () {},
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('command-8').hitTestable(), findsNothing);
+    await tester.drag(
+      find.byKey(const ValueKey('command-suggestions')),
+      const Offset(0, -240),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('command-8').hitTestable(), findsOneWidget);
   });
 
   test('detects missing assistant reply after the latest user message', () {
@@ -188,6 +270,97 @@ void main() {
     );
   });
 
+  test('merges thinking and tool progress but ignores completion summary', () {
+    final messages = [TranscriptMessage.user('check project')];
+
+    mergeRemoteActivity(
+      messages,
+      const RemoteActivity(
+        id: 'thinking',
+        kind: ActivityKind.thinking,
+        state: ActivityState.running,
+      ),
+    );
+    mergeRemoteActivity(
+      messages,
+      const RemoteActivity(
+        id: 'tool-1',
+        kind: ActivityKind.tool,
+        state: ActivityState.running,
+        toolName: 'Read',
+        detail: 'mobile/lib/main.dart',
+      ),
+    );
+    mergeRemoteActivity(
+      messages,
+      const RemoteActivity(
+        id: 'tool-1',
+        kind: ActivityKind.tool,
+        state: ActivityState.done,
+      ),
+    );
+    mergeRemoteActivity(
+      messages,
+      const RemoteActivity(
+        id: 'summary',
+        kind: ActivityKind.summary,
+        state: ActivityState.done,
+        durationMs: 8100,
+        numTurns: 2,
+      ),
+    );
+
+    expect(messages[1].text, '思考完成');
+    expect(messages[2].text, '已读取文件');
+    expect(messages[2].activityState, ActivityState.done);
+    expect(messages, hasLength(3));
+  });
+
+  test(
+    'completed replies remove current tool activity from the transcript',
+    () {
+      final messages = [
+        TranscriptMessage.user('上一轮'),
+        TranscriptMessage.assistant('上一轮答案'),
+        TranscriptMessage.user('检查项目'),
+        TranscriptMessage.activity(
+          '思考完成',
+          id: 'thinking',
+          kind: ActivityKind.thinking,
+          state: ActivityState.done,
+        ),
+        TranscriptMessage.activity(
+          '已读取文件',
+          id: 'tool-1',
+          kind: ActivityKind.tool,
+          state: ActivityState.done,
+        ),
+        TranscriptMessage.assistant('当前答案'),
+      ];
+
+      removeCurrentTurnActivities(messages);
+
+      expect(messages.map((message) => message.text), [
+        '上一轮',
+        '上一轮答案',
+        '检查项目',
+        '当前答案',
+      ]);
+    },
+  );
+
+  test('sending a prompt immediately adds a thinking activity', () {
+    final messages = <TranscriptMessage>[];
+
+    beginPrompt(messages, '检查项目');
+
+    expect(messages, hasLength(2));
+    expect(messages.first.role, MessageRole.user);
+    expect(messages.first.text, '检查项目');
+    expect(messages.last.activityKind, ActivityKind.thinking);
+    expect(messages.last.activityState, ActivityState.running);
+  });
+
   testWidgets('running state does not show a chat progress bar', (
     tester,
   ) async {
@@ -207,7 +380,11 @@ void main() {
             running: true,
             connected: true,
             offline: false,
+            modelName: 'claude-opus-4-8',
+            contextWindow: 200000,
+            remainingContext: 174919,
             messages: [TranscriptMessage.user('你好')],
+            commands: const ['review'],
             promptController: controller,
             onChanged: () {},
             onFillPrompt: (_) {},
@@ -222,8 +399,88 @@ void main() {
     );
 
     expect(find.textContaining('运行中'), findsOneWidget);
+    expect(find.text('Opus 4.8'), findsOneWidget);
+    expect(find.text('剩余 175K / 200K'), findsOneWidget);
     expect(find.text('新会话'), findsNothing);
     expect(find.byType(LinearProgressIndicator), findsNothing);
+  });
+
+  testWidgets('assistant replies use a left aligned markdown bubble', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: MessageBlock(
+            message: TranscriptMessage(MessageRole.assistant, 'reply'),
+          ),
+        ),
+      ),
+    );
+
+    final assistant = find.byKey(const ValueKey('assistant-message'));
+    expect(assistant, findsOneWidget);
+    expect(
+      find.descendant(of: assistant, matching: find.byType(MarkdownBody)),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('assistant-avatar')), findsOneWidget);
+    expect(find.byKey(const ValueKey('user-message')), findsNothing);
+  });
+
+  testWidgets('thinking activity shows animated status and elapsed time', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBlock(
+            message: TranscriptMessage.activity(
+              '正在思考',
+              id: 'thinking',
+              kind: ActivityKind.thinking,
+              state: ActivityState.running,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('thinking-bubble')), findsOneWidget);
+    expect(find.byKey(const ValueKey('thinking-icon')), findsOneWidget);
+    expect(find.text('正在思考'), findsOneWidget);
+    expect(find.text('0 秒'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('1 秒'), findsOneWidget);
+  });
+
+  testWidgets('tool activity expands to show its target', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBlock(
+            message: TranscriptMessage.activity(
+              '正在读取文件',
+              id: 'tool-1',
+              kind: ActivityKind.tool,
+              state: ActivityState.running,
+              tool: 'Read',
+              detail: 'mobile/lib/main.dart',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('正在读取文件'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(SelectableText), findsNothing);
+
+    await tester.tap(find.text('正在读取文件'));
+    await tester.pump(const Duration(milliseconds: 300));
+
+    expect(find.byType(SelectableText), findsOneWidget);
   });
 
   testWidgets('empty transcript does not overflow when keyboard is open', (
@@ -243,7 +500,7 @@ void main() {
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
 
-    expect(find.text('本机已连接'), findsOneWidget);
+    expect(find.text('有什么需要处理？'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

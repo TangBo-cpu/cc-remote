@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -69,6 +70,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   bool remoteOffline = false;
   String? pausedQrRaw;
   String? pairError;
+  String? modelName;
+  int? contextWindow;
+  int? remainingContext;
   SavedSession? session;
   WebSocketChannel? ws;
   StreamSubscription<dynamic>? wsSubscription;
@@ -77,6 +81,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final http.Client httpClient = http.Client();
   final TextEditingController promptController = TextEditingController();
   final List<TranscriptMessage> messages = [];
+  final List<String> commands = [];
   Future<void> lastTranscriptWrite = Future<void>.value();
 
   @override
@@ -116,7 +121,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   Future<void> persistTranscriptSnapshot() {
     final snapshot = TranscriptSnapshot(
-      messages: List.of(messages),
+      messages: messages
+          .where((message) => message.role != MessageRole.activity)
+          .toList(),
       running: running,
     );
     return queueTranscriptWrite(() => transcriptStore.save(snapshot));
@@ -132,7 +139,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     setState(() {
       messages
         ..clear()
-        ..addAll(snapshot.messages);
+        ..addAll(
+          snapshot.messages.where(
+            (message) => message.role != MessageRole.activity,
+          ),
+        );
       running = snapshot.running;
       if (snapshot.running &&
           !messages.any((message) => message.text == interruptedRunMessage)) {
@@ -277,7 +288,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       running = false;
       wsReady = true;
       remoteOffline = false;
+      modelName = 'claude-opus-4-8';
+      contextWindow = 200000;
+      remainingContext = 174919;
       messages.clear();
+      commands
+        ..clear()
+        ..addAll(['caveman:caveman-help', 'frontend-design', 'review']);
     });
   }
 
@@ -338,9 +355,29 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         persistTranscriptSnapshotLater();
       case 'text':
         appendAssistantText(decoded['text'] as String? ?? '');
+      case 'commands':
+        final items = decoded['commands'];
+        if (items is! List) return;
+        setState(() {
+          commands
+            ..clear()
+            ..addAll(items.whereType<String>());
+        });
+      case 'session_info':
+        setState(() {
+          modelName = decoded['model'] as String?;
+          contextWindow = (decoded['contextWindow'] as num?)?.toInt();
+          remainingContext = (decoded['remainingTokens'] as num?)?.toInt();
+        });
+      case 'activity':
+        final activity = RemoteActivity.tryParse(decoded);
+        if (activity == null) return;
+        setState(() => mergeRemoteActivity(messages, activity));
+        persistTranscriptSnapshotLater();
       case 'done':
         setState(() {
           running = false;
+          removeCurrentTurnActivities(messages);
           if (!hasAssistantReplyAfterLastUser(messages)) {
             messages.add(TranscriptMessage.system('本轮没有返回文本，请重试'));
           }
@@ -349,12 +386,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       case 'stopped':
         setState(() {
           running = false;
+          finishRunningActivities(messages, ActivityState.stopped);
           messages.add(TranscriptMessage.system('已停止'));
         });
         persistTranscriptSnapshotLater();
       case 'error':
         setState(() {
           running = false;
+          finishRunningActivities(messages, ActivityState.error);
           messages.add(
             TranscriptMessage.system('错误：${decoded['message'] ?? '未知错误'}'),
           );
@@ -375,6 +414,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remoteOffline = false;
       running = false;
       messages.clear();
+      commands.clear();
     });
   }
 
@@ -385,6 +425,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remoteOffline = true;
       if (running) {
         running = false;
+        finishRunningActivities(messages, ActivityState.stopped);
         messages.add(TranscriptMessage.system(message));
       }
     });
@@ -394,6 +435,17 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   void appendAssistantText(String text) {
     if (text.isEmpty) return;
     setState(() {
+      final start =
+          messages.lastIndexWhere(
+            (message) => message.role == MessageRole.user,
+          ) +
+          1;
+      finishRunningActivities(
+        messages,
+        ActivityState.done,
+        start: start,
+        kind: ActivityKind.thinking,
+      );
       if (messages.isNotEmpty && messages.last.role == MessageRole.assistant) {
         final last = messages.removeLast();
         messages.add(TranscriptMessage.assistant(last.text + text));
@@ -439,7 +491,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     setState(() {
       promptController.clear();
       running = true;
-      messages.add(TranscriptMessage.user(text));
+      beginPrompt(messages, text);
     });
     persistTranscriptSnapshotLater();
     channel.sink.add(jsonEncode({'type': 'prompt', 'text': text}));
@@ -477,6 +529,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
     if (widget.demoMode) {
       setState(() {
+        modelName = null;
+        contextWindow = null;
+        remainingContext = null;
         messages
           ..clear()
           ..add(TranscriptMessage.system('已开启新对话'));
@@ -506,6 +561,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       if (res.statusCode != 200) throw StateError('new_conversation_failed');
       if (!mounted || session != current) return;
       setState(() {
+        modelName = null;
+        contextWindow = null;
+        remainingContext = null;
         messages
           ..clear()
           ..add(TranscriptMessage.system('已开启新对话'));
@@ -537,7 +595,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       wsReady = false;
       remoteOffline = false;
       pausedQrRaw = null;
+      modelName = null;
+      contextWindow = null;
+      remainingContext = null;
       messages.clear();
+      commands.clear();
       promptController.clear();
     });
   }
@@ -629,7 +691,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         remoteOffline = false;
         pausedQrRaw = null;
         pairError = null;
+        modelName = null;
+        contextWindow = null;
+        remainingContext = null;
         messages.clear();
+        commands.clear();
       });
       connectWs(saved);
     } catch (err) {
@@ -660,7 +726,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             running: running,
             connected: wsReady,
             offline: remoteOffline,
+            modelName: modelName,
+            contextWindow: contextWindow,
+            remainingContext: remainingContext,
             messages: messages,
+            commands: commands,
             promptController: promptController,
             onChanged: () => setState(() {}),
             onFillPrompt: fillPrompt,
@@ -943,7 +1013,11 @@ class ChatScreen extends StatelessWidget {
     required this.running,
     required this.connected,
     required this.offline,
+    required this.modelName,
+    required this.contextWindow,
+    required this.remainingContext,
     required this.messages,
+    required this.commands,
     required this.promptController,
     required this.onChanged,
     required this.onFillPrompt,
@@ -958,7 +1032,11 @@ class ChatScreen extends StatelessWidget {
   final bool running;
   final bool connected;
   final bool offline;
+  final String? modelName;
+  final int? contextWindow;
+  final int? remainingContext;
   final List<TranscriptMessage> messages;
+  final List<String> commands;
   final TextEditingController promptController;
   final VoidCallback onChanged;
   final ValueChanged<String> onFillPrompt;
@@ -981,6 +1059,9 @@ class ChatScreen extends StatelessWidget {
               running: running,
               connected: connected,
               offline: offline,
+              modelName: modelName,
+              contextWindow: contextWindow,
+              remainingContext: remainingContext,
               onReconnect: onReconnect,
               onNewConversation: onNewConversation,
               onLogout: onLogout,
@@ -995,10 +1076,12 @@ class ChatScreen extends StatelessWidget {
             const SizedBox(height: 10),
             PromptBar(
               controller: promptController,
+              commands: commands,
               running: running,
               connected: connected,
               offline: offline,
               onChanged: onChanged,
+              onCommandSelected: (command) => onFillPrompt('/$command '),
               onSend: onSend,
               onStop: onStop,
             ),
@@ -1016,6 +1099,9 @@ class ConnectionHeader extends StatelessWidget {
     required this.running,
     required this.connected,
     required this.offline,
+    required this.modelName,
+    required this.contextWindow,
+    required this.remainingContext,
     required this.onReconnect,
     required this.onNewConversation,
     required this.onLogout,
@@ -1025,6 +1111,9 @@ class ConnectionHeader extends StatelessWidget {
   final bool running;
   final bool connected;
   final bool offline;
+  final String? modelName;
+  final int? contextWindow;
+  final int? remainingContext;
   final VoidCallback onReconnect;
   final VoidCallback onNewConversation;
   final VoidCallback onLogout;
@@ -1044,10 +1133,11 @@ class ConnectionHeader extends StatelessWidget {
         ? AppColors.stop
         : AppColors.muted;
     final workspace = session?.workspaceName ?? 'cc-remote';
+    final device = session?.deviceName ?? 'Jayson PC';
 
     return GlassPanel(
-      radius: 26,
-      padding: const EdgeInsets.fromLTRB(8, 7, 8, 7),
+      radius: 22,
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1065,29 +1155,49 @@ class ConnectionHeader extends StatelessWidget {
                         ),
                         tooltip: '重连',
                       )
-                    : const SizedBox.shrink(),
+                    : IconButton(
+                        onPressed: running ? null : onNewConversation,
+                        icon: const Icon(Icons.add_comment_rounded, size: 20),
+                        tooltip: '新对话',
+                      ),
               ),
               Expanded(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      session?.deviceName ?? 'Jayson PC',
+                      workspace,
                       style: const TextStyle(
-                        fontSize: 17,
+                        fontSize: 16,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '$workspace · $statusLabel',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: statusColor,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
+                    const SizedBox(height: 1),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: statusColor,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 5),
+                        Flexible(
+                          child: Text(
+                            '$device · $statusLabel',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),
@@ -1098,9 +1208,7 @@ class ConnectionHeader extends StatelessWidget {
                   onPressed: () => showSettingsSheet(
                     context,
                     session,
-                    running,
                     onReconnect,
-                    onNewConversation,
                     onLogout,
                   ),
                   icon: const Icon(Icons.more_horiz_rounded, size: 23),
@@ -1109,18 +1217,92 @@ class ConnectionHeader extends StatelessWidget {
               ),
             ],
           ),
+          if (modelName != null || remainingContext != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(44, 0, 44, 8),
+              child: Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 7,
+                runSpacing: 5,
+                children: [
+                  if (modelName != null)
+                    SessionMetric(
+                      key: const ValueKey('model-metric'),
+                      icon: Icons.smart_toy_outlined,
+                      label: formatModelName(modelName!),
+                    ),
+                  if (remainingContext != null)
+                    SessionMetric(
+                      key: const ValueKey('context-metric'),
+                      icon: Icons.donut_large_rounded,
+                      label: contextWindow == null
+                          ? '剩余 ${formatTokens(remainingContext!)}'
+                          : '剩余 ${formatTokens(remainingContext!)} / ${formatTokens(contextWindow!)}',
+                    ),
+                ],
+              ),
+            ),
         ],
       ),
     );
   }
 }
 
+class SessionMetric extends StatelessWidget {
+  const SessionMetric({super.key, required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: AppColors.accent.withValues(alpha: 0.075),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.accent.withValues(alpha: 0.10)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: AppColors.accent),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.muted,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String formatModelName(String model) {
+  final match = RegExp(r'^claude-([a-z]+)-(\d+)-(\d+)$').firstMatch(model);
+  if (match == null) return model;
+  final family = match.group(1)!;
+  return '${family[0].toUpperCase()}${family.substring(1)} ${match.group(2)}.${match.group(3)}';
+}
+
+String formatTokens(int tokens) {
+  if (tokens >= 1000000) {
+    final value = tokens / 1000000;
+    return '${value.toStringAsFixed(value >= 10 ? 0 : 1)}M';
+  }
+  if (tokens >= 1000) return '${(tokens / 1000).round()}K';
+  return '$tokens';
+}
+
 Future<void> showSettingsSheet(
   BuildContext context,
   SavedSession? session,
-  bool running,
   VoidCallback onReconnect,
-  VoidCallback onNewConversation,
   VoidCallback onLogout,
 ) {
   return showModalBottomSheet<void>(
@@ -1129,9 +1311,7 @@ Future<void> showSettingsSheet(
     backgroundColor: Colors.transparent,
     builder: (context) => SettingsSheet(
       session: session,
-      running: running,
       onReconnect: onReconnect,
-      onNewConversation: onNewConversation,
       onLogout: onLogout,
     ),
   );
@@ -1141,16 +1321,12 @@ class SettingsSheet extends StatelessWidget {
   const SettingsSheet({
     super.key,
     required this.session,
-    required this.running,
     required this.onReconnect,
-    required this.onNewConversation,
     required this.onLogout,
   });
 
   final SavedSession? session;
-  final bool running;
   final VoidCallback onReconnect;
-  final VoidCallback onNewConversation;
   final VoidCallback onLogout;
 
   @override
@@ -1203,20 +1379,6 @@ class SettingsSheet extends StatelessWidget {
                   },
                   icon: const Icon(Icons.refresh_rounded),
                   label: const Text('重新连接'),
-                ),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: running
-                      ? null
-                      : () {
-                          Navigator.pop(context);
-                          onNewConversation();
-                        },
-                  icon: const Icon(Icons.add_comment_rounded),
-                  label: const Text('开启新对话'),
                 ),
               ),
               const SizedBox(height: 8),
@@ -1314,22 +1476,14 @@ class TranscriptView extends StatelessWidget {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      SizedBox(
-                        width: 64,
-                        height: 64,
-                        child: GlassPanel(
-                          radius: 24,
-                          padding: EdgeInsets.zero,
-                          child: const Icon(
-                            Icons.terminal_rounded,
-                            size: 30,
-                            color: AppColors.accent,
-                          ),
-                        ),
+                      const Icon(
+                        Icons.terminal_rounded,
+                        size: 28,
+                        color: AppColors.accent,
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 14),
                       const Text(
-                        '本机已连接',
+                        '有什么需要处理？',
                         style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w700,
@@ -1337,7 +1491,7 @@ class TranscriptView extends StatelessWidget {
                       ),
                       const SizedBox(height: 8),
                       const Text(
-                        '可以发送任务给 Claude Code',
+                        '给 Claude Code 一个任务',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: AppColors.muted),
                       ),
@@ -1372,9 +1526,9 @@ class TranscriptView extends StatelessWidget {
     }
 
     return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(2, 16, 2, 16),
+      padding: const EdgeInsets.fromLTRB(4, 14, 4, 16),
       itemCount: messages.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 10),
+      separatorBuilder: (_, _) => const SizedBox(height: 14),
       itemBuilder: (context, index) {
         final message = messages[index];
         return MessageBlock(message: message);
@@ -1399,39 +1553,438 @@ class MessageBlock extends StatelessWidget {
       );
     }
 
+    if (message.role == MessageRole.activity) {
+      return ActivityBlock(message: message);
+    }
+
     final isUser = message.role == MessageRole.user;
-    final maxWidth = MediaQuery.sizeOf(context).width * (isUser ? 0.74 : 0.84);
-    return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxWidth),
-        child: Container(
-          padding: const EdgeInsets.fromLTRB(15, 12, 15, 12),
-          decoration: BoxDecoration(
-            color: isUser
-                ? AppColors.accent.withValues(alpha: 0.13)
-                : Colors.white.withValues(alpha: 0.50),
-            borderRadius: BorderRadius.only(
-              topLeft: const Radius.circular(20),
-              topRight: const Radius.circular(20),
-              bottomLeft: Radius.circular(isUser ? 20 : 8),
-              bottomRight: Radius.circular(isUser ? 8 : 20),
-            ),
-            border: Border.all(
-              color: isUser
-                  ? AppColors.accent.withValues(alpha: 0.22)
-                  : Colors.white.withValues(alpha: 0.62),
-            ),
-          ),
-          child: Text(
-            message.text,
-            style: TextStyle(
-              height: 1.42,
+    if (!isUser) {
+      return AssistantBubbleFrame(
+        bubbleKey: const ValueKey('assistant-message'),
+        child: MarkdownBody(
+          data: message.text,
+          selectable: true,
+          softLineBreak: true,
+          styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+            p: const TextStyle(
+              height: 1.55,
+              fontSize: 15,
               color: AppColors.ink,
-              fontFamily: message.text.contains('`') ? 'monospace' : null,
+            ),
+            a: const TextStyle(color: AppColors.accent),
+            code: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 13,
+              color: AppColors.ink,
+            ),
+            h1: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              color: AppColors.ink,
+            ),
+            h2: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: AppColors.ink,
+            ),
+            h3: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: AppColors.ink,
+            ),
+            blockSpacing: 10,
+            listIndent: 22,
+            codeblockPadding: const EdgeInsets.all(12),
+            codeblockDecoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.58),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: AppColors.shadow.withValues(alpha: 0.12),
+              ),
+            ),
+            blockquotePadding: const EdgeInsets.fromLTRB(12, 6, 10, 6),
+            blockquoteDecoration: const BoxDecoration(
+              border: Border(
+                left: BorderSide(color: AppColors.accent, width: 2),
+              ),
             ),
           ),
         ),
+      );
+    }
+
+    final maxWidth = MediaQuery.sizeOf(context).width * 0.76;
+    return Align(
+      alignment: Alignment.centerRight,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: Container(
+          key: const ValueKey('user-message'),
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          decoration: BoxDecoration(
+            color: AppColors.accent.withValues(alpha: 0.12),
+            borderRadius: BorderRadius.only(
+              topLeft: const Radius.circular(18),
+              topRight: const Radius.circular(18),
+              bottomLeft: const Radius.circular(18),
+              bottomRight: const Radius.circular(6),
+            ),
+            border: Border.all(color: AppColors.accent.withValues(alpha: 0.16)),
+          ),
+          child: Text(
+            message.text,
+            style: const TextStyle(height: 1.45, color: AppColors.ink),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class AssistantBubbleFrame extends StatelessWidget {
+  const AssistantBubbleFrame({
+    super.key,
+    required this.child,
+    this.bubbleKey,
+    this.compact = false,
+  });
+
+  final Widget child;
+  final Key? bubbleKey;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxWidth = MediaQuery.sizeOf(context).width * 0.86;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            key: const ValueKey('assistant-avatar'),
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF178DA5), Color(0xFF4DB5B4)],
+              ),
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.accent.withValues(alpha: 0.18),
+                  blurRadius: 12,
+                  offset: const Offset(0, 5),
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.auto_awesome_rounded,
+              size: 16,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(width: 9),
+          Flexible(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: maxWidth),
+              child: Container(
+                key: bubbleKey,
+                padding: compact
+                    ? const EdgeInsets.fromLTRB(13, 10, 14, 10)
+                    : const EdgeInsets.fromLTRB(15, 13, 15, 13),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.82),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(7),
+                    topRight: Radius.circular(19),
+                    bottomLeft: Radius.circular(19),
+                    bottomRight: Radius.circular(19),
+                  ),
+                  border: Border.all(
+                    color: AppColors.shadow.withValues(alpha: 0.10),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.shadow.withValues(alpha: 0.06),
+                      blurRadius: 18,
+                      offset: const Offset(0, 7),
+                    ),
+                  ],
+                ),
+                child: child,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class ActivityBlock extends StatelessWidget {
+  const ActivityBlock({super.key, required this.message});
+
+  final TranscriptMessage message;
+
+  @override
+  Widget build(BuildContext context) {
+    if (message.activityKind == ActivityKind.thinking) {
+      if (message.activityState == ActivityState.running) {
+        return const AssistantBubbleFrame(
+          bubbleKey: ValueKey('thinking-bubble'),
+          compact: true,
+          child: ThinkingIndicator(),
+        );
+      }
+      return AssistantBubbleFrame(
+        bubbleKey: const ValueKey('thinking-complete'),
+        compact: true,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              message.activityState == ActivityState.error
+                  ? Icons.error_outline_rounded
+                  : Icons.check_rounded,
+              size: 17,
+              color: message.activityState == ActivityState.error
+                  ? AppColors.stop
+                  : AppColors.accent,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              message.text,
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final detail = message.activityDetail;
+    final title = Text(
+      message.text,
+      style: TextStyle(
+        color: message.activityState == ActivityState.error
+            ? AppColors.stop
+            : AppColors.muted,
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+      ),
+    );
+    final icon = switch (message.activityState) {
+      ActivityState.running => const SizedBox.square(
+        dimension: 16,
+        child: CircularProgressIndicator(
+          strokeWidth: 1.8,
+          color: AppColors.accent,
+        ),
+      ),
+      ActivityState.done => const Icon(
+        Icons.check_rounded,
+        size: 17,
+        color: AppColors.muted,
+      ),
+      ActivityState.error => const Icon(
+        Icons.error_outline_rounded,
+        size: 17,
+        color: AppColors.stop,
+      ),
+      ActivityState.stopped => const Icon(
+        Icons.stop_rounded,
+        size: 17,
+        color: AppColors.muted,
+      ),
+      null => const SizedBox.square(dimension: 16),
+    };
+
+    if (message.activityKind == ActivityKind.summary) {
+      return Padding(
+        padding: const EdgeInsets.only(left: 39),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 13, 10),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.54),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.shadow.withValues(alpha: 0.08)),
+          ),
+          child: Row(
+            children: [
+              icon,
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    title,
+                    if (detail != null && detail.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        detail,
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (detail == null || detail.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.fromLTRB(39, 5, 5, 5),
+        child: Row(
+          children: [
+            SizedBox(width: 22, child: Center(child: icon)),
+            const SizedBox(width: 6),
+            Expanded(child: title),
+          ],
+        ),
+      );
+    }
+
+    return Theme(
+      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+      child: Padding(
+        padding: const EdgeInsets.only(left: 39),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.42),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.shadow.withValues(alpha: 0.07)),
+          ),
+          child: ExpansionTile(
+            dense: true,
+            visualDensity: VisualDensity.compact,
+            tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+            childrenPadding: const EdgeInsets.fromLTRB(42, 0, 12, 10),
+            leading: SizedBox(width: 20, child: Center(child: icon)),
+            title: title,
+            subtitle: Text(
+              detail,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+            shape: const Border(),
+            collapsedShape: const Border(),
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SelectableText(
+                  detail,
+                  style: const TextStyle(
+                    color: AppColors.ink,
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    height: 1.45,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class ThinkingIndicator extends StatefulWidget {
+  const ThinkingIndicator({super.key});
+
+  @override
+  State<ThinkingIndicator> createState() => _ThinkingIndicatorState();
+}
+
+class _ThinkingIndicatorState extends State<ThinkingIndicator>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController animation;
+  Timer? timer;
+  var elapsedSeconds = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    animation = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 850),
+    )..repeat(reverse: true);
+    timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => elapsedSeconds += 1);
+    });
+  }
+
+  @override
+  void dispose() {
+    timer?.cancel();
+    animation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      liveRegion: true,
+      label: '正在思考，已用 $elapsedSeconds 秒',
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedBuilder(
+            animation: animation,
+            builder: (context, child) {
+              final value = animation.value;
+              return Opacity(
+                opacity: 0.52 + value * 0.48,
+                child: Transform.rotate(
+                  angle: (value - 0.5) * 0.18,
+                  child: Transform.scale(
+                    scale: 0.88 + value * 0.12,
+                    child: child,
+                  ),
+                ),
+              );
+            },
+            child: const Icon(
+              Icons.auto_awesome_rounded,
+              key: ValueKey('thinking-icon'),
+              size: 18,
+              color: AppColors.accent,
+            ),
+          ),
+          const SizedBox(width: 9),
+          const Text(
+            '正在思考',
+            style: TextStyle(
+              color: AppColors.ink,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 9),
+          Text(
+            '$elapsedSeconds 秒',
+            key: const ValueKey('thinking-elapsed'),
+            style: const TextStyle(
+              color: AppColors.muted,
+              fontSize: 12,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1441,72 +1994,189 @@ class PromptBar extends StatelessWidget {
   const PromptBar({
     super.key,
     required this.controller,
+    required this.commands,
     required this.running,
     required this.connected,
     required this.offline,
     required this.onChanged,
+    required this.onCommandSelected,
     required this.onSend,
     required this.onStop,
   });
 
   final TextEditingController controller;
+  final List<String> commands;
   final bool running;
   final bool connected;
   final bool offline;
   final VoidCallback onChanged;
+  final ValueChanged<String> onCommandSelected;
   final VoidCallback onSend;
   final VoidCallback onStop;
 
   @override
   Widget build(BuildContext context) {
     final canSend = controller.text.trim().isNotEmpty && !running && connected;
-    return GlassPanel(
-      padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
-      radius: 28,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          Expanded(
-            child: TextField(
-              controller: controller,
-              enabled: !running,
-              minLines: 1,
-              maxLines: 4,
-              onChanged: (_) => onChanged(),
-              decoration: InputDecoration(
-                hintText: connected
-                    ? '发送给 Claude Code'
-                    : offline
-                    ? '电脑端离线，请先重连'
-                    : '正在连接电脑端',
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 12,
+    final query = commandQuery(controller.text);
+    final matchingCommands = query == null
+        ? const <String>[]
+        : filterCommands(commands, query);
+    final showSuggestions = query != null && !running && connected;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (showSuggestions) ...[
+          CommandSuggestions(
+            commands: matchingCommands,
+            loading: commands.isEmpty,
+            onSelected: onCommandSelected,
+          ),
+          const SizedBox(height: 8),
+        ],
+        GlassPanel(
+          padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+          radius: 24,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  enabled: !running,
+                  minLines: 1,
+                  maxLines: 4,
+                  onChanged: (_) => onChanged(),
+                  decoration: InputDecoration(
+                    hintText: connected
+                        ? '发送消息'
+                        : offline
+                        ? '电脑端离线，请先重连'
+                        : '正在连接电脑端',
+                    border: InputBorder.none,
+                    isDense: true,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 12,
+                    ),
+                  ),
                 ),
               ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 44,
-            height: 44,
-            child: IconButton.filled(
-              onPressed: running ? onStop : (canSend ? onSend : null),
-              icon: Icon(
-                running ? Icons.stop_rounded : Icons.arrow_upward_rounded,
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 40,
+                height: 40,
+                child: IconButton.filled(
+                  onPressed: running ? onStop : (canSend ? onSend : null),
+                  icon: Icon(
+                    running ? Icons.stop_rounded : Icons.arrow_upward_rounded,
+                  ),
+                  tooltip: running ? '停止' : '发送',
+                  style: IconButton.styleFrom(
+                    backgroundColor: running
+                        ? AppColors.stop
+                        : AppColors.accent,
+                    disabledBackgroundColor: const Color(0xFFDCE6EA),
+                    foregroundColor: Colors.white,
+                    fixedSize: const Size.square(40),
+                  ),
+                ),
               ),
-              tooltip: running ? '停止' : '发送',
-              style: IconButton.styleFrom(
-                backgroundColor: running ? AppColors.stop : AppColors.accent,
-                disabledBackgroundColor: const Color(0xFFDCE6EA),
-                foregroundColor: Colors.white,
-                fixedSize: const Size.square(44),
-              ),
-            ),
+            ],
           ),
-        ],
+        ),
+      ],
+    );
+  }
+}
+
+String? commandQuery(String text) {
+  if (!text.startsWith('/')) return null;
+  final query = text.substring(1);
+  if (query.contains(RegExp(r'\s'))) return null;
+  return query.toLowerCase();
+}
+
+List<String> filterCommands(List<String> commands, String query) {
+  final prefixMatches = commands
+      .where((command) => command.toLowerCase().startsWith(query))
+      .toList();
+  final containsMatches = commands.where((command) {
+    final normalized = command.toLowerCase();
+    return !normalized.startsWith(query) && normalized.contains(query);
+  });
+  return [...prefixMatches, ...containsMatches];
+}
+
+class CommandSuggestions extends StatelessWidget {
+  const CommandSuggestions({
+    super.key,
+    required this.commands,
+    required this.loading,
+    required this.onSelected,
+  });
+
+  final List<String> commands;
+  final bool loading;
+  final ValueChanged<String> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return GlassPanel(
+      key: const ValueKey('command-suggestions'),
+      radius: 18,
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 292),
+        child: loading
+            ? const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Row(
+                  children: [
+                    SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.8,
+                        color: AppColors.accent,
+                      ),
+                    ),
+                    SizedBox(width: 10),
+                    Text(
+                      '正在获取 Claude Code 指令',
+                      style: TextStyle(color: AppColors.muted),
+                    ),
+                  ],
+                ),
+              )
+            : commands.isEmpty
+            ? const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Text(
+                  '没有匹配的指令',
+                  style: TextStyle(color: AppColors.muted),
+                ),
+              )
+            : ListView.builder(
+                shrinkWrap: true,
+                padding: EdgeInsets.zero,
+                itemCount: commands.length,
+                itemBuilder: (context, index) {
+                  final command = commands[index];
+                  return ListTile(
+                    dense: true,
+                    visualDensity: VisualDensity.compact,
+                    leading: const Text(
+                      '/',
+                      style: TextStyle(
+                        color: AppColors.accent,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    title: Text(command),
+                    onTap: () => onSelected(command),
+                  );
+                },
+              ),
       ),
     );
   }
@@ -1589,14 +2259,9 @@ class AppBackground extends StatelessWidget {
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFFFAFBFB),
-              Color(0xFFF0F7F8),
-              Color(0xFFF8FAF8),
-              Color(0xFFF4F3F7),
-            ],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFFFAFBFB), Color(0xFFF5F8F8), Color(0xFFF7F7FA)],
           ),
         ),
         child: child,
@@ -1627,14 +2292,14 @@ class GlassPanel extends StatelessWidget {
           width: double.infinity,
           padding: padding,
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.46),
+            color: Colors.white.withValues(alpha: 0.60),
             borderRadius: BorderRadius.circular(radius),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.66)),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.76)),
             boxShadow: [
               BoxShadow(
-                color: AppColors.shadow.withValues(alpha: 0.09),
-                blurRadius: 24,
-                offset: const Offset(0, 10),
+                color: AppColors.shadow.withValues(alpha: 0.055),
+                blurRadius: 18,
+                offset: const Offset(0, 8),
               ),
             ],
           ),
@@ -1959,6 +2624,181 @@ bool hasAssistantReplyAfterLastUser(List<TranscriptMessage> messages) {
       .any((message) => message.role == MessageRole.assistant);
 }
 
+void beginPrompt(List<TranscriptMessage> messages, String text) {
+  messages.add(TranscriptMessage.user(text));
+  mergeRemoteActivity(
+    messages,
+    const RemoteActivity(
+      id: 'thinking',
+      kind: ActivityKind.thinking,
+      state: ActivityState.running,
+    ),
+  );
+}
+
+void mergeRemoteActivity(
+  List<TranscriptMessage> messages,
+  RemoteActivity activity,
+) {
+  if (activity.kind == ActivityKind.summary) return;
+
+  final start =
+      messages.lastIndexWhere((message) => message.role == MessageRole.user) +
+      1;
+
+  if (activity.kind == ActivityKind.tool &&
+      activity.state == ActivityState.running) {
+    finishRunningActivities(
+      messages,
+      ActivityState.done,
+      start: start,
+      kind: ActivityKind.thinking,
+    );
+  }
+  var existingIndex = -1;
+  for (var index = messages.length - 1; index >= start; index--) {
+    if (messages[index].activityId == activity.id) {
+      existingIndex = index;
+      break;
+    }
+  }
+
+  final existing = existingIndex >= 0 ? messages[existingIndex] : null;
+  final toolName = activity.toolName ?? existing?.activityTool;
+  final detail = activity.detail ?? existing?.activityDetail;
+
+  final next = TranscriptMessage.activity(
+    activityLabel(activity.kind, toolName, activity.state),
+    id: activity.id,
+    kind: activity.kind,
+    state: activity.state,
+    tool: toolName,
+    detail: detail,
+  );
+  if (existingIndex >= 0) {
+    messages[existingIndex] = next;
+  } else {
+    messages.add(next);
+  }
+}
+
+void removeCurrentTurnActivities(List<TranscriptMessage> messages) {
+  final start =
+      messages.lastIndexWhere((message) => message.role == MessageRole.user) +
+      1;
+  for (var index = messages.length - 1; index >= start; index--) {
+    if (messages[index].role == MessageRole.activity) {
+      messages.removeAt(index);
+    }
+  }
+}
+
+void finishRunningActivities(
+  List<TranscriptMessage> messages,
+  ActivityState state, {
+  int start = 0,
+  ActivityKind? kind,
+}) {
+  for (var index = start; index < messages.length; index++) {
+    final message = messages[index];
+    if (message.activityState != ActivityState.running ||
+        (kind != null && message.activityKind != kind)) {
+      continue;
+    }
+    messages[index] = TranscriptMessage.activity(
+      activityLabel(message.activityKind!, message.activityTool, state),
+      id: message.activityId!,
+      kind: message.activityKind!,
+      state: state,
+      tool: message.activityTool,
+      detail: message.activityDetail,
+    );
+  }
+}
+
+String activityLabel(ActivityKind kind, String? toolName, ActivityState state) {
+  if (kind == ActivityKind.thinking) {
+    return switch (state) {
+      ActivityState.running => '正在思考',
+      ActivityState.done => '思考完成',
+      ActivityState.error => '思考失败',
+      ActivityState.stopped => '已停止思考',
+    };
+  }
+  if (kind == ActivityKind.summary) {
+    return state == ActivityState.error ? '任务未完成' : '任务完成';
+  }
+
+  final action = switch (toolName) {
+    'Read' => '读取文件',
+    'Edit' => '修改文件',
+    'Write' => '写入文件',
+    'Bash' => '运行命令',
+    'Grep' => '搜索内容',
+    'Glob' => '查找文件',
+    'Task' => '执行子任务',
+    'WebSearch' => '搜索网页',
+    'WebFetch' => '读取网页',
+    final String name when name.isNotEmpty => '调用 $name',
+    _ => '调用工具',
+  };
+  return switch (state) {
+    ActivityState.running => '正在$action',
+    ActivityState.done => '已$action',
+    ActivityState.error => '$action失败',
+    ActivityState.stopped => '已停止$action',
+  };
+}
+
+class RemoteActivity {
+  const RemoteActivity({
+    required this.id,
+    required this.kind,
+    required this.state,
+    this.toolName,
+    this.detail,
+    this.durationMs,
+    this.numTurns,
+    this.permissionDenials,
+  });
+
+  final String id;
+  final ActivityKind kind;
+  final ActivityState state;
+  final String? toolName;
+  final String? detail;
+  final int? durationMs;
+  final int? numTurns;
+  final int? permissionDenials;
+
+  static RemoteActivity? tryParse(Map<String, dynamic> json) {
+    final id = json['id'];
+    final kind = switch (json['kind']) {
+      'thinking' => ActivityKind.thinking,
+      'tool' => ActivityKind.tool,
+      'summary' => ActivityKind.summary,
+      _ => null,
+    };
+    final state = switch (json['state']) {
+      'running' => ActivityState.running,
+      'done' => ActivityState.done,
+      'error' => ActivityState.error,
+      _ => null,
+    };
+    if (id is! String || kind == null || state == null) return null;
+    return RemoteActivity(
+      id: id,
+      kind: kind,
+      state: state,
+      toolName: json['toolName'] as String?,
+      detail: json['detail'] as String?,
+      durationMs: (json['durationMs'] as num?)?.toInt(),
+      numTurns: (json['numTurns'] as num?)?.toInt(),
+      permissionDenials: (json['permissionDenials'] as num?)?.toInt(),
+    );
+  }
+}
+
 class TranscriptSnapshot {
   const TranscriptSnapshot({required this.messages, required this.running});
 
@@ -1995,7 +2835,15 @@ class TranscriptSnapshot {
 }
 
 class TranscriptMessage {
-  const TranscriptMessage(this.role, this.text);
+  const TranscriptMessage(
+    this.role,
+    this.text, {
+    this.activityId,
+    this.activityKind,
+    this.activityState,
+    this.activityTool,
+    this.activityDetail,
+  });
 
   factory TranscriptMessage.user(String text) =>
       TranscriptMessage(MessageRole.user, text);
@@ -2003,12 +2851,41 @@ class TranscriptMessage {
       TranscriptMessage(MessageRole.assistant, text);
   factory TranscriptMessage.system(String text) =>
       TranscriptMessage(MessageRole.system, text);
+  factory TranscriptMessage.activity(
+    String text, {
+    required String id,
+    required ActivityKind kind,
+    required ActivityState state,
+    String? tool,
+    String? detail,
+  }) => TranscriptMessage(
+    MessageRole.activity,
+    text,
+    activityId: id,
+    activityKind: kind,
+    activityState: state,
+    activityTool: tool,
+    activityDetail: detail,
+  );
 
   final MessageRole role;
   final String text;
+  final String? activityId;
+  final ActivityKind? activityKind;
+  final ActivityState? activityState;
+  final String? activityTool;
+  final String? activityDetail;
 
   Map<String, dynamic> toJson() {
-    return {'role': role.name, 'text': text};
+    return {
+      'role': role.name,
+      'text': text,
+      if (activityId != null) 'activityId': activityId,
+      if (activityKind != null) 'activityKind': activityKind!.name,
+      if (activityState != null) 'activityState': activityState!.name,
+      if (activityTool != null) 'activityTool': activityTool,
+      if (activityDetail != null) 'activityDetail': activityDetail,
+    };
   }
 
   static TranscriptMessage fromJson(Map<String, dynamic> json) {
@@ -2016,15 +2893,39 @@ class TranscriptMessage {
       'user' => MessageRole.user,
       'assistant' => MessageRole.assistant,
       'system' => MessageRole.system,
+      'activity' => MessageRole.activity,
       _ => throw const FormatException('bad_transcript_message'),
     };
     final text = json['text'];
     if (text is! String) throw const FormatException('bad_transcript_message');
-    return TranscriptMessage(role, text);
+    if (role != MessageRole.activity) return TranscriptMessage(role, text);
+
+    final id = json['activityId'];
+    final kind = ActivityKind.values.where(
+      (value) => value.name == json['activityKind'],
+    );
+    final state = ActivityState.values.where(
+      (value) => value.name == json['activityState'],
+    );
+    if (id is! String || kind.isEmpty || state.isEmpty) {
+      throw const FormatException('bad_transcript_message');
+    }
+    return TranscriptMessage.activity(
+      text,
+      id: id,
+      kind: kind.first,
+      state: state.first,
+      tool: json['activityTool'] as String?,
+      detail: json['activityDetail'] as String?,
+    );
   }
 }
 
-enum MessageRole { user, assistant, system }
+enum MessageRole { user, assistant, system, activity }
+
+enum ActivityKind { thinking, tool, summary }
+
+enum ActivityState { running, done, error, stopped }
 
 class AppColors {
   static const ink = Color(0xFF172026);
