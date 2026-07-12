@@ -33,6 +33,13 @@ export type ClaudeActivity = {
   permissionDenials?: number;
 };
 
+export type ClaudeSessionInfo = {
+  model?: string;
+  contextWindow?: number;
+  usedTokens?: number;
+  remainingTokens?: number;
+};
+
 type CurrentRun = {
   child: ChildProcessWithoutNullStreams;
   stopped: boolean;
@@ -245,6 +252,31 @@ export function extractClaudeCommands(event: unknown): string[] {
     .sort((a, b) => a.localeCompare(b));
 }
 
+export function extractClaudeSessionInfo(event: unknown): ClaudeSessionInfo | null {
+  if (!isRecord(event)) return null;
+
+  if (event.type === 'system' && event.subtype === 'init' && typeof event.model === 'string') {
+    return { model: event.model };
+  }
+
+  if (event.type !== 'result' || !isRecord(event.modelUsage)) return null;
+  let selected: ClaudeSessionInfo | null = null;
+  for (const [model, value] of Object.entries(event.modelUsage)) {
+    if (!isRecord(value) || typeof value.contextWindow !== 'number') continue;
+    const usedTokens = tokenValue(value.inputTokens)
+      + tokenValue(value.cacheReadInputTokens)
+      + tokenValue(value.cacheCreationInputTokens);
+    const candidate = {
+      model,
+      contextWindow: value.contextWindow,
+      usedTokens,
+      remainingTokens: Math.max(0, value.contextWindow - usedTokens),
+    };
+    if (!selected || usedTokens > (selected.usedTokens ?? 0)) selected = candidate;
+  }
+  return selected;
+}
+
 export async function discoverClaudeCommands(options: ClaudeBridgeOptions): Promise<string[]> {
   const child = spawn(options.claudeBin, [
     '-p',
@@ -338,6 +370,10 @@ function summarizeToolInput(value: unknown): string | undefined {
 
 function truncate(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}…`;
+}
+
+function tokenValue(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

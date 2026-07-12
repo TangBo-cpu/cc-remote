@@ -270,7 +270,7 @@ void main() {
     );
   });
 
-  test('merges thinking, tool progress, and completion summary', () {
+  test('merges thinking and tool progress but ignores completion summary', () {
     final messages = [TranscriptMessage.user('check project')];
 
     mergeRemoteActivity(
@@ -310,11 +310,55 @@ void main() {
       ),
     );
 
-    expect(messages[1].text, '已完成分析');
+    expect(messages[1].text, '思考完成');
     expect(messages[2].text, '已读取文件');
     expect(messages[2].activityState, ActivityState.done);
-    expect(messages[3].text, '任务完成');
-    expect(messages[3].activityDetail, '8.1 秒 · 1 次工具调用 · 2 轮');
+    expect(messages, hasLength(3));
+  });
+
+  test(
+    'completed replies remove current tool activity from the transcript',
+    () {
+      final messages = [
+        TranscriptMessage.user('上一轮'),
+        TranscriptMessage.assistant('上一轮答案'),
+        TranscriptMessage.user('检查项目'),
+        TranscriptMessage.activity(
+          '思考完成',
+          id: 'thinking',
+          kind: ActivityKind.thinking,
+          state: ActivityState.done,
+        ),
+        TranscriptMessage.activity(
+          '已读取文件',
+          id: 'tool-1',
+          kind: ActivityKind.tool,
+          state: ActivityState.done,
+        ),
+        TranscriptMessage.assistant('当前答案'),
+      ];
+
+      removeCurrentTurnActivities(messages);
+
+      expect(messages.map((message) => message.text), [
+        '上一轮',
+        '上一轮答案',
+        '检查项目',
+        '当前答案',
+      ]);
+    },
+  );
+
+  test('sending a prompt immediately adds a thinking activity', () {
+    final messages = <TranscriptMessage>[];
+
+    beginPrompt(messages, '检查项目');
+
+    expect(messages, hasLength(2));
+    expect(messages.first.role, MessageRole.user);
+    expect(messages.first.text, '检查项目');
+    expect(messages.last.activityKind, ActivityKind.thinking);
+    expect(messages.last.activityState, ActivityState.running);
   });
 
   testWidgets('running state does not show a chat progress bar', (
@@ -336,6 +380,9 @@ void main() {
             running: true,
             connected: true,
             offline: false,
+            modelName: 'claude-opus-4-8',
+            contextWindow: 200000,
+            remainingContext: 174919,
             messages: [TranscriptMessage.user('你好')],
             commands: const ['review'],
             promptController: controller,
@@ -352,11 +399,13 @@ void main() {
     );
 
     expect(find.textContaining('运行中'), findsOneWidget);
+    expect(find.text('Opus 4.8'), findsOneWidget);
+    expect(find.text('剩余 175K / 200K'), findsOneWidget);
     expect(find.text('新会话'), findsNothing);
     expect(find.byType(LinearProgressIndicator), findsNothing);
   });
 
-  testWidgets('assistant replies are unframed selectable markdown', (
+  testWidgets('assistant replies use a left aligned markdown bubble', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -375,7 +424,35 @@ void main() {
       find.descendant(of: assistant, matching: find.byType(MarkdownBody)),
       findsOneWidget,
     );
+    expect(find.byKey(const ValueKey('assistant-avatar')), findsOneWidget);
     expect(find.byKey(const ValueKey('user-message')), findsNothing);
+  });
+
+  testWidgets('thinking activity shows animated status and elapsed time', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBlock(
+            message: TranscriptMessage.activity(
+              '正在思考',
+              id: 'thinking',
+              kind: ActivityKind.thinking,
+              state: ActivityState.running,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('thinking-bubble')), findsOneWidget);
+    expect(find.byKey(const ValueKey('thinking-icon')), findsOneWidget);
+    expect(find.text('正在思考'), findsOneWidget);
+    expect(find.text('0 秒'), findsOneWidget);
+
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('1 秒'), findsOneWidget);
   });
 
   testWidgets('tool activity expands to show its target', (tester) async {

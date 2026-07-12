@@ -70,6 +70,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   bool remoteOffline = false;
   String? pausedQrRaw;
   String? pairError;
+  String? modelName;
+  int? contextWindow;
+  int? remainingContext;
   SavedSession? session;
   WebSocketChannel? ws;
   StreamSubscription<dynamic>? wsSubscription;
@@ -118,7 +121,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   Future<void> persistTranscriptSnapshot() {
     final snapshot = TranscriptSnapshot(
-      messages: List.of(messages),
+      messages: messages
+          .where((message) => message.role != MessageRole.activity)
+          .toList(),
       running: running,
     );
     return queueTranscriptWrite(() => transcriptStore.save(snapshot));
@@ -134,7 +139,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     setState(() {
       messages
         ..clear()
-        ..addAll(snapshot.messages);
+        ..addAll(
+          snapshot.messages.where(
+            (message) => message.role != MessageRole.activity,
+          ),
+        );
       running = snapshot.running;
       if (snapshot.running &&
           !messages.any((message) => message.text == interruptedRunMessage)) {
@@ -279,6 +288,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       running = false;
       wsReady = true;
       remoteOffline = false;
+      modelName = 'claude-opus-4-8';
+      contextWindow = 200000;
+      remainingContext = 174919;
       messages.clear();
       commands
         ..clear()
@@ -351,6 +363,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             ..clear()
             ..addAll(items.whereType<String>());
         });
+      case 'session_info':
+        setState(() {
+          modelName = decoded['model'] as String?;
+          contextWindow = (decoded['contextWindow'] as num?)?.toInt();
+          remainingContext = (decoded['remainingTokens'] as num?)?.toInt();
+        });
       case 'activity':
         final activity = RemoteActivity.tryParse(decoded);
         if (activity == null) return;
@@ -359,7 +377,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       case 'done':
         setState(() {
           running = false;
-          finishRunningActivities(messages, ActivityState.done);
+          removeCurrentTurnActivities(messages);
           if (!hasAssistantReplyAfterLastUser(messages)) {
             messages.add(TranscriptMessage.system('本轮没有返回文本，请重试'));
           }
@@ -417,6 +435,17 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   void appendAssistantText(String text) {
     if (text.isEmpty) return;
     setState(() {
+      final start =
+          messages.lastIndexWhere(
+            (message) => message.role == MessageRole.user,
+          ) +
+          1;
+      finishRunningActivities(
+        messages,
+        ActivityState.done,
+        start: start,
+        kind: ActivityKind.thinking,
+      );
       if (messages.isNotEmpty && messages.last.role == MessageRole.assistant) {
         final last = messages.removeLast();
         messages.add(TranscriptMessage.assistant(last.text + text));
@@ -462,7 +491,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     setState(() {
       promptController.clear();
       running = true;
-      messages.add(TranscriptMessage.user(text));
+      beginPrompt(messages, text);
     });
     persistTranscriptSnapshotLater();
     channel.sink.add(jsonEncode({'type': 'prompt', 'text': text}));
@@ -500,6 +529,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
     if (widget.demoMode) {
       setState(() {
+        modelName = null;
+        contextWindow = null;
+        remainingContext = null;
         messages
           ..clear()
           ..add(TranscriptMessage.system('已开启新对话'));
@@ -529,6 +561,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       if (res.statusCode != 200) throw StateError('new_conversation_failed');
       if (!mounted || session != current) return;
       setState(() {
+        modelName = null;
+        contextWindow = null;
+        remainingContext = null;
         messages
           ..clear()
           ..add(TranscriptMessage.system('已开启新对话'));
@@ -560,6 +595,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       wsReady = false;
       remoteOffline = false;
       pausedQrRaw = null;
+      modelName = null;
+      contextWindow = null;
+      remainingContext = null;
       messages.clear();
       commands.clear();
       promptController.clear();
@@ -653,6 +691,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         remoteOffline = false;
         pausedQrRaw = null;
         pairError = null;
+        modelName = null;
+        contextWindow = null;
+        remainingContext = null;
         messages.clear();
         commands.clear();
       });
@@ -685,6 +726,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             running: running,
             connected: wsReady,
             offline: remoteOffline,
+            modelName: modelName,
+            contextWindow: contextWindow,
+            remainingContext: remainingContext,
             messages: messages,
             commands: commands,
             promptController: promptController,
@@ -969,6 +1013,9 @@ class ChatScreen extends StatelessWidget {
     required this.running,
     required this.connected,
     required this.offline,
+    required this.modelName,
+    required this.contextWindow,
+    required this.remainingContext,
     required this.messages,
     required this.commands,
     required this.promptController,
@@ -985,6 +1032,9 @@ class ChatScreen extends StatelessWidget {
   final bool running;
   final bool connected;
   final bool offline;
+  final String? modelName;
+  final int? contextWindow;
+  final int? remainingContext;
   final List<TranscriptMessage> messages;
   final List<String> commands;
   final TextEditingController promptController;
@@ -1009,6 +1059,9 @@ class ChatScreen extends StatelessWidget {
               running: running,
               connected: connected,
               offline: offline,
+              modelName: modelName,
+              contextWindow: contextWindow,
+              remainingContext: remainingContext,
               onReconnect: onReconnect,
               onNewConversation: onNewConversation,
               onLogout: onLogout,
@@ -1046,6 +1099,9 @@ class ConnectionHeader extends StatelessWidget {
     required this.running,
     required this.connected,
     required this.offline,
+    required this.modelName,
+    required this.contextWindow,
+    required this.remainingContext,
     required this.onReconnect,
     required this.onNewConversation,
     required this.onLogout,
@@ -1055,6 +1111,9 @@ class ConnectionHeader extends StatelessWidget {
   final bool running;
   final bool connected;
   final bool offline;
+  final String? modelName;
+  final int? contextWindow;
+  final int? remainingContext;
   final VoidCallback onReconnect;
   final VoidCallback onNewConversation;
   final VoidCallback onLogout;
@@ -1158,10 +1217,86 @@ class ConnectionHeader extends StatelessWidget {
               ),
             ],
           ),
+          if (modelName != null || remainingContext != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(44, 0, 44, 8),
+              child: Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 7,
+                runSpacing: 5,
+                children: [
+                  if (modelName != null)
+                    SessionMetric(
+                      key: const ValueKey('model-metric'),
+                      icon: Icons.smart_toy_outlined,
+                      label: formatModelName(modelName!),
+                    ),
+                  if (remainingContext != null)
+                    SessionMetric(
+                      key: const ValueKey('context-metric'),
+                      icon: Icons.donut_large_rounded,
+                      label: contextWindow == null
+                          ? '剩余 ${formatTokens(remainingContext!)}'
+                          : '剩余 ${formatTokens(remainingContext!)} / ${formatTokens(contextWindow!)}',
+                    ),
+                ],
+              ),
+            ),
         ],
       ),
     );
   }
+}
+
+class SessionMetric extends StatelessWidget {
+  const SessionMetric({super.key, required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: AppColors.accent.withValues(alpha: 0.075),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: AppColors.accent.withValues(alpha: 0.10)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: AppColors.accent),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.muted,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              fontFeatures: [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+String formatModelName(String model) {
+  final match = RegExp(r'^claude-([a-z]+)-(\d+)-(\d+)$').firstMatch(model);
+  if (match == null) return model;
+  final family = match.group(1)!;
+  return '${family[0].toUpperCase()}${family.substring(1)} ${match.group(2)}.${match.group(3)}';
+}
+
+String formatTokens(int tokens) {
+  if (tokens >= 1000000) {
+    final value = tokens / 1000000;
+    return '${value.toStringAsFixed(value >= 10 ? 0 : 1)}M';
+  }
+  if (tokens >= 1000) return '${(tokens / 1000).round()}K';
+  return '$tokens';
 }
 
 Future<void> showSettingsSheet(
@@ -1424,9 +1559,8 @@ class MessageBlock extends StatelessWidget {
 
     final isUser = message.role == MessageRole.user;
     if (!isUser) {
-      return Padding(
-        key: const ValueKey('assistant-message'),
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+      return AssistantBubbleFrame(
+        bubbleKey: const ValueKey('assistant-message'),
         child: MarkdownBody(
           data: message.text,
           selectable: true,
@@ -1507,6 +1641,90 @@ class MessageBlock extends StatelessWidget {
   }
 }
 
+class AssistantBubbleFrame extends StatelessWidget {
+  const AssistantBubbleFrame({
+    super.key,
+    required this.child,
+    this.bubbleKey,
+    this.compact = false,
+  });
+
+  final Widget child;
+  final Key? bubbleKey;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final maxWidth = MediaQuery.sizeOf(context).width * 0.86;
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            key: const ValueKey('assistant-avatar'),
+            width: 30,
+            height: 30,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF178DA5), Color(0xFF4DB5B4)],
+              ),
+              borderRadius: BorderRadius.circular(10),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.accent.withValues(alpha: 0.18),
+                  blurRadius: 12,
+                  offset: const Offset(0, 5),
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.auto_awesome_rounded,
+              size: 16,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(width: 9),
+          Flexible(
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: maxWidth),
+              child: Container(
+                key: bubbleKey,
+                padding: compact
+                    ? const EdgeInsets.fromLTRB(13, 10, 14, 10)
+                    : const EdgeInsets.fromLTRB(15, 13, 15, 13),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.82),
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(7),
+                    topRight: Radius.circular(19),
+                    bottomLeft: Radius.circular(19),
+                    bottomRight: Radius.circular(19),
+                  ),
+                  border: Border.all(
+                    color: AppColors.shadow.withValues(alpha: 0.10),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.shadow.withValues(alpha: 0.06),
+                      blurRadius: 18,
+                      offset: const Offset(0, 7),
+                    ),
+                  ],
+                ),
+                child: child,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class ActivityBlock extends StatelessWidget {
   const ActivityBlock({super.key, required this.message});
 
@@ -1514,6 +1732,43 @@ class ActivityBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (message.activityKind == ActivityKind.thinking) {
+      if (message.activityState == ActivityState.running) {
+        return const AssistantBubbleFrame(
+          bubbleKey: ValueKey('thinking-bubble'),
+          compact: true,
+          child: ThinkingIndicator(),
+        );
+      }
+      return AssistantBubbleFrame(
+        bubbleKey: const ValueKey('thinking-complete'),
+        compact: true,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              message.activityState == ActivityState.error
+                  ? Icons.error_outline_rounded
+                  : Icons.check_rounded,
+              size: 17,
+              color: message.activityState == ActivityState.error
+                  ? AppColors.stop
+                  : AppColors.accent,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              message.text,
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     final detail = message.activityDetail;
     final title = Text(
       message.text,
@@ -1551,9 +1806,47 @@ class ActivityBlock extends StatelessWidget {
       null => const SizedBox.square(dimension: 16),
     };
 
+    if (message.activityKind == ActivityKind.summary) {
+      return Padding(
+        padding: const EdgeInsets.only(left: 39),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 10, 13, 10),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.54),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.shadow.withValues(alpha: 0.08)),
+          ),
+          child: Row(
+            children: [
+              icon,
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    title,
+                    if (detail != null && detail.isNotEmpty) ...[
+                      const SizedBox(height: 3),
+                      Text(
+                        detail,
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     if (detail == null || detail.isEmpty) {
       return Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 5),
+        padding: const EdgeInsets.fromLTRB(39, 5, 5, 5),
         child: Row(
           children: [
             SizedBox(width: 22, child: Center(child: icon)),
@@ -1566,32 +1859,129 @@ class ActivityBlock extends StatelessWidget {
 
     return Theme(
       data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-      child: ExpansionTile(
-        dense: true,
-        visualDensity: VisualDensity.compact,
-        tilePadding: const EdgeInsets.symmetric(horizontal: 5),
-        childrenPadding: const EdgeInsets.fromLTRB(33, 0, 12, 10),
-        leading: SizedBox(width: 22, child: Center(child: icon)),
-        title: title,
-        subtitle: Text(
-          detail,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: AppColors.muted, fontSize: 12),
-        ),
-        shape: const Border(),
-        collapsedShape: const Border(),
-        children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: SelectableText(
+      child: Padding(
+        padding: const EdgeInsets.only(left: 39),
+        child: Container(
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.42),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: AppColors.shadow.withValues(alpha: 0.07)),
+          ),
+          child: ExpansionTile(
+            dense: true,
+            visualDensity: VisualDensity.compact,
+            tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+            childrenPadding: const EdgeInsets.fromLTRB(42, 0, 12, 10),
+            leading: SizedBox(width: 20, child: Center(child: icon)),
+            title: title,
+            subtitle: Text(
               detail,
-              style: const TextStyle(
-                color: AppColors.ink,
-                fontFamily: 'monospace',
-                fontSize: 12,
-                height: 1.45,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+            shape: const Border(),
+            collapsedShape: const Border(),
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SelectableText(
+                  detail,
+                  style: const TextStyle(
+                    color: AppColors.ink,
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    height: 1.45,
+                  ),
+                ),
               ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class ThinkingIndicator extends StatefulWidget {
+  const ThinkingIndicator({super.key});
+
+  @override
+  State<ThinkingIndicator> createState() => _ThinkingIndicatorState();
+}
+
+class _ThinkingIndicatorState extends State<ThinkingIndicator>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController animation;
+  Timer? timer;
+  var elapsedSeconds = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    animation = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 850),
+    )..repeat(reverse: true);
+    timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) setState(() => elapsedSeconds += 1);
+    });
+  }
+
+  @override
+  void dispose() {
+    timer?.cancel();
+    animation.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      liveRegion: true,
+      label: '正在思考，已用 $elapsedSeconds 秒',
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedBuilder(
+            animation: animation,
+            builder: (context, child) {
+              final value = animation.value;
+              return Opacity(
+                opacity: 0.52 + value * 0.48,
+                child: Transform.rotate(
+                  angle: (value - 0.5) * 0.18,
+                  child: Transform.scale(
+                    scale: 0.88 + value * 0.12,
+                    child: child,
+                  ),
+                ),
+              );
+            },
+            child: const Icon(
+              Icons.auto_awesome_rounded,
+              key: ValueKey('thinking-icon'),
+              size: 18,
+              color: AppColors.accent,
+            ),
+          ),
+          const SizedBox(width: 9),
+          const Text(
+            '正在思考',
+            style: TextStyle(
+              color: AppColors.ink,
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(width: 9),
+          Text(
+            '$elapsedSeconds 秒',
+            key: const ValueKey('thinking-elapsed'),
+            style: const TextStyle(
+              color: AppColors.muted,
+              fontSize: 12,
+              fontFeatures: [FontFeature.tabularFigures()],
             ),
           ),
         ],
@@ -2234,10 +2624,24 @@ bool hasAssistantReplyAfterLastUser(List<TranscriptMessage> messages) {
       .any((message) => message.role == MessageRole.assistant);
 }
 
+void beginPrompt(List<TranscriptMessage> messages, String text) {
+  messages.add(TranscriptMessage.user(text));
+  mergeRemoteActivity(
+    messages,
+    const RemoteActivity(
+      id: 'thinking',
+      kind: ActivityKind.thinking,
+      state: ActivityState.running,
+    ),
+  );
+}
+
 void mergeRemoteActivity(
   List<TranscriptMessage> messages,
   RemoteActivity activity,
 ) {
+  if (activity.kind == ActivityKind.summary) return;
+
   final start =
       messages.lastIndexWhere((message) => message.role == MessageRole.user) +
       1;
@@ -2251,10 +2655,6 @@ void mergeRemoteActivity(
       kind: ActivityKind.thinking,
     );
   }
-  if (activity.kind == ActivityKind.summary) {
-    finishRunningActivities(messages, ActivityState.done, start: start);
-  }
-
   var existingIndex = -1;
   for (var index = messages.length - 1; index >= start; index--) {
     if (messages[index].activityId == activity.id) {
@@ -2265,21 +2665,7 @@ void mergeRemoteActivity(
 
   final existing = existingIndex >= 0 ? messages[existingIndex] : null;
   final toolName = activity.toolName ?? existing?.activityTool;
-  var detail = activity.detail ?? existing?.activityDetail;
-  if (activity.kind == ActivityKind.summary) {
-    final toolCount = messages
-        .skip(start)
-        .where((message) => message.activityKind == ActivityKind.tool)
-        .length;
-    final parts = <String>[
-      if (activity.durationMs != null) formatDuration(activity.durationMs!),
-      if (toolCount > 0) '$toolCount 次工具调用',
-      if (activity.numTurns != null) '${activity.numTurns} 轮',
-      if ((activity.permissionDenials ?? 0) > 0)
-        '${activity.permissionDenials} 项权限未批准',
-    ];
-    detail = parts.isEmpty ? null : parts.join(' · ');
-  }
+  final detail = activity.detail ?? existing?.activityDetail;
 
   final next = TranscriptMessage.activity(
     activityLabel(activity.kind, toolName, activity.state),
@@ -2293,6 +2679,17 @@ void mergeRemoteActivity(
     messages[existingIndex] = next;
   } else {
     messages.add(next);
+  }
+}
+
+void removeCurrentTurnActivities(List<TranscriptMessage> messages) {
+  final start =
+      messages.lastIndexWhere((message) => message.role == MessageRole.user) +
+      1;
+  for (var index = messages.length - 1; index >= start; index--) {
+    if (messages[index].role == MessageRole.activity) {
+      messages.removeAt(index);
+    }
   }
 }
 
@@ -2322,10 +2719,10 @@ void finishRunningActivities(
 String activityLabel(ActivityKind kind, String? toolName, ActivityState state) {
   if (kind == ActivityKind.thinking) {
     return switch (state) {
-      ActivityState.running => '正在分析',
-      ActivityState.done => '已完成分析',
-      ActivityState.error => '分析失败',
-      ActivityState.stopped => '已停止分析',
+      ActivityState.running => '正在思考',
+      ActivityState.done => '思考完成',
+      ActivityState.error => '思考失败',
+      ActivityState.stopped => '已停止思考',
     };
   }
   if (kind == ActivityKind.summary) {
@@ -2351,14 +2748,6 @@ String activityLabel(ActivityKind kind, String? toolName, ActivityState state) {
     ActivityState.error => '$action失败',
     ActivityState.stopped => '已停止$action',
   };
-}
-
-String formatDuration(int milliseconds) {
-  final seconds = milliseconds / 1000;
-  final text = seconds < 10
-      ? seconds.toStringAsFixed(1)
-      : seconds.round().toString();
-  return '$text 秒';
 }
 
 class RemoteActivity {

@@ -10,7 +10,9 @@ import {
   discoverClaudeCommands,
   extractClaudeActivities,
   extractClaudeCommands,
+  extractClaudeSessionInfo,
   isMissingConversationError,
+  type ClaudeSessionInfo,
 } from './claudeBridge.js';
 
 const HOST = process.env.HOST || '127.0.0.1';
@@ -28,6 +30,7 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_BODY_BYTES });
 const authedSockets = new Set<WebSocket>();
 let commandCache: string[] = [];
 let commandDiscovery: Promise<string[]> | undefined;
+let sessionInfo: ClaudeSessionInfo = {};
 
 const server = createServer(async (req, res) => {
   try {
@@ -84,6 +87,9 @@ wss.on('connection', ws => {
           send(ws, { type: 'commands', commands: commandCache });
         } else {
           void refreshCommands();
+        }
+        if (Object.keys(sessionInfo).length) {
+          send(ws, { type: 'session_info', ...sessionInfo });
         }
         return true;
       },
@@ -155,7 +161,9 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   if (req.method === 'POST' && url.pathname === '/api/new-conversation') {
     if (bridge.isRunning()) return sendJson(res, 409, { error: 'claude_is_busy' });
     await auth.setClaudeSessionId(undefined);
+    sessionInfo = {};
     broadcast({ type: 'status', authenticated: true, running: false, hasClaudeSessionId: false });
+    broadcast({ type: 'session_info', model: null, contextWindow: null, usedTokens: null, remainingTokens: null });
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -210,6 +218,11 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
       if (commands.length && commands.join('\n') !== commandCache.join('\n')) {
         commandCache = commands;
         broadcast({ type: 'commands', commands });
+      }
+      const nextSessionInfo = extractClaudeSessionInfo(event);
+      if (nextSessionInfo) {
+        sessionInfo = { ...sessionInfo, ...nextSessionInfo };
+        broadcast({ type: 'session_info', ...sessionInfo });
       }
       for (const activity of extractClaudeActivities(event)) {
         broadcast({ type: 'activity', ...activity });

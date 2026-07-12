@@ -4,6 +4,7 @@ import {
   ClaudeBridge,
   extractClaudeActivities,
   extractClaudeCommands,
+  extractClaudeSessionInfo,
   isMissingConversationError,
 } from '../src/claudeBridge.js';
 
@@ -97,4 +98,30 @@ test('extracts sorted invokable commands from Claude init events', () => {
     subtype: 'status',
     skills: ['review'],
   }), []);
+});
+
+test('extracts the active model and exact remaining context', () => {
+  assert.deepEqual(extractClaudeSessionInfo({
+    type: 'system',
+    subtype: 'init',
+    model: 'claude-opus-4-8',
+  }), { model: 'claude-opus-4-8' });
+
+  assert.deepEqual(extractClaudeSessionInfo({
+    type: 'result',
+    modelUsage: {
+      'claude-opus-4-8': {
+        inputTokens: 505,
+        cacheReadInputTokens: 24576,
+        cacheCreationInputTokens: 0,
+        outputTokens: 5,
+        contextWindow: 200000,
+      },
+    },
+  }), {
+    model: 'claude-opus-4-8',
+    contextWindow: 200000,
+    usedTokens: 25081,
+    remainingTokens: 174919,
+  });
 });
