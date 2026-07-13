@@ -266,6 +266,69 @@ void main() {
     ]);
   });
 
+  testWidgets('typing only rebuilds the prompt controls', (tester) async {
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+
+    final shellBefore = tester.widget<AnimatedSwitcher>(
+      find.byType(AnimatedSwitcher),
+    );
+
+    await tester.enterText(find.byType(TextField), 'ping');
+    await tester.pump();
+
+    expect(
+      tester.widget<AnimatedSwitcher>(find.byType(AnimatedSwitcher)),
+      same(shellBefore),
+    );
+    expect(find.byTooltip('发送').hitTestable(), findsOneWidget);
+  });
+
+  testWidgets('keyboard resize keeps rendered messages intact', (tester) async {
+    tester.view.physicalSize = const Size(393, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetViewInsets);
+
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'ping');
+    await tester.pump();
+    await tester.tap(find.byTooltip('发送'));
+    await tester.pumpAndSettle();
+
+    final markdownBefore = tester.widget<MarkdownBody>(
+      find.byType(MarkdownBody),
+    );
+    tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+    await tester.pump();
+
+    expect(
+      tester.widget<MarkdownBody>(find.byType(MarkdownBody)),
+      same(markdownBefore),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('glass panels avoid realtime backdrop blur', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(body: GlassPanel(child: Text('content'))),
+      ),
+    );
+
+    expect(find.byType(BackdropFilter), findsNothing);
+  });
+
   testWidgets('new conversation clears the current transcript', (tester) async {
     await tester.pumpWidget(
       const CcRemoteApp(enableCamera: false, demoMode: true),
@@ -398,7 +461,6 @@ void main() {
                 offline: false,
                 permissionMode: PermissionMode.manual,
                 allowBypassPermissions: false,
-                onChanged: () {},
                 onPermissionModeSelected: (_) {},
                 onCommandSelected: (_) {},
                 onSend: () {},
@@ -439,7 +501,6 @@ void main() {
             offline: false,
             permissionMode: PermissionMode.manual,
             allowBypassPermissions: true,
-            onChanged: () {},
             onPermissionModeSelected: (mode) => selected = mode,
             onCommandSelected: (_) {},
             onSend: () {},
@@ -638,7 +699,6 @@ void main() {
             pendingPermissions: const [],
             respondingPermissionIds: const {},
             promptController: controller,
-            onChanged: () {},
             onFillPrompt: (_) {},
             onReconnect: () {},
             onNewConversation: () {},

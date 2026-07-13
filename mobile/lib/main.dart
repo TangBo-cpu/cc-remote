@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -727,7 +726,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   void fillPrompt(String text) {
     promptController.text = text;
     promptController.selection = TextSelection.collapsed(offset: text.length);
-    setState(() {});
   }
 
   Future<void> logoutDemoDevice() async {
@@ -908,7 +906,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             pendingPermissions: pendingPermissions,
             respondingPermissionIds: respondingPermissionIds,
             promptController: promptController,
-            onChanged: () => setState(() {}),
             onFillPrompt: fillPrompt,
             onReconnect: refreshConnection,
             onNewConversation: beginNewConversation,
@@ -1070,10 +1067,7 @@ class PairScreen extends StatelessWidget {
                       SizedBox(height: 2),
                       Text(
                         '扫描电脑终端里的二维码',
-                        style: TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 13,
-                        ),
+                        style: TextStyle(color: AppColors.muted, fontSize: 13),
                       ),
                     ],
                   ),
@@ -1373,7 +1367,6 @@ class ChatScreen extends StatelessWidget {
     required this.pendingPermissions,
     required this.respondingPermissionIds,
     required this.promptController,
-    required this.onChanged,
     required this.onFillPrompt,
     required this.onReconnect,
     required this.onNewConversation,
@@ -1400,7 +1393,6 @@ class ChatScreen extends StatelessWidget {
   final List<RemotePermissionRequest> pendingPermissions;
   final Set<String> respondingPermissionIds;
   final TextEditingController promptController;
-  final VoidCallback onChanged;
   final ValueChanged<String> onFillPrompt;
   final VoidCallback onReconnect;
   final VoidCallback onNewConversation;
@@ -1414,6 +1406,32 @@ class ChatScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final header = RepaintBoundary(
+      child: ConnectionHeader(
+        session: session,
+        running: running,
+        connected: connected,
+        offline: offline,
+        modelName: modelName,
+        contextWindow: contextWindow,
+        remainingContext: remainingContext,
+        onReconnect: onReconnect,
+        onNewConversation: onNewConversation,
+        onOpenWorkspace: onOpenWorkspace,
+        onLogout: onLogout,
+      ),
+    );
+    final transcript = RepaintBoundary(
+      child: TranscriptView(
+        messages: messages,
+        pendingPermissions: pendingPermissions,
+        respondingPermissionIds: respondingPermissionIds,
+        connected: connected,
+        onFillPrompt: onFillPrompt,
+        onPermissionAllow: onPermissionAllow,
+        onPermissionDeny: onPermissionDeny,
+      ),
+    );
     return LayoutBuilder(
       builder: (context, constraints) {
         final reservedHeight = modelName != null || remainingContext != null
@@ -1427,31 +1445,9 @@ class ChatScreen extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
             child: Column(
               children: [
-                ConnectionHeader(
-                  session: session,
-                  running: running,
-                  connected: connected,
-                  offline: offline,
-                  modelName: modelName,
-                  contextWindow: contextWindow,
-                  remainingContext: remainingContext,
-                  onReconnect: onReconnect,
-                  onNewConversation: onNewConversation,
-                  onOpenWorkspace: onOpenWorkspace,
-                  onLogout: onLogout,
-                ),
+                header,
                 const SizedBox(height: 10),
-                Expanded(
-                  child: TranscriptView(
-                    messages: messages,
-                    pendingPermissions: pendingPermissions,
-                    respondingPermissionIds: respondingPermissionIds,
-                    connected: connected,
-                    onFillPrompt: onFillPrompt,
-                    onPermissionAllow: onPermissionAllow,
-                    onPermissionDeny: onPermissionDeny,
-                  ),
-                ),
+                Expanded(child: transcript),
                 const SizedBox(height: 10),
                 PromptBar(
                   controller: promptController,
@@ -1462,7 +1458,6 @@ class ChatScreen extends StatelessWidget {
                   permissionMode: permissionMode,
                   allowBypassPermissions: allowBypassPermissions,
                   suggestionMaxHeight: suggestionMaxHeight,
-                  onChanged: onChanged,
                   onPermissionModeSelected: onPermissionModeSelected,
                   onCommandSelected: (command) => onFillPrompt('/$command '),
                   onSend: onSend,
@@ -1892,12 +1887,8 @@ class TranscriptView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (messages.isEmpty && pendingPermissions.isEmpty) {
-      final title = connected
-          ? '本机已连接，可以发送任务给 Claude Code'
-          : '等待电脑端连接';
-      final subtitle = connected
-          ? '从下方输入，或先点一个快捷任务'
-          : '恢复连接后即可发送任务';
+      final title = connected ? '本机已连接，可以发送任务给 Claude Code' : '等待电脑端连接';
+      final subtitle = connected ? '从下方输入，或先点一个快捷任务' : '恢复连接后即可发送任务';
       return LayoutBuilder(
         builder: (context, constraints) {
           return SingleChildScrollView(
@@ -1938,9 +1929,7 @@ class TranscriptView extends StatelessWidget {
                               ? Icons.terminal_rounded
                               : Icons.cloud_off_rounded,
                           size: 30,
-                          color: connected
-                              ? AppColors.accent
-                              : AppColors.muted,
+                          color: connected ? AppColors.accent : AppColors.muted,
                         ),
                       ),
                       const SizedBox(height: 18),
@@ -2288,9 +2277,7 @@ class AssistantBubbleFrame extends StatelessWidget {
                     bottomLeft: Radius.circular(AppRadii.bubble),
                     bottomRight: Radius.circular(AppRadii.bubble),
                   ),
-                  border: Border.all(
-                    color: const Color(0x66FFFFFF),
-                  ),
+                  border: Border.all(color: const Color(0x66FFFFFF)),
                   boxShadow: [
                     BoxShadow(
                       color: AppColors.shadow.withValues(alpha: 0.03),
@@ -2625,7 +2612,6 @@ class PromptBar extends StatelessWidget {
     required this.permissionMode,
     required this.allowBypassPermissions,
     this.suggestionMaxHeight = 292,
-    required this.onChanged,
     required this.onPermissionModeSelected,
     required this.onCommandSelected,
     required this.onSend,
@@ -2640,7 +2626,6 @@ class PromptBar extends StatelessWidget {
   final PermissionMode permissionMode;
   final bool allowBypassPermissions;
   final double suggestionMaxHeight;
-  final VoidCallback onChanged;
   final ValueChanged<PermissionMode> onPermissionModeSelected;
   final ValueChanged<String> onCommandSelected;
   final VoidCallback onSend;
@@ -2648,112 +2633,116 @@ class PromptBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final canSend = controller.text.trim().isNotEmpty && !running && connected;
-    final query = commandQuery(controller.text);
-    final matchingCommands = query == null
-        ? const <String>[]
-        : filterCommands(commands, query);
-    final showSuggestions = query != null && !running && connected;
+    return ValueListenableBuilder<TextEditingValue>(
+      valueListenable: controller,
+      builder: (context, value, _) {
+        final canSend = value.text.trim().isNotEmpty && !running && connected;
+        final query = commandQuery(value.text);
+        final matchingCommands = query == null
+            ? const <String>[]
+            : filterCommands(commands, query);
+        final showSuggestions = query != null && !running && connected;
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (showSuggestions) ...[
-          CommandSuggestions(
-            commands: matchingCommands,
-            loading: commands.isEmpty,
-            maxHeight: suggestionMaxHeight,
-            onSelected: onCommandSelected,
-          ),
-          const SizedBox(height: 8),
-        ],
-        Align(
-          alignment: Alignment.centerLeft,
-          child: PermissionModeChip(
-            mode: permissionMode,
-            enabled: !running,
-            onPressed: () => showPermissionModePicker(
-              context,
-              selected: permissionMode,
-              allowBypassPermissions: allowBypassPermissions,
-              onSelected: onPermissionModeSelected,
-            ),
-          ),
-        ),
-        const SizedBox(height: 7),
-        GlassPanel(
-          padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
-          radius: AppRadii.input,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: controller,
-                  enabled: !running,
-                  minLines: 1,
-                  maxLines: 4,
-                  onChanged: (_) => onChanged(),
-                  decoration: InputDecoration(
-                    hintText: running
-                        ? 'Claude 正在输出…'
-                        : connected
-                        ? '输入要发给 Claude Code 的内容'
-                        : offline
-                        ? '电脑端离线，请先重连'
-                        : '正在连接电脑端',
-                    hintStyle: TextStyle(
-                      color: AppColors.muted.withValues(alpha: 0.9),
-                      fontSize: 14,
-                    ),
-                    border: InputBorder.none,
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 12,
-                    ),
-                  ),
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (showSuggestions) ...[
+              CommandSuggestions(
+                commands: matchingCommands,
+                loading: commands.isEmpty,
+                maxHeight: suggestionMaxHeight,
+                onSelected: onCommandSelected,
+              ),
+              const SizedBox(height: 8),
+            ],
+            Align(
+              alignment: Alignment.centerLeft,
+              child: PermissionModeChip(
+                mode: permissionMode,
+                enabled: !running,
+                onPressed: () => showPermissionModePicker(
+                  context,
+                  selected: permissionMode,
+                  allowBypassPermissions: allowBypassPermissions,
+                  onSelected: onPermissionModeSelected,
                 ),
               ),
-              const SizedBox(width: 8),
-              if (running)
-                SizedBox(
-                  height: 40,
-                  child: FilledButton.icon(
-                    onPressed: onStop,
-                    icon: const Icon(Icons.stop_rounded, size: 18),
-                    label: const Text('停止'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.stop,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(AppRadii.pill),
+            ),
+            const SizedBox(height: 7),
+            GlassPanel(
+              padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+              radius: AppRadii.input,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: controller,
+                      enabled: !running,
+                      minLines: 1,
+                      maxLines: 4,
+                      decoration: InputDecoration(
+                        hintText: running
+                            ? 'Claude 正在输出…'
+                            : connected
+                            ? '输入要发给 Claude Code 的内容'
+                            : offline
+                            ? '电脑端离线，请先重连'
+                            : '正在连接电脑端',
+                        hintStyle: TextStyle(
+                          color: AppColors.muted.withValues(alpha: 0.9),
+                          fontSize: 14,
+                        ),
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 12,
+                        ),
                       ),
                     ),
                   ),
-                )
-              else
-                SizedBox(
-                  width: 40,
-                  height: 40,
-                  child: IconButton.filled(
-                    onPressed: canSend ? onSend : null,
-                    icon: const Icon(Icons.send_rounded, size: 18),
-                    tooltip: '发送',
-                    style: IconButton.styleFrom(
-                      backgroundColor: AppColors.accent,
-                      disabledBackgroundColor: const Color(0xFFDCE6EA),
-                      foregroundColor: Colors.white,
-                      fixedSize: const Size.square(40),
-                      shape: const CircleBorder(),
+                  const SizedBox(width: 8),
+                  if (running)
+                    SizedBox(
+                      height: 40,
+                      child: FilledButton.icon(
+                        onPressed: onStop,
+                        icon: const Icon(Icons.stop_rounded, size: 18),
+                        label: const Text('停止'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.stop,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 14),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(AppRadii.pill),
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    SizedBox(
+                      width: 40,
+                      height: 40,
+                      child: IconButton.filled(
+                        onPressed: canSend ? onSend : null,
+                        icon: const Icon(Icons.send_rounded, size: 18),
+                        tooltip: '发送',
+                        style: IconButton.styleFrom(
+                          backgroundColor: AppColors.accent,
+                          disabledBackgroundColor: const Color(0xFFDCE6EA),
+                          foregroundColor: Colors.white,
+                          fixedSize: const Size.square(40),
+                          shape: const CircleBorder(),
+                        ),
+                      ),
                     ),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ],
+                ],
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -3109,10 +3098,7 @@ class AppBackground extends StatelessWidget {
       resizeToAvoidBottomInset: true,
       // Flat cool fog — no vertical hue split, no competing blobs.
       backgroundColor: AppColors.bgMid,
-      body: ColoredBox(
-        color: AppColors.bgMid,
-        child: child,
-      ),
+      body: ColoredBox(color: AppColors.bgMid, child: child),
     );
   }
 }
@@ -3144,51 +3130,46 @@ class GlassPanel extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(radius),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: DecoratedBox(
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(radius),
-              border: Border.all(
-                color: Colors.white.withValues(alpha: 0.62),
-              ),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Colors.white.withValues(alpha: 0.52),
-                  Colors.white.withValues(alpha: 0.34),
-                ],
-              ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.62)),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Colors.white.withValues(alpha: 0.52),
+                Colors.white.withValues(alpha: 0.34),
+              ],
             ),
-            child: Stack(
-              children: [
-                Padding(
-                  padding: padding,
-                  child: SizedBox(width: double.infinity, child: child),
-                ),
-                Positioned(
-                  left: 12,
-                  right: 12,
-                  top: 0,
-                  height: 1,
-                  child: IgnorePointer(
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(1),
-                        gradient: LinearGradient(
-                          colors: [
-                            Colors.white.withValues(alpha: 0.0),
-                            Colors.white.withValues(alpha: 0.55),
-                            Colors.white.withValues(alpha: 0.0),
-                          ],
-                        ),
+          ),
+          child: Stack(
+            children: [
+              Padding(
+                padding: padding,
+                child: SizedBox(width: double.infinity, child: child),
+              ),
+              Positioned(
+                left: 12,
+                right: 12,
+                top: 0,
+                height: 1,
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(1),
+                      gradient: LinearGradient(
+                        colors: [
+                          Colors.white.withValues(alpha: 0.0),
+                          Colors.white.withValues(alpha: 0.55),
+                          Colors.white.withValues(alpha: 0.0),
+                        ],
                       ),
                     ),
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
