@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:cc_remote/main.dart';
+import 'package:cc_remote/notification_service.dart';
 import 'package:cc_remote/workspace_drawer.dart';
 
 void main() {
@@ -45,6 +46,49 @@ void main() {
     expect(restored.messages[3].role, MessageRole.activity);
     expect(restored.messages[3].activityTool, 'Read');
     expect(restored.messages[3].activityDetail, 'mobile/lib/main.dart');
+  });
+
+  test('notification preference defaults on and persists changes', () async {
+    final store = NotificationPreferenceStore();
+    expect(await store.load(), isTrue);
+    await store.save(false);
+    expect(await store.load(), isFalse);
+  });
+
+  test(
+    'background notification controller stays quiet in foreground',
+    () async {
+      final service = FakeBackgroundNotificationService();
+      final controller = BackgroundNotificationController(service: service);
+      const notification = AppNotification(
+        key: 'done-session-1',
+        title: '任务已完成',
+        body: 'cc-remote',
+        sessionId: 'session-1',
+      );
+
+      await controller.notify(notification);
+      expect(service.notifications, isEmpty);
+
+      controller.lifecycleState = AppLifecycleState.paused;
+      await controller.notify(notification);
+      expect(service.notifications, [notification]);
+
+      controller.enabled = false;
+      await controller.notify(notification);
+      expect(service.notifications, hasLength(1));
+    },
+  );
+
+  test('notification body includes project, session and compact detail', () {
+    expect(
+      notificationBody(
+        projectName: 'cc-remote',
+        sessionTitle: '后台通知',
+        detail: '任务\n已经完成',
+      ),
+      'cc-remote · 后台通知\n任务 已经完成',
+    );
   });
 
   test('transcript store round-trip and clear', () async {
@@ -318,8 +362,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('退出配对'), findsOneWidget);
     expect(find.text('重新连接'), findsOneWidget);
+    expect(find.text('后台通知'), findsOneWidget);
     expect(find.text('开启新对话'), findsNothing);
     expect(find.text('扫描电脑终端里的二维码'), findsNothing);
+
+    await tester.tap(
+      find.byKey(const ValueKey('background-notifications-toggle')),
+    );
+    await tester.pumpAndSettle();
+    expect(await NotificationPreferenceStore().load(), isFalse);
 
     await tester.tap(find.text('退出配对'));
     await tester.pumpAndSettle();
@@ -788,11 +839,13 @@ void main() {
             commands: const ['review'],
             permissionMode: PermissionMode.manual,
             allowBypassPermissions: false,
+            notificationsEnabled: true,
             pendingPermissions: const [],
             respondingPermissionIds: const {},
             promptController: controller,
             onFillPrompt: (_) {},
             onReconnect: () {},
+            onNotificationsChanged: (value) async => value,
             onNewConversation: () {},
             onOpenSessions: () {},
             onOpenWorkspace: () {},
@@ -1016,5 +1069,31 @@ class ReviewWorkspaceApi extends WorkspaceApi {
   void close() {
     closed = true;
     super.close();
+  }
+}
+
+class FakeBackgroundNotificationService
+    implements BackgroundNotificationService {
+  final List<AppNotification> notifications = [];
+  ValueChanged<String?>? onTap;
+  bool permissionGranted = true;
+  int cancelCount = 0;
+
+  @override
+  Future<void> initialize({required ValueChanged<String?> onTap}) async {
+    this.onTap = onTap;
+  }
+
+  @override
+  Future<bool> requestPermission() async => permissionGranted;
+
+  @override
+  Future<void> show(AppNotification notification) async {
+    notifications.add(notification);
+  }
+
+  @override
+  Future<void> cancelAll() async {
+    cancelCount += 1;
   }
 }

@@ -6,7 +6,7 @@ CC Remote 的手机端按 Flutter App 做。网页只保留为本地调试入口
 
 这份文档负责约束 App、daemon、协议和实现顺序。视觉和交互以 `docs/mobile-ui-app-design.md` 为准，参考图放在 `docs/mobile-ui-reference/`。
 
-当前仍只服务一台电脑和一个手机 token，但一个 daemon 可以注册多个项目，每个项目可以保存多条 Claude Code 会话。已跑通扫码配对、恢复连接、发送 prompt、流式输出、Stop、Logout、权限审批、独立 transcript 恢复、项目切换、会话切换和工作区只读浏览。多电脑、会话全文搜索、文件上传/下载、推送通知和商店材料仍不进入当前范围。
+当前仍只服务一台电脑和一个手机 token，但一个 daemon 可以注册多个项目，每个项目可以保存多条 Claude Code 会话。已跑通扫码配对、恢复连接、发送 prompt、流式输出、Stop、Logout、权限审批、独立 transcript 恢复、项目切换、会话切换、Android 后台本地通知和工作区只读浏览。多电脑、会话全文搜索、文件上传/下载、FCM 远程推送和商店材料仍不进入当前范围。
 
 ## 产品路径
 

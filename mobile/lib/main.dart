@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'notification_service.dart';
 import 'workspace_drawer.dart';
 
 void main() {
@@ -19,10 +20,14 @@ class CcRemoteApp extends StatelessWidget {
     super.key,
     this.enableCamera = true,
     this.demoMode = false,
+    this.notificationService,
+    this.notificationPreferenceStore,
   });
 
   final bool enableCamera;
   final bool demoMode;
+  final BackgroundNotificationService? notificationService;
+  final NotificationPreferenceStore? notificationPreferenceStore;
 
   @override
   Widget build(BuildContext context) {
@@ -40,7 +45,12 @@ class CcRemoteApp extends StatelessWidget {
           displayColor: AppColors.ink,
         ),
       ),
-      home: DemoShell(enableCamera: enableCamera, demoMode: demoMode),
+      home: DemoShell(
+        enableCamera: enableCamera,
+        demoMode: demoMode,
+        notificationService: notificationService,
+        notificationPreferenceStore: notificationPreferenceStore,
+      ),
     );
   }
 }
@@ -50,10 +60,14 @@ class DemoShell extends StatefulWidget {
     super.key,
     required this.enableCamera,
     required this.demoMode,
+    this.notificationService,
+    this.notificationPreferenceStore,
   });
 
   final bool enableCamera;
   final bool demoMode;
+  final BackgroundNotificationService? notificationService;
+  final NotificationPreferenceStore? notificationPreferenceStore;
 
   @override
   State<DemoShell> createState() => _DemoShellState();
@@ -78,6 +92,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   String? activeSessionId;
   int remoteTranscriptRevision = 0;
   bool allowBypassPermissions = false;
+  bool notificationsEnabled = true;
+  bool notificationsReady = false;
+  bool currentRunFailed = false;
   PermissionMode selectedPermissionMode = PermissionMode.manual;
   PermissionMode activePermissionMode = PermissionMode.manual;
   SavedSession? session;
@@ -94,11 +111,23 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final List<RemotePermissionRequest> pendingPermissions = [];
   final Set<String> respondingPermissionIds = {};
   Future<void> lastTranscriptWrite = Future<void>.value();
+  late final BackgroundNotificationService notificationService;
+  late final NotificationPreferenceStore notificationPreferenceStore;
+  late final BackgroundNotificationController notificationController;
+  String? pendingNotificationSessionId;
 
   @override
   void initState() {
     super.initState();
+    notificationService =
+        widget.notificationService ?? LocalBackgroundNotificationService();
+    notificationPreferenceStore =
+        widget.notificationPreferenceStore ?? NotificationPreferenceStore();
+    notificationController = BackgroundNotificationController(
+      service: notificationService,
+    );
     WidgetsBinding.instance.addObserver(this);
+    unawaited(initializeNotifications());
     bootstrap();
   }
 
@@ -113,8 +142,120 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    notificationController.lifecycleState = state;
     if (state != AppLifecycleState.resumed) return;
+    unawaited(cancelNotifications());
+    openPendingNotificationSession();
     unawaited(refreshConnection());
+  }
+
+  Future<void> initializeNotifications() async {
+    final storedEnabled = await notificationPreferenceStore.load();
+    notificationController.enabled = storedEnabled;
+    if (widget.demoMode) {
+      notificationsEnabled = storedEnabled;
+      notificationsReady = true;
+      return;
+    }
+    var enabled = storedEnabled;
+    try {
+      await notificationService.initialize(onTap: handleNotificationTap);
+      if (enabled) enabled = await notificationService.requestPermission();
+    } catch (_) {
+      enabled = false;
+    }
+    notificationController.enabled = enabled;
+    await notificationPreferenceStore.save(enabled);
+    if (!mounted) return;
+    setState(() {
+      notificationsEnabled = enabled;
+      notificationsReady = true;
+    });
+  }
+
+  Future<void> cancelNotifications() async {
+    if (widget.demoMode) return;
+    try {
+      await notificationService.cancelAll();
+    } catch (_) {}
+  }
+
+  Future<bool> setNotificationsEnabled(bool enabled) async {
+    var next = enabled;
+    if (enabled && !widget.demoMode) {
+      try {
+        next = await notificationService.requestPermission();
+      } catch (_) {
+        next = false;
+      }
+    }
+    notificationController.enabled = next;
+    await notificationPreferenceStore.save(next);
+    if (!next && !widget.demoMode) {
+      try {
+        await notificationService.cancelAll();
+      } catch (_) {}
+    }
+    if (mounted) setState(() => notificationsEnabled = next);
+    return next;
+  }
+
+  void handleNotificationTap(String? payload) {
+    if (payload == null || !payload.startsWith('session:')) return;
+    pendingNotificationSessionId = payload.substring('session:'.length);
+    openPendingNotificationSession();
+  }
+
+  void openPendingNotificationSession() {
+    final sessionId = pendingNotificationSessionId;
+    if (sessionId == null || route != ShellRoute.chat || !wsReady || running) {
+      return;
+    }
+    pendingNotificationSessionId = null;
+    if (sessionId == activeSessionId) return;
+    selectRemoteSession(sessionId);
+  }
+
+  void showBackgroundNotification({
+    required String key,
+    required String title,
+    String? detail,
+  }) {
+    if (!notificationsReady) return;
+    RemoteProjectSummary? project;
+    for (final item in projects) {
+      if (item.id == activeProjectId) project = item;
+    }
+    RemoteSessionSummary? remoteSession;
+    for (final item in remoteSessions) {
+      if (item.id == activeSessionId) remoteSession = item;
+    }
+    unawaited(
+      notificationController
+          .notify(
+            AppNotification(
+              key: key,
+              title: title,
+              body: notificationBody(
+                projectName: project?.name ?? session?.workspaceName,
+                sessionTitle: remoteSession?.title,
+                detail: detail,
+              ),
+              sessionId: activeSessionId,
+            ),
+          )
+          .catchError((_) {}),
+    );
+  }
+
+  String? lastAssistantSnippet() {
+    for (final message in messages.reversed) {
+      if (message.role != MessageRole.assistant) continue;
+      final text = message.text.replaceAll(RegExp(r'\s+'), ' ').trim();
+      if (text.isEmpty) return null;
+      return text.length <= 120 ? text : '${text.substring(0, 120)}…';
+    }
+    return null;
   }
 
   Future<void> queueTranscriptWrite(Future<void> Function() write) {
@@ -411,13 +552,16 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           }
         });
         if (session != null) unawaited(tokenStore.save(session!));
+        openPendingNotificationSession();
       case 'status':
         setState(() {
           wsReady = decoded['authenticated'] == true;
           remoteOffline = false;
           running = decoded['running'] == true;
+          if (running) currentRunFailed = false;
           if (!running) removeInterruptedRunNotice();
         });
+        openPendingNotificationSession();
         persistTranscriptSnapshotLater();
       case 'transcript_snapshot':
         final snapshot = RemoteTranscriptSnapshot.tryParse(decoded);
@@ -470,6 +614,15 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             pendingPermissions.add(request);
           }
         });
+        showBackgroundNotification(
+          key: 'permission-${request.requestId}',
+          title: '需要权限确认',
+          detail:
+              request.description ??
+              request.detail ??
+              request.displayName ??
+              request.toolName,
+        );
       case 'permission_resolved':
         final requestId = decoded['requestId'];
         if (requestId is! String) return;
@@ -513,8 +666,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         setState(() => mergeRemoteActivity(messages, activity));
         persistTranscriptSnapshotLater();
       case 'done':
+        final failed = currentRunFailed;
         setState(() {
           running = false;
+          currentRunFailed = false;
           activePermissionMode = PermissionMode.manual;
           pendingPermissions.clear();
           respondingPermissionIds.clear();
@@ -523,28 +678,45 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             messages.add(TranscriptMessage.system('本轮没有返回文本，请重试'));
           }
         });
+        if (!failed) {
+          showBackgroundNotification(
+            key: 'done-${activeSessionId ?? 'current'}',
+            title: '任务已完成',
+            detail: lastAssistantSnippet(),
+          );
+        }
         persistTranscriptSnapshotLater();
       case 'stopped':
         setState(() {
           running = false;
+          currentRunFailed = false;
           activePermissionMode = PermissionMode.manual;
           pendingPermissions.clear();
           respondingPermissionIds.clear();
           finishRunningActivities(messages, ActivityState.stopped);
           messages.add(TranscriptMessage.system('已停止'));
         });
+        showBackgroundNotification(
+          key: 'stopped-${activeSessionId ?? 'current'}',
+          title: '任务已停止',
+        );
         persistTranscriptSnapshotLater();
       case 'error':
+        final errorMessage = decoded['message']?.toString() ?? '未知错误';
         setState(() {
           running = false;
+          currentRunFailed = true;
           activePermissionMode = PermissionMode.manual;
           pendingPermissions.clear();
           respondingPermissionIds.clear();
           finishRunningActivities(messages, ActivityState.error);
-          messages.add(
-            TranscriptMessage.system('错误：${decoded['message'] ?? '未知错误'}'),
-          );
+          messages.add(TranscriptMessage.system('错误：$errorMessage'));
         });
+        showBackgroundNotification(
+          key: 'error-${activeSessionId ?? 'current'}',
+          title: '任务执行失败',
+          detail: errorMessage,
+        );
         persistTranscriptSnapshotLater();
     }
   }
@@ -648,6 +820,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     setState(() {
       promptController.clear();
       running = true;
+      currentRunFailed = false;
       activePermissionMode = selectedPermissionMode;
       beginPrompt(messages, text);
       if (selectedPermissionMode == PermissionMode.bypassPermissions) {
@@ -1015,11 +1188,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
                 ? activePermissionMode
                 : selectedPermissionMode,
             allowBypassPermissions: allowBypassPermissions,
+            notificationsEnabled: notificationsEnabled,
             pendingPermissions: pendingPermissions,
             respondingPermissionIds: respondingPermissionIds,
             promptController: promptController,
             onFillPrompt: fillPrompt,
             onReconnect: refreshConnection,
+            onNotificationsChanged: setNotificationsEnabled,
             onNewConversation: beginNewConversation,
             onOpenSessions: openSessions,
             onOpenWorkspace: openWorkspace,
@@ -1477,11 +1652,13 @@ class ChatScreen extends StatelessWidget {
     required this.commands,
     required this.permissionMode,
     required this.allowBypassPermissions,
+    required this.notificationsEnabled,
     required this.pendingPermissions,
     required this.respondingPermissionIds,
     required this.promptController,
     required this.onFillPrompt,
     required this.onReconnect,
+    required this.onNotificationsChanged,
     required this.onNewConversation,
     required this.onOpenSessions,
     required this.onOpenWorkspace,
@@ -1504,11 +1681,13 @@ class ChatScreen extends StatelessWidget {
   final List<String> commands;
   final PermissionMode permissionMode;
   final bool allowBypassPermissions;
+  final bool notificationsEnabled;
   final List<RemotePermissionRequest> pendingPermissions;
   final Set<String> respondingPermissionIds;
   final TextEditingController promptController;
   final ValueChanged<String> onFillPrompt;
   final VoidCallback onReconnect;
+  final Future<bool> Function(bool) onNotificationsChanged;
   final VoidCallback onNewConversation;
   final VoidCallback onOpenSessions;
   final VoidCallback onOpenWorkspace;
@@ -1530,7 +1709,9 @@ class ChatScreen extends StatelessWidget {
         modelName: modelName,
         contextWindow: contextWindow,
         remainingContext: remainingContext,
+        notificationsEnabled: notificationsEnabled,
         onReconnect: onReconnect,
+        onNotificationsChanged: onNotificationsChanged,
         onNewConversation: onNewConversation,
         onOpenSessions: onOpenSessions,
         onOpenWorkspace: onOpenWorkspace,
@@ -1598,7 +1779,9 @@ class ConnectionHeader extends StatelessWidget {
     required this.modelName,
     required this.contextWindow,
     required this.remainingContext,
+    required this.notificationsEnabled,
     required this.onReconnect,
+    required this.onNotificationsChanged,
     required this.onNewConversation,
     required this.onOpenSessions,
     required this.onOpenWorkspace,
@@ -1612,7 +1795,9 @@ class ConnectionHeader extends StatelessWidget {
   final String? modelName;
   final int? contextWindow;
   final int? remainingContext;
+  final bool notificationsEnabled;
   final VoidCallback onReconnect;
+  final Future<bool> Function(bool) onNotificationsChanged;
   final VoidCallback onNewConversation;
   final VoidCallback onOpenSessions;
   final VoidCallback onOpenWorkspace;
@@ -1734,7 +1919,9 @@ class ConnectionHeader extends StatelessWidget {
                       onPressed: () => showSettingsSheet(
                         context,
                         session,
+                        notificationsEnabled,
                         onReconnect,
+                        onNotificationsChanged,
                         onLogout,
                       ),
                       icon: const Icon(Icons.more_horiz_rounded, size: 23),
@@ -1830,7 +2017,9 @@ String formatTokens(int tokens) {
 Future<void> showSettingsSheet(
   BuildContext context,
   SavedSession? session,
+  bool notificationsEnabled,
   VoidCallback onReconnect,
+  Future<bool> Function(bool) onNotificationsChanged,
   VoidCallback onLogout,
 ) {
   return showModalBottomSheet<void>(
@@ -1839,7 +2028,9 @@ Future<void> showSettingsSheet(
     backgroundColor: Colors.transparent,
     builder: (context) => SettingsSheet(
       session: session,
+      notificationsEnabled: notificationsEnabled,
       onReconnect: onReconnect,
+      onNotificationsChanged: onNotificationsChanged,
       onLogout: onLogout,
     ),
   );
@@ -2020,17 +2211,43 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
   }
 }
 
-class SettingsSheet extends StatelessWidget {
+class SettingsSheet extends StatefulWidget {
   const SettingsSheet({
     super.key,
     required this.session,
+    required this.notificationsEnabled,
     required this.onReconnect,
+    required this.onNotificationsChanged,
     required this.onLogout,
   });
 
   final SavedSession? session;
+  final bool notificationsEnabled;
   final VoidCallback onReconnect;
+  final Future<bool> Function(bool) onNotificationsChanged;
   final VoidCallback onLogout;
+
+  @override
+  State<SettingsSheet> createState() => _SettingsSheetState();
+}
+
+class _SettingsSheetState extends State<SettingsSheet> {
+  late bool notificationsEnabled = widget.notificationsEnabled;
+  bool changingNotifications = false;
+
+  Future<void> changeNotifications(bool value) async {
+    if (changingNotifications) return;
+    setState(() {
+      changingNotifications = true;
+      notificationsEnabled = value;
+    });
+    final accepted = await widget.onNotificationsChanged(value);
+    if (!mounted) return;
+    setState(() {
+      changingNotifications = false;
+      notificationsEnabled = accepted;
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2062,15 +2279,28 @@ class SettingsSheet extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 8),
-              InfoRow(label: '电脑', value: session?.deviceName ?? 'Jayson PC'),
+              InfoRow(
+                label: '电脑',
+                value: widget.session?.deviceName ?? 'Jayson PC',
+              ),
               InfoRow(
                 label: '服务',
                 value:
-                    session?.origin.toString() ?? 'https://tbhaoshuai.ccwu.cc',
+                    widget.session?.origin.toString() ??
+                    'https://tbhaoshuai.ccwu.cc',
               ),
               InfoRow(
                 label: '目录',
-                value: session?.workspaceName ?? 'cc-remote',
+                value: widget.session?.workspaceName ?? 'cc-remote',
+              ),
+              SwitchListTile(
+                key: const ValueKey('background-notifications-toggle'),
+                contentPadding: EdgeInsets.zero,
+                value: notificationsEnabled,
+                onChanged: changingNotifications ? null : changeNotifications,
+                secondary: const Icon(Icons.notifications_active_outlined),
+                title: const Text('后台通知'),
+                subtitle: const Text('任务完成、失败或等待权限时提醒'),
               ),
               const SizedBox(height: 14),
               SizedBox(
@@ -2078,7 +2308,7 @@ class SettingsSheet extends StatelessWidget {
                 child: OutlinedButton.icon(
                   onPressed: () {
                     Navigator.pop(context);
-                    onReconnect();
+                    widget.onReconnect();
                   },
                   icon: const Icon(Icons.refresh_rounded),
                   label: const Text('重新连接'),
@@ -2098,7 +2328,7 @@ class SettingsSheet extends StatelessWidget {
               SizedBox(
                 width: double.infinity,
                 child: FilledButton.icon(
-                  onPressed: () => confirmLogout(context, onLogout),
+                  onPressed: () => confirmLogout(context, widget.onLogout),
                   icon: const Icon(Icons.link_off_rounded),
                   label: const Text('退出配对'),
                   style: FilledButton.styleFrom(
