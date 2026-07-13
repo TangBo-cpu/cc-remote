@@ -919,6 +919,63 @@ void main() {
     expect(find.byType(LinearProgressIndicator), findsNothing);
   });
 
+  testWidgets('attachment upload blocks conversation navigation', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    var openedSessions = false;
+    var createdConversation = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AppBackground(
+          child: ChatScreen(
+            session: SavedSession(
+              origin: Uri.parse('https://tbhaoshuai.ccwu.cc'),
+              token: 'demo',
+              deviceName: 'tb',
+              workspaceDir: 'cc-remote',
+            ),
+            running: false,
+            uploadingAttachments: true,
+            connected: true,
+            offline: false,
+            modelName: null,
+            contextWindow: null,
+            remainingContext: null,
+            messages: const [],
+            commands: const [],
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: false,
+            notificationsEnabled: true,
+            pendingPermissions: const [],
+            respondingPermissionIds: const {},
+            promptController: controller,
+            onFillPrompt: (_) {},
+            onReconnect: () {},
+            onNotificationsChanged: (value) async => value,
+            onNewConversation: () => createdConversation = true,
+            onOpenSessions: () => openedSessions = true,
+            onOpenWorkspace: () {},
+            onPermissionModeSelected: (_) {},
+            onPermissionAllow: (_) {},
+            onPermissionDeny: (_) {},
+            onSend: () {},
+            onStop: () {},
+            onLogout: () {},
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byTooltip('项目与会话'));
+    await tester.tap(find.byTooltip('新对话'));
+
+    expect(openedSessions, isFalse);
+    expect(createdConversation, isFalse);
+  });
+
   testWidgets('assistant replies use a left aligned markdown bubble', (
     tester,
   ) async {

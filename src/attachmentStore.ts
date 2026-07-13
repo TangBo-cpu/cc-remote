@@ -131,6 +131,25 @@ export class AttachmentStore {
     return createReadStream(attachment.path);
   }
 
+  async remove(attachment: StoredAttachment): Promise<void> {
+    const projectId = safeId(attachment.projectId);
+    const sessionId = safeId(attachment.sessionId);
+    const attachmentId = safeId(attachment.id);
+    const directory = this.sessionDirectory(projectId, sessionId);
+    const storedPath = resolve(attachment.path);
+    if (!storedPath.startsWith(directory + sep)) throw new Error('invalid_attachment_path');
+    await Promise.all([
+      rm(storedPath, { force: true }),
+      rm(this.metadataPath(projectId, sessionId, attachmentId), { force: true }),
+    ]);
+  }
+
+  async removeMany(storedAttachments: StoredAttachment[]): Promise<void> {
+    await Promise.all(
+      storedAttachments.map(attachment => this.remove(attachment).catch(() => undefined)),
+    );
+  }
+
   sessionDirectory(projectId: string, sessionId: string): string {
     const directory = resolve(this.rootDir, safeId(projectId), safeId(sessionId));
     const root = resolve(this.rootDir);
@@ -204,8 +223,13 @@ function materialize(directory: string, metadata: StoredAttachmentMetadata): Sto
 async function writeMetadata(path: string, metadata: StoredAttachmentMetadata): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const temp = `${path}.${process.pid}.tmp`;
-  await writeFile(temp, JSON.stringify(metadata, null, 2) + '\n', 'utf8');
-  await rename(temp, path);
+  try {
+    await writeFile(temp, JSON.stringify(metadata, null, 2) + '\n', 'utf8');
+    await rename(temp, path);
+  } catch (error) {
+    await rm(temp, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 function isMetadata(value: unknown): value is StoredAttachmentMetadata {

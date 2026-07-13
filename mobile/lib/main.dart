@@ -1009,7 +1009,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   Future<void> beginNewConversation() async {
-    if (running) return;
+    if (running || uploadingAttachments) return;
 
     if (widget.demoMode) {
       setState(() {
@@ -1170,28 +1170,28 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   void openSessions() {
-    if (projects.isEmpty) return;
+    if (projects.isEmpty || uploadingAttachments) return;
     showSessionNavigator(
       context,
       projects: projects,
       sessions: remoteSessions,
       activeProjectId: activeProjectId,
       activeSessionId: activeSessionId,
-      running: running,
+      running: running || uploadingAttachments,
       onSelect: selectRemoteSession,
       onCreate: createRemoteSession,
     );
   }
 
   void selectRemoteSession(String sessionId) {
-    if (running || sessionId == activeSessionId) return;
+    if (running || uploadingAttachments || sessionId == activeSessionId) return;
     ws?.sink.add(
       jsonEncode({'type': 'select_session', 'sessionId': sessionId}),
     );
   }
 
   Future<void> createRemoteSession(String projectId) async {
-    if (running) return;
+    if (running || uploadingAttachments) return;
     final current = session;
     if (current == null) return;
     try {
@@ -1842,6 +1842,7 @@ class ChatScreen extends StatelessWidget {
       child: ConnectionHeader(
         session: session,
         running: running,
+        uploadingAttachments: uploadingAttachments,
         connected: connected,
         offline: offline,
         modelName: modelName,
@@ -1918,6 +1919,7 @@ class ConnectionHeader extends StatelessWidget {
     super.key,
     required this.session,
     required this.running,
+    required this.uploadingAttachments,
     required this.connected,
     required this.offline,
     required this.modelName,
@@ -1934,6 +1936,7 @@ class ConnectionHeader extends StatelessWidget {
 
   final SavedSession? session;
   final bool running;
+  final bool uploadingAttachments;
   final bool connected;
   final bool offline;
   final String? modelName;
@@ -1951,6 +1954,8 @@ class ConnectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     final statusLabel = running
         ? '运行中'
+        : uploadingAttachments
+        ? '上传中'
         : connected
         ? '已连接'
         : offline
@@ -1977,7 +1982,7 @@ class ConnectionHeader extends StatelessWidget {
                 child: Row(
                   children: [
                     IconButton(
-                      onPressed: onOpenSessions,
+                      onPressed: uploadingAttachments ? null : onOpenSessions,
                       constraints: const BoxConstraints.tightFor(
                         width: 44,
                         height: 44,
@@ -2048,7 +2053,7 @@ class ConnectionHeader extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
                     IconButton(
-                      onPressed: connected && !running
+                      onPressed: connected && !running && !uploadingAttachments
                           ? onNewConversation
                           : null,
                       constraints: const BoxConstraints.tightFor(

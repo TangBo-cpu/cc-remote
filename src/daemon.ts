@@ -2,7 +2,6 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { hostname } from 'node:os';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
-import Busboy from 'busboy';
 import qrcode from 'qrcode-terminal';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createAuthState } from './authState.js';
@@ -14,12 +13,11 @@ import {
 import { WorkspaceService } from './workspaceService.js';
 import {
   AttachmentStore,
-  MAX_ATTACHMENT_BYTES,
-  MAX_ATTACHMENTS_PER_PROMPT,
   attachmentDescriptor,
   promptWithAttachments,
   type StoredAttachment,
 } from './attachmentStore.js';
+import { readAttachments } from './attachmentUpload.js';
 import {
   ClaudeBridge,
   discoverClaudeCommands,
@@ -272,7 +270,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     const context = projectSessions.getSession(decodeURIComponent(uploadAttachmentsMatch[1]));
     if (!context) return sendJson(res, 404, { error: 'session_not_found' });
     try {
-      const saved = await readAttachments(req, context);
+      const saved = await readAttachments(req, {
+        projectId: context.project.id,
+        sessionId: context.session.id,
+      }, attachments);
       sendJson(res, 201, { attachments: saved.map(attachmentDescriptor) });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -532,62 +533,6 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     hasClaudeSessionId: Boolean(runContext.transcript.snapshot().claudeSessionId),
   }, runContext));
   broadcastCatalog();
-}
-
-function readAttachments(req: IncomingMessage, context: SessionContext): Promise<StoredAttachment[]> {
-  return new Promise((resolve, reject) => {
-    let parser: ReturnType<typeof Busboy>;
-    try {
-      parser = Busboy({
-        headers: req.headers,
-        limits: {
-          files: MAX_ATTACHMENTS_PER_PROMPT,
-          fileSize: MAX_ATTACHMENT_BYTES,
-          fields: 0,
-          parts: MAX_ATTACHMENTS_PER_PROMPT,
-        },
-      });
-    } catch {
-      reject(new Error('invalid_multipart'));
-      return;
-    }
-
-    const writes: Promise<StoredAttachment>[] = [];
-    let settled = false;
-    const fail = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      reject(error);
-    };
-
-    parser.on('file', (fieldName, file, info) => {
-      if (fieldName !== 'files') {
-        file.resume();
-        return;
-      }
-      file.on('limit', () => file.destroy(new Error('attachment_too_large')));
-      writes.push(attachments.save({
-        projectId: context.project.id,
-        sessionId: context.session.id,
-        name: info.filename,
-        mimeType: info.mimeType,
-        input: file,
-      }));
-    });
-    parser.on('filesLimit', () => fail(new Error('too_many_attachments')));
-    parser.on('partsLimit', () => fail(new Error('too_many_attachments')));
-    parser.on('error', error => fail(error instanceof Error ? error : new Error(String(error))));
-    parser.on('finish', () => {
-      if (settled) return;
-      void Promise.all(writes).then(saved => {
-        if (!saved.length) throw new Error('attachment_required');
-        settled = true;
-        resolve(saved);
-      }).catch(error => fail(error instanceof Error ? error : new Error(String(error))));
-    });
-    req.on('aborted', () => fail(new Error('upload_aborted')));
-    req.pipe(parser);
-  });
 }
 
 function redactAttachmentPaths(
