@@ -19,6 +19,8 @@
 - [x] Claude bridge 对重复 `session_id` 去重，避免同一轮 prompt 重复写状态
 - [x] `POST /api/new-conversation` 可清空当前 `claudeSessionId`
 - [x] 电脑端使用 `cc-remote` 一键启动
+- [x] 单 daemon 注册多个项目，并在重复执行 `cc-remote` 时切换当前项目
+- [x] 项目下创建多条独立会话，每条会话独立保存 Claude session 和 transcript
 
 ### Flutter App
 
@@ -60,6 +62,8 @@
 - [x] `bypassPermissions` 默认开启，可用 `-DisableBypassPermissions` 关闭；手机确认后只对单次任务生效
 - [x] 左侧工作区抽屉：浏览文件、查看 Git 修改和 diff
 - [x] daemon 提供只读 `GET /api/workspace`、`/api/workspace/file`、`/api/workspace/diff`
+- [x] 手机端项目与会话切换面板
+- [x] 新会话、会话恢复和旧单会话 transcript 自动迁移
 
 ### 文档和保存点
 
@@ -131,11 +135,10 @@
 ## 已知限制
 
 - [ ] 只有单设备授权态，没有多设备管理
-- [ ] 只有单项目工作目录，通过 `WORKSPACE_DIR` 固定
+- [x] 多项目注册与切换
 - [ ] 网页/PWA 只作为调试壳，不是主产品入口
 - [ ] 没有文件上传/下载；工作区只读，不提供远程编辑/暂存/提交
-- [ ] 没有多会话历史列表和搜索
-- [ ] 当前只持久化一份当前对话（App 本地缓存 + daemon 权威快照）
+- [ ] 会话列表已有，尚未提供全文搜索、归档和删除
 
 ## 后续可加
 

@@ -5,7 +5,11 @@ import { extname, join } from 'node:path';
 import qrcode from 'qrcode-terminal';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createAuthState } from './authState.js';
-import { createTranscriptState } from './transcriptState.js';
+import { createLocalControlState } from './localControlState.js';
+import {
+  createProjectSessionState,
+  type SessionContext,
+} from './projectSessionState.js';
 import { WorkspaceService } from './workspaceService.js';
 import {
   ClaudeBridge,
@@ -31,26 +35,24 @@ const MAX_BODY_BYTES = 64 * 1024;
 
 const publicUrl = new URL(PUBLIC_ORIGIN);
 const auth = await createAuthState();
-const transcript = await createTranscriptState();
-const workspace = new WorkspaceService(WORKSPACE_DIR);
-const bridge = new ClaudeBridge({
-  claudeBin: CLAUDE_BIN,
-  workspaceDir: WORKSPACE_DIR,
-  allowBypassPermissions: ALLOW_BYPASS_PERMISSIONS,
-});
+const localControl = await createLocalControlState();
+const projectSessions = await createProjectSessionState({ initialWorkspace: WORKSPACE_DIR });
+let activeContext = projectSessions.active();
+let workspace = new WorkspaceService(activeContext.project.path);
+let bridge = createBridge(activeContext.project.path);
 const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_BODY_BYTES });
 const authedSockets = new Set<WebSocket>();
-let commandCache: string[] = [];
-let commandDiscovery: Promise<string[]> | undefined;
-let sessionInfo: ClaudeSessionInfo = transcript.snapshot().sessionInfo;
+const commandCaches = new Map<string, string[]>();
+const commandDiscoveries = new Map<string, Promise<string[]>>();
+let sessionInfo: ClaudeSessionInfo = activeContext.transcript.snapshot().sessionInfo;
 if (!Object.keys(sessionInfo).length) {
   const restoredSessionInfo = await restoreClaudeSessionInfo({
-    sessionId: auth.getClaudeSessionId() || '',
+    sessionId: activeContext.transcript.snapshot().claudeSessionId || '',
   });
   if (restoredSessionInfo) {
     sessionInfo = restoredSessionInfo;
-    transcript.setSessionInfo(restoredSessionInfo);
-    await transcript.flush();
+    activeContext.transcript.setSessionInfo(restoredSessionInfo);
+    await activeContext.transcript.flush();
   }
 }
 
@@ -105,15 +107,20 @@ wss.on('connection', ws => {
         authGeneration = auth.getAuthGeneration();
         authedSockets.add(ws);
         sendStatus(ws, true);
-        if (commandCache.length) {
-          send(ws, { type: 'commands', commands: commandCache });
+        send(ws, { type: 'catalog', ...projectSessions.catalog() });
+        const commands = commandCaches.get(activeContext.project.id) || [];
+        if (commands.length) {
+          send(ws, sessionMessage({ type: 'commands', commands }));
         } else {
           void refreshCommands();
         }
         if (Object.keys(sessionInfo).length) {
-          send(ws, { type: 'session_info', ...sessionInfo });
+          send(ws, sessionMessage({ type: 'session_info', ...sessionInfo }));
         }
-        send(ws, { type: 'transcript_snapshot', ...transcript.snapshot() });
+        send(ws, sessionMessage({
+          type: 'transcript_snapshot',
+          ...activeContext.transcript.snapshot(),
+        }));
         send(ws, { type: 'permission_capabilities', allowBypassPermissions: ALLOW_BYPASS_PERMISSIONS });
         return true;
       },
@@ -127,7 +134,7 @@ server.listen(PORT, HOST, () => {
   const pairPayload = auth.createPairingPayload(PUBLIC_ORIGIN, DEVICE_NAME);
   const pairQr = JSON.stringify(pairPayload);
   console.log(`CC Remote listening on http://${HOST}:${PORT}`);
-  console.log(`Workspace: ${WORKSPACE_DIR}`);
+  console.log(`Workspace: ${activeContext.project.path}`);
   console.log(`Public origin: ${PUBLIC_ORIGIN}`);
   console.log(`Device name: ${DEVICE_NAME}`);
   console.log('Scan this QR with the CC Remote mobile app:');
@@ -140,7 +147,25 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   res.setHeader('Cache-Control', 'no-store');
 
   if (req.method === 'GET' && url.pathname === '/api/health') {
-    sendJson(res, 200, { ok: true });
+    sendJson(res, 200, { ok: true, service: 'cc-remote' });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/local/projects/register') {
+    if (!localControl.verify(headerValue(req, 'x-cc-remote-local-token'))) {
+      sendJson(res, 401, { error: 'invalid_local_control_token' });
+      return;
+    }
+    if (bridge.isRunning()) {
+      sendJson(res, 409, { error: 'claude_is_busy' });
+      return;
+    }
+    const body = await readJson<{ path?: string; name?: string }>(req);
+    if (!body.path) return sendJson(res, 400, { error: 'workspace_required' });
+    await projectSessions.registerProject(body.path, body.name);
+    await selectActiveSession(projectSessions.active());
+    broadcastCatalog();
+    sendJson(res, 200, { ok: true, ...projectSessions.catalog() });
     return;
   }
 
@@ -169,9 +194,62 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       authorized: true,
       running: bridge.isRunning(),
       deviceName: DEVICE_NAME,
-      workspaceDir: WORKSPACE_DIR,
+      workspaceDir: activeContext.project.path,
+      activeProjectId: activeContext.project.id,
+      activeSessionId: activeContext.session.id,
       sessionInfo,
+      catalog: projectSessions.catalog(),
       ...auth.status(),
+      hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
+    });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/projects') {
+    sendJson(res, 200, projectSessions.catalog());
+    return;
+  }
+
+  const createSessionMatch = req.method === 'POST'
+    ? url.pathname.match(/^\/api\/projects\/([^/]+)\/sessions$/)
+    : null;
+  if (createSessionMatch) {
+    if (bridge.isRunning()) return sendJson(res, 409, { error: 'claude_is_busy' });
+    const context = await projectSessions.createSession(decodeURIComponent(createSessionMatch[1]));
+    await selectActiveSession(context);
+    broadcastCatalog();
+    sendJson(res, 201, {
+      ok: true,
+      projectId: context.project.id,
+      sessionId: context.session.id,
+      catalog: projectSessions.catalog(),
+    });
+    return;
+  }
+
+  const selectSessionMatch = req.method === 'POST'
+    ? url.pathname.match(/^\/api\/sessions\/([^/]+)\/select$/)
+    : null;
+  if (selectSessionMatch) {
+    if (bridge.isRunning()) return sendJson(res, 409, { error: 'claude_is_busy' });
+    const context = await projectSessions.selectSession(decodeURIComponent(selectSessionMatch[1]));
+    await selectActiveSession(context);
+    broadcastActiveSession();
+    sendJson(res, 200, { ok: true, ...projectSessions.catalog() });
+    return;
+  }
+
+  const sessionMatch = req.method === 'GET'
+    ? url.pathname.match(/^\/api\/sessions\/([^/]+)$/)
+    : null;
+  if (sessionMatch) {
+    const context = projectSessions.getSession(decodeURIComponent(sessionMatch[1]));
+    if (!context) return sendJson(res, 404, { error: 'session_not_found' });
+    sendJson(res, 200, {
+      projectId: context.project.id,
+      sessionId: context.session.id,
+      title: context.session.title,
+      transcript: context.transcript.snapshot(),
     });
     return;
   }
@@ -203,20 +281,23 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 
   if (req.method === 'POST' && url.pathname === '/api/new-conversation') {
     if (bridge.isRunning()) return sendJson(res, 409, { error: 'claude_is_busy' });
+    const context = await projectSessions.createSession(activeContext.project.id);
     await auth.setClaudeSessionId(undefined);
-    await transcript.clear();
-    sessionInfo = {};
-    broadcast({ type: 'status', authenticated: true, running: false, hasClaudeSessionId: false });
-    broadcast({ type: 'session_info', model: null, contextWindow: null, usedTokens: null, remainingTokens: null });
-    broadcast({ type: 'transcript_snapshot', ...transcript.snapshot() });
-    sendJson(res, 200, { ok: true });
+    await selectActiveSession(context);
+    broadcastActiveSession();
+    sendJson(res, 200, { ok: true, sessionId: context.session.id });
     return;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/stop') {
     const stopped = bridge.stop();
-    if (stopped) await transcript.finishStopped();
-    broadcast({ type: stopped ? 'stopped' : 'status', authenticated: true, running: false, hasClaudeSessionId: Boolean(auth.getClaudeSessionId()) });
+    if (stopped) await activeContext.transcript.finishStopped();
+    broadcast(sessionMessage({
+      type: stopped ? 'stopped' : 'status',
+      authenticated: true,
+      running: false,
+      hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
+    }));
     sendJson(res, 200, { stopped });
     return;
   }
@@ -238,6 +319,7 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     permissionMode?: string;
     requestId?: string;
     decision?: string;
+    sessionId?: string;
   };
 
   if (!session.isAuthenticated()) {
@@ -252,6 +334,15 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
   if (msg.type === 'stop') {
     const stopped = bridge.stop();
     if (!stopped) sendStatus(ws, true);
+    return;
+  }
+
+  if (msg.type === 'select_session') {
+    if (!msg.sessionId) throw new Error('session_required');
+    if (bridge.isRunning()) throw new Error('claude_is_busy');
+    const context = await projectSessions.selectSession(msg.sessionId);
+    await selectActiveSession(context);
+    broadcastActiveSession();
     return;
   }
 
@@ -270,13 +361,26 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
   if (!prompt) return;
   if (prompt.length > MAX_BODY_BYTES) throw new Error('prompt_too_large');
   if (bridge.isRunning()) throw new Error('claude_is_busy');
+  if (msg.sessionId && msg.sessionId !== activeContext.session.id) {
+    const context = await projectSessions.selectSession(msg.sessionId);
+    await selectActiveSession(context);
+    broadcastActiveSession();
+  }
   const permissionMode = parsePermissionMode(msg.permissionMode);
   if (permissionMode === 'bypassPermissions' && !ALLOW_BYPASS_PERMISSIONS) {
     throw new Error('bypass_permissions_disabled');
   }
 
-  transcript.beginPrompt(prompt, permissionMode);
-  broadcast({ type: 'status', authenticated: true, running: true, hasClaudeSessionId: Boolean(auth.getClaudeSessionId()) });
+  const runContext = activeContext;
+  runContext.transcript.beginPrompt(prompt, permissionMode);
+  await projectSessions.setSessionTitleFromPrompt(runContext.session.id, prompt);
+  broadcastCatalog();
+  broadcast(sessionMessage({
+    type: 'status',
+    authenticated: true,
+    running: true,
+    hasClaudeSessionId: Boolean(runContext.transcript.snapshot().claudeSessionId),
+  }, runContext));
 
   const runClaude = (sessionId: string | undefined) => bridge.run({
     prompt,
@@ -284,64 +388,75 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     permissionMode,
     onEvent: event => {
       const commands = extractClaudeCommands(event);
-      if (commands.length && commands.join('\n') !== commandCache.join('\n')) {
-        commandCache = commands;
-        broadcast({ type: 'commands', commands });
+      const cachedCommands = commandCaches.get(runContext.project.id) || [];
+      if (commands.length && commands.join('\n') !== cachedCommands.join('\n')) {
+        commandCaches.set(runContext.project.id, commands);
+        broadcast(sessionMessage({ type: 'commands', commands }, runContext));
       }
       const nextSessionInfo = extractClaudeSessionInfo(event);
       if (nextSessionInfo) {
         sessionInfo = { ...sessionInfo, ...nextSessionInfo };
-        transcript.setSessionInfo(nextSessionInfo);
-        broadcast({ type: 'session_info', ...sessionInfo });
+        runContext.transcript.setSessionInfo(nextSessionInfo);
+        broadcast(sessionMessage({ type: 'session_info', ...sessionInfo }, runContext));
       }
       for (const activity of extractClaudeActivities(event)) {
-        transcript.mergeActivity(activity);
-        broadcast({ type: 'activity', ...activity });
+        runContext.transcript.mergeActivity(activity);
+        broadcast(sessionMessage({ type: 'activity', ...activity }, runContext));
       }
     },
     onText: text => {
-      transcript.appendText(text);
-      broadcast({ type: 'text', text });
+      runContext.transcript.appendText(text);
+      broadcast(sessionMessage({ type: 'text', text }, runContext));
     },
     onSessionId: sessionId => {
-      transcript.setClaudeSessionId(sessionId);
+      runContext.transcript.setClaudeSessionId(sessionId);
       void auth.setClaudeSessionId(sessionId);
     },
     onPermissionRequest: request => {
-      transcript.addPermission(request);
-      broadcast(permissionRequestMessage(request));
+      runContext.transcript.addPermission(request);
+      broadcast(sessionMessage(permissionRequestMessage(request), runContext));
     },
     onPermissionClosed: requestId => {
-      transcript.removePermission(requestId);
-      broadcast({ type: 'permission_resolved', requestId });
+      runContext.transcript.removePermission(requestId);
+      broadcast(sessionMessage({ type: 'permission_resolved', requestId }, runContext));
     },
   });
 
-  const previousSessionId = auth.getClaudeSessionId();
+  const previousSessionId = runContext.transcript.snapshot().claudeSessionId;
   let result = await runClaude(previousSessionId);
   if (previousSessionId && result.exitCode !== 0 && isMissingConversationError(result.stderr)) {
     await auth.setClaudeSessionId(undefined);
-    transcript.setClaudeSessionId(undefined);
+    runContext.transcript.setClaudeSessionId(undefined);
     result = await runClaude(undefined);
   }
 
   if (result.sessionId) {
-    transcript.setClaudeSessionId(result.sessionId);
+    runContext.transcript.setClaudeSessionId(result.sessionId);
     await auth.setClaudeSessionId(result.sessionId);
   }
   if (result.stopped) {
-    await transcript.finishStopped();
-    broadcast({ type: 'stopped' });
+    await runContext.transcript.finishStopped();
+    broadcast(sessionMessage({ type: 'stopped' }, runContext));
   } else {
     if (result.exitCode !== 0 && result.stderr) {
-      await transcript.finishError(result.stderr);
-      broadcast({ type: 'error', message: result.stderr });
+      await runContext.transcript.finishError(result.stderr);
+      broadcast(sessionMessage({ type: 'error', message: result.stderr }, runContext));
     } else {
-      await transcript.finishDone();
+      await runContext.transcript.finishDone();
     }
-    broadcast({ type: 'done', exitCode: result.exitCode, claudeSessionId: result.sessionId });
+    broadcast(sessionMessage({
+      type: 'done',
+      exitCode: result.exitCode,
+      claudeSessionId: result.sessionId,
+    }, runContext));
   }
-  broadcast({ type: 'status', authenticated: true, running: false, hasClaudeSessionId: Boolean(auth.getClaudeSessionId()) });
+  broadcast(sessionMessage({
+    type: 'status',
+    authenticated: true,
+    running: false,
+    hasClaudeSessionId: Boolean(runContext.transcript.snapshot().claudeSessionId),
+  }, runContext));
+  broadcastCatalog();
 }
 
 async function serveStatic(res: ServerResponse, pathname: string): Promise<void> {
@@ -391,24 +506,94 @@ function sendJson(res: ServerResponse, status: number, data: unknown): void {
 }
 
 function sendStatus(ws: WebSocket, authenticated: boolean): void {
-  send(ws, { type: 'status', authenticated, running: bridge.isRunning(), hasClaudeSessionId: Boolean(auth.getClaudeSessionId()) });
+  send(ws, sessionMessage({
+    type: 'status',
+    authenticated,
+    running: bridge.isRunning(),
+    hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
+    workspaceDir: activeContext.project.path,
+  }));
 }
 
 function refreshCommands(): Promise<string[]> {
-  if (commandDiscovery) return commandDiscovery;
-  commandDiscovery = discoverClaudeCommands({
+  const project = activeContext.project;
+  const existing = commandDiscoveries.get(project.id);
+  if (existing) return existing;
+  const discovery = discoverClaudeCommands({
     claudeBin: CLAUDE_BIN,
-    workspaceDir: WORKSPACE_DIR,
+    workspaceDir: project.path,
   }).then(commands => {
     if (commands.length) {
-      commandCache = commands;
-      broadcast({ type: 'commands', commands });
+      commandCaches.set(project.id, commands);
+      if (activeContext.project.id === project.id) {
+        broadcast(sessionMessage({ type: 'commands', commands }));
+      }
     }
     return commands;
   }).finally(() => {
-    commandDiscovery = undefined;
+    commandDiscoveries.delete(project.id);
   });
-  return commandDiscovery;
+  commandDiscoveries.set(project.id, discovery);
+  return discovery;
+}
+
+function createBridge(workspaceDir: string): ClaudeBridge {
+  return new ClaudeBridge({
+    claudeBin: CLAUDE_BIN,
+    workspaceDir,
+    allowBypassPermissions: ALLOW_BYPASS_PERMISSIONS,
+  });
+}
+
+async function selectActiveSession(context: SessionContext): Promise<void> {
+  activeContext = context;
+  workspace = new WorkspaceService(context.project.path);
+  bridge = createBridge(context.project.path);
+  sessionInfo = context.transcript.snapshot().sessionInfo;
+  if (!Object.keys(sessionInfo).length) {
+    const restored = await restoreClaudeSessionInfo({
+      sessionId: context.transcript.snapshot().claudeSessionId || '',
+    });
+    if (restored) {
+      sessionInfo = restored;
+      context.transcript.setSessionInfo(restored);
+      await context.transcript.flush();
+    }
+  }
+  void refreshCommands();
+}
+
+function broadcastCatalog(): void {
+  broadcast({ type: 'catalog', ...projectSessions.catalog() });
+}
+
+function broadcastActiveSession(): void {
+  broadcastCatalog();
+  broadcast(sessionMessage({
+    type: 'status',
+    authenticated: true,
+    running: bridge.isRunning(),
+    hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
+    workspaceDir: activeContext.project.path,
+  }));
+  broadcast(sessionMessage({ type: 'session_info', ...sessionInfo }));
+  broadcast(sessionMessage({
+    type: 'transcript_snapshot',
+    ...activeContext.transcript.snapshot(),
+  }));
+  const commands = commandCaches.get(activeContext.project.id);
+  if (commands?.length) broadcast(sessionMessage({ type: 'commands', commands }));
+}
+
+function sessionMessage(
+  data: Record<string, unknown>,
+  context: SessionContext = activeContext,
+): Record<string, unknown> {
+  return {
+    ...data,
+    projectId: context.project.id,
+    sessionId: context.session.id,
+  };
 }
 
 function broadcast(data: unknown): void {
@@ -422,6 +607,11 @@ function closeAllSockets(): void {
 
 function send(ws: WebSocket, data: unknown): void {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
+}
+
+function headerValue(req: IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name];
+  return Array.isArray(value) ? value[0] : value;
 }
 
 function parsePermissionMode(value: string | undefined): ClaudePermissionMode {

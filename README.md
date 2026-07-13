@@ -36,6 +36,9 @@
 - 运行中显示安全化的工具调用状态，任务结束后自动收起本轮活动卡片。
 - 顶部显示当前 Claude 模型和剩余上下文。
 - 左侧工作区抽屉可浏览当前目录文件、查看 Git 修改和 diff。
+- 一个 daemon 可注册多个项目，每个项目可创建和恢复多条独立会话。
+- 手机端可切换项目与会话；每条会话独立保存 Claude session、上下文和 transcript。
+- 在其他项目目录再次运行 `cc-remote`，会把该目录注册到正在运行的 daemon。
 - daemon 原子保存当前对话快照，App 重连后补回断线期间的输出。
 - daemon 重启后恢复当前对话；未完成任务会归一化为已中断。
 - 支持 Claude Code `manual`、`acceptEdits`、`auto`、`dontAsk`、`plan` 和 `bypassPermissions` 模式。
@@ -52,9 +55,9 @@
 
 未完成：
 
-- 还没做多会话历史列表和搜索。
 - 还没做多设备管理。
 - 还没做文件上传/下载，工作区只读。
+- 会话标题支持自动生成，全文搜索和归档还没做。
 
 最新 Android 调试版已完成真机安装和核心对话流程验证。手机端工具审批、权限模式、工作区抽屉、transcript 恢复均已落地。
 
@@ -67,6 +70,8 @@ cc-remote
 ```
 
 它会同时启动 Cloudflare Tunnel 和 daemon。终端会显示手机配对用的二维码，按 `Ctrl+C` 会停止 daemon，并清理本次启动的 tunnel。
+
+daemon 已经运行时，在另一个项目目录再次执行 `cc-remote`，不会重复启动服务，而是注册并切换到该项目。手机端随后可在“项目与会话”中来回切换。项目只能从电脑端注册，手机端不能填写任意路径。
 
 项目内的底层脚本仍可作为故障排查入口：
 
@@ -221,12 +226,16 @@ Authorization: Bearer <token>
 
 ```text
 GET  /api/status
+GET  /api/projects
+GET  /api/sessions/:sessionId
+POST /api/projects/:projectId/sessions
+POST /api/sessions/:sessionId/select
 POST /api/new-conversation
 POST /api/stop
 POST /api/logout
 ```
 
-工作区读取接口同样需要 Bearer token，只允许访问启动时固定的 `WORKSPACE_DIR`：
+工作区读取接口同样需要 Bearer token，只允许访问当前已注册项目的目录：
 
 ```text
 GET /api/workspace
@@ -236,6 +245,8 @@ GET /api/workspace/diff?path=src/daemon.ts&staged=1
 ```
 
 文件列表遵循 Git 忽略规则。文件与 diff 只读，不提供远程编辑、暂存或提交入口。
+
+`POST /api/new-conversation` 保留兼容性，实际会在当前项目下创建一条新会话。项目和会话切换只允许在没有 Claude 任务运行时执行。
 
 ## WebSocket 协议
 
@@ -254,11 +265,17 @@ wss://tbhaoshuai.ccwu.cc/ws
 鉴权成功后可发送：
 
 ```json
-{ "type": "prompt", "text": "帮我检查这个项目", "permissionMode": "manual" }
+{ "type": "prompt", "sessionId": "...", "text": "帮我检查这个项目", "permissionMode": "manual" }
 ```
 
 ```json
 { "type": "stop" }
+```
+
+切换会话：
+
+```json
+{ "type": "select_session", "sessionId": "..." }
 ```
 
 服务端会发送：
@@ -267,7 +284,7 @@ wss://tbhaoshuai.ccwu.cc/ws
 status, transcript_snapshot, permission_capabilities, permission_request, permission_resolved, permission_expired, commands, session_info, activity, claude_event, text, done, stopped, error
 ```
 
-`transcript_snapshot` 在鉴权后发送 daemon 保存的当前对话，用于重连恢复。`commands` 提供 Claude Code 可调用的斜杠指令。`session_info` 提供当前模型、上下文窗口和剩余 token。`activity` 只暴露思考状态、工具名称和安全化摘要，不传递私有思考文本或工具结果正文。
+鉴权后先发送 `catalog`，其中包含项目、会话和当前选择。会话相关消息都带 `projectId` 与 `sessionId`。`transcript_snapshot` 发送当前会话的权威快照，`commands` 提供当前项目的 Claude Code 斜杠指令。`session_info` 提供当前模型、上下文窗口和剩余 token。`activity` 只暴露思考状态、工具名称和安全化摘要，不传递私有思考文本或工具结果正文。
 
 收到 `permission_request` 后，App 可发送一次性审批结果：
 
@@ -311,7 +328,7 @@ flutter test
 - HTTP 使用 Bearer token。
 - WebSocket 使用首条 `auth` 消息鉴权。
 - logout / re-pair 会关闭旧 WebSocket。
-- 手机端不能修改 `WORKSPACE_DIR`。
+- 手机端不能注册或填写任意工作目录，项目只能通过电脑端 `cc-remote` 注册。
 - 不开放任意 shell API。
 - 不默认加 `--dangerously-skip-permissions`。
 - `bypassPermissions` 需要电脑端显式开启，并在手机端二次确认；任务结束后恢复 `manual`。

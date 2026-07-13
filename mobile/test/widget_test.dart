@@ -97,6 +97,98 @@ void main() {
     expect(status.remainingContext, 175000);
   });
 
+  test('project catalog parses projects and independent sessions', () {
+    final catalog = RemoteProjectCatalog.tryParse({
+      'activeProjectId': 'project-1',
+      'activeSessionId': 'session-2',
+      'projects': [
+        {
+          'id': 'project-1',
+          'name': 'cc-remote',
+          'path': r'E:\Code-All\cc-remote',
+          'sessionCount': 2,
+          'running': false,
+        },
+      ],
+      'sessions': [
+        {
+          'id': 'session-2',
+          'projectId': 'project-1',
+          'title': '实现多会话',
+          'updatedAt': 10,
+          'running': true,
+          'messageCount': 4,
+          'model': 'claude-opus-4-8',
+        },
+      ],
+    });
+
+    expect(catalog, isNotNull);
+    expect(catalog!.activeProject?.name, 'cc-remote');
+    expect(catalog.sessions.single.title, '实现多会话');
+    expect(catalog.sessions.single.summary, contains('运行中'));
+  });
+
+  testWidgets('session navigator switches projects and creates a session', (
+    tester,
+  ) async {
+    String? createdProjectId;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SessionNavigatorSheet(
+            projects: const [
+              RemoteProjectSummary(
+                id: 'project-1',
+                name: 'first',
+                path: r'E:\first',
+                sessionCount: 1,
+                running: false,
+              ),
+              RemoteProjectSummary(
+                id: 'project-2',
+                name: 'second',
+                path: r'E:\second',
+                sessionCount: 1,
+                running: false,
+              ),
+            ],
+            sessions: const [
+              RemoteSessionSummary(
+                id: 'session-1',
+                projectId: 'project-1',
+                title: 'first task',
+                updatedAt: 1,
+                running: false,
+                messageCount: 2,
+              ),
+              RemoteSessionSummary(
+                id: 'session-2',
+                projectId: 'project-2',
+                title: 'second task',
+                updatedAt: 2,
+                running: false,
+                messageCount: 3,
+              ),
+            ],
+            activeProjectId: 'project-1',
+            activeSessionId: 'session-1',
+            running: false,
+            onSelect: (_) {},
+            onCreate: (projectId) => createdProjectId = projectId,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('first task'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('project-project-2')));
+    await tester.pump();
+    expect(find.text('second task'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('create-session')));
+    expect(createdProjectId, 'project-2');
+  });
+
   test('remote transcript snapshot restores messages and session context', () {
     final snapshot = RemoteTranscriptSnapshot.tryParse({
       'version': 1,
@@ -702,6 +794,7 @@ void main() {
             onFillPrompt: (_) {},
             onReconnect: () {},
             onNewConversation: () {},
+            onOpenSessions: () {},
             onOpenWorkspace: () {},
             onPermissionModeSelected: (_) {},
             onPermissionAllow: (_) {},

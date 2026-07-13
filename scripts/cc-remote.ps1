@@ -17,7 +17,43 @@ $tunnelErr = Join-Path $runDir "cloudflared.err.log"
 $tunnelProcess = $null
 
 if ([string]::IsNullOrWhiteSpace($WorkspaceDir)) {
-  $WorkspaceDir = $root
+  $WorkspaceDir = (Get-Location).Path
+}
+
+$healthUrl = "http://127.0.0.1:$Port/api/health"
+$registerUrl = "http://127.0.0.1:$Port/api/local/projects/register"
+$localControlPath = Join-Path $root ".data\local-control.json"
+$daemonDetected = $false
+
+try {
+  $health = Invoke-RestMethod -Uri $healthUrl -Method Get -TimeoutSec 2
+  if ($health.ok -eq $true) {
+    $daemonDetected = $true
+    if ($health.service -ne "cc-remote") {
+      throw "An older CC Remote daemon is running. Stop it once, then run cc-remote again."
+    }
+    if (-not (Test-Path $localControlPath)) {
+      throw "CC Remote is running, but the local control token is missing."
+    }
+    $localControl = Get-Content -Raw $localControlPath | ConvertFrom-Json
+    $headers = @{ "X-CC-Remote-Local-Token" = $localControl.token }
+    $body = @{ path = $WorkspaceDir } | ConvertTo-Json
+    $result = Invoke-RestMethod `
+      -Uri $registerUrl `
+      -Method Post `
+      -Headers $headers `
+      -ContentType "application/json" `
+      -Body $body `
+      -TimeoutSec 10
+    Write-Host "CC Remote is already running."
+    Write-Host "Active workspace: $WorkspaceDir"
+    exit 0
+  }
+} catch {
+  if ($_.Exception.Response -and $_.Exception.Response.StatusCode.value__ -eq 409) {
+    throw "Claude is running. Stop the current task before switching projects."
+  }
+  if ($daemonDetected) { throw }
 }
 
 function Stop-Tunnel {

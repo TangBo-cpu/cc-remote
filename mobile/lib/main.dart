@@ -74,6 +74,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   String? modelName;
   int? contextWindow;
   int? remainingContext;
+  String? activeProjectId;
+  String? activeSessionId;
   int remoteTranscriptRevision = 0;
   bool allowBypassPermissions = false;
   PermissionMode selectedPermissionMode = PermissionMode.manual;
@@ -87,6 +89,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final TextEditingController promptController = TextEditingController();
   final List<TranscriptMessage> messages = [];
   final List<String> commands = [];
+  final List<RemoteProjectSummary> projects = [];
+  final List<RemoteSessionSummary> remoteSessions = [];
   final List<RemotePermissionRequest> pendingPermissions = [];
   final Set<String> respondingPermissionIds = {};
   Future<void> lastTranscriptWrite = Future<void>.value();
@@ -201,6 +205,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           contextWindow = status.contextWindow;
           remainingContext = status.remainingContext;
         }
+        applyCatalog(status.catalog);
         if (!status.running) removeInterruptedRunNotice();
       });
       persistTranscriptSnapshotLater();
@@ -268,6 +273,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           contextWindow = status.contextWindow;
           remainingContext = status.remainingContext;
         }
+        applyCatalog(status.catalog);
         if (!status.running) removeInterruptedRunNotice();
       });
       persistTranscriptSnapshotLater();
@@ -367,7 +373,44 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       return;
     }
 
+    final messageSessionId = decoded['sessionId'];
+    if (messageSessionId is String &&
+        activeSessionId != null &&
+        messageSessionId != activeSessionId) {
+      return;
+    }
+
     switch (decoded['type']) {
+      case 'catalog':
+        final catalog = RemoteProjectCatalog.tryParse(decoded);
+        if (catalog == null) return;
+        setState(() {
+          final changedSession =
+              activeSessionId != null &&
+              activeSessionId != catalog.activeSessionId;
+          activeProjectId = catalog.activeProjectId;
+          activeSessionId = catalog.activeSessionId;
+          if (changedSession) {
+            remoteTranscriptRevision = 0;
+            messages.clear();
+            pendingPermissions.clear();
+            respondingPermissionIds.clear();
+            modelName = null;
+            contextWindow = null;
+            remainingContext = null;
+          }
+          projects
+            ..clear()
+            ..addAll(catalog.projects);
+          remoteSessions
+            ..clear()
+            ..addAll(catalog.sessions);
+          final project = catalog.activeProject;
+          if (project != null && session != null) {
+            session = session!.copyWith(workspaceDir: project.path);
+          }
+        });
+        if (session != null) unawaited(tokenStore.save(session!));
       case 'status':
         setState(() {
           wsReady = decoded['authenticated'] == true;
@@ -519,6 +562,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       running = false;
       messages.clear();
       commands.clear();
+      projects.clear();
+      remoteSessions.clear();
+      activeProjectId = null;
+      activeSessionId = null;
       remoteTranscriptRevision = 0;
       allowBypassPermissions = false;
       selectedPermissionMode = PermissionMode.manual;
@@ -613,6 +660,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         'type': 'prompt',
         'text': text,
         'permissionMode': activePermissionMode.wireName,
+        if (activeSessionId != null) 'sessionId': activeSessionId,
       }),
     );
   }
@@ -638,6 +686,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         'type': 'permission_response',
         'requestId': request.requestId,
         'decision': decision,
+        if (activeSessionId != null) 'sessionId': activeSessionId,
       }),
     );
   }
@@ -705,13 +754,18 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       }
       if (res.statusCode != 200) throw StateError('new_conversation_failed');
       if (!mounted || session != current) return;
+      final body = jsonDecode(res.body);
       setState(() {
+        if (body is Map<String, dynamic> && body['sessionId'] is String) {
+          activeSessionId = body['sessionId'] as String;
+        }
+        remoteTranscriptRevision = 0;
         modelName = null;
         contextWindow = null;
         remainingContext = null;
-        messages
-          ..clear()
-          ..add(TranscriptMessage.system('已开启新对话'));
+        messages.clear();
+        pendingPermissions.clear();
+        respondingPermissionIds.clear();
       });
       persistTranscriptSnapshotLater();
     } catch (_) {
@@ -744,6 +798,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remainingContext = null;
       messages.clear();
       commands.clear();
+      projects.clear();
+      remoteSessions.clear();
+      activeProjectId = null;
+      activeSessionId = null;
       remoteTranscriptRevision = 0;
       allowBypassPermissions = false;
       selectedPermissionMode = PermissionMode.manual;
@@ -801,6 +859,60 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       workspaceName: current.workspaceName,
       demoMode: widget.demoMode,
     );
+  }
+
+  void applyCatalog(RemoteProjectCatalog? catalog) {
+    if (catalog == null) return;
+    activeProjectId = catalog.activeProjectId;
+    activeSessionId = catalog.activeSessionId;
+    projects
+      ..clear()
+      ..addAll(catalog.projects);
+    remoteSessions
+      ..clear()
+      ..addAll(catalog.sessions);
+  }
+
+  void openSessions() {
+    if (projects.isEmpty) return;
+    showSessionNavigator(
+      context,
+      projects: projects,
+      sessions: remoteSessions,
+      activeProjectId: activeProjectId,
+      activeSessionId: activeSessionId,
+      running: running,
+      onSelect: selectRemoteSession,
+      onCreate: createRemoteSession,
+    );
+  }
+
+  void selectRemoteSession(String sessionId) {
+    if (running || sessionId == activeSessionId) return;
+    ws?.sink.add(
+      jsonEncode({'type': 'select_session', 'sessionId': sessionId}),
+    );
+  }
+
+  Future<void> createRemoteSession(String projectId) async {
+    if (running) return;
+    final current = session;
+    if (current == null) return;
+    try {
+      final res = await httpClient
+          .post(
+            current.origin.resolve('/api/projects/$projectId/sessions'),
+            headers: {'Authorization': 'Bearer ${current.token}'},
+          )
+          .timeout(networkTimeout);
+      if (res.statusCode == 401) throw const UnauthorizedSession();
+      if (res.statusCode != 201) throw StateError('create_session_failed');
+    } on UnauthorizedSession {
+      await recoverUnauthorizedSession();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => messages.add(TranscriptMessage.system('新建会话失败，请重试')));
+    }
   }
 
   Future<void> handleQr(String raw) async {
@@ -909,6 +1021,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             onFillPrompt: fillPrompt,
             onReconnect: refreshConnection,
             onNewConversation: beginNewConversation,
+            onOpenSessions: openSessions,
             onOpenWorkspace: openWorkspace,
             onPermissionModeSelected: selectPermissionMode,
             onPermissionAllow: (request) =>
@@ -1370,6 +1483,7 @@ class ChatScreen extends StatelessWidget {
     required this.onFillPrompt,
     required this.onReconnect,
     required this.onNewConversation,
+    required this.onOpenSessions,
     required this.onOpenWorkspace,
     required this.onPermissionModeSelected,
     required this.onPermissionAllow,
@@ -1396,6 +1510,7 @@ class ChatScreen extends StatelessWidget {
   final ValueChanged<String> onFillPrompt;
   final VoidCallback onReconnect;
   final VoidCallback onNewConversation;
+  final VoidCallback onOpenSessions;
   final VoidCallback onOpenWorkspace;
   final ValueChanged<PermissionMode> onPermissionModeSelected;
   final ValueChanged<RemotePermissionRequest> onPermissionAllow;
@@ -1417,6 +1532,7 @@ class ChatScreen extends StatelessWidget {
         remainingContext: remainingContext,
         onReconnect: onReconnect,
         onNewConversation: onNewConversation,
+        onOpenSessions: onOpenSessions,
         onOpenWorkspace: onOpenWorkspace,
         onLogout: onLogout,
       ),
@@ -1484,6 +1600,7 @@ class ConnectionHeader extends StatelessWidget {
     required this.remainingContext,
     required this.onReconnect,
     required this.onNewConversation,
+    required this.onOpenSessions,
     required this.onOpenWorkspace,
     required this.onLogout,
   });
@@ -1497,6 +1614,7 @@ class ConnectionHeader extends StatelessWidget {
   final int? remainingContext;
   final VoidCallback onReconnect;
   final VoidCallback onNewConversation;
+  final VoidCallback onOpenSessions;
   final VoidCallback onOpenWorkspace;
   final VoidCallback onLogout;
 
@@ -1530,6 +1648,16 @@ class ConnectionHeader extends StatelessWidget {
                 child: Row(
                   children: [
                     IconButton(
+                      onPressed: onOpenSessions,
+                      constraints: const BoxConstraints.tightFor(
+                        width: 44,
+                        height: 44,
+                      ),
+                      padding: EdgeInsets.zero,
+                      icon: const Icon(Icons.forum_outlined, size: 21),
+                      tooltip: '项目与会话',
+                    ),
+                    IconButton(
                       onPressed: onOpenWorkspace,
                       constraints: const BoxConstraints.tightFor(
                         width: 44,
@@ -1538,18 +1666,6 @@ class ConnectionHeader extends StatelessWidget {
                       padding: EdgeInsets.zero,
                       icon: const Icon(Icons.folder_open_rounded, size: 21),
                       tooltip: '工作区',
-                    ),
-                    IconButton(
-                      onPressed: connected && !running
-                          ? onNewConversation
-                          : null,
-                      constraints: const BoxConstraints.tightFor(
-                        width: 44,
-                        height: 44,
-                      ),
-                      padding: EdgeInsets.zero,
-                      icon: const Icon(Icons.add_comment_rounded, size: 20),
-                      tooltip: '新对话',
                     ),
                   ],
                 ),
@@ -1599,18 +1715,32 @@ class ConnectionHeader extends StatelessWidget {
               ),
               SizedBox(
                 width: 96,
-                child: Align(
-                  alignment: Alignment.centerRight,
-                  child: IconButton(
-                    onPressed: () => showSettingsSheet(
-                      context,
-                      session,
-                      onReconnect,
-                      onLogout,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    IconButton(
+                      onPressed: connected && !running
+                          ? onNewConversation
+                          : null,
+                      constraints: const BoxConstraints.tightFor(
+                        width: 44,
+                        height: 44,
+                      ),
+                      padding: EdgeInsets.zero,
+                      icon: const Icon(Icons.add_comment_rounded, size: 20),
+                      tooltip: '新对话',
                     ),
-                    icon: const Icon(Icons.more_horiz_rounded, size: 23),
-                    tooltip: '设置',
-                  ),
+                    IconButton(
+                      onPressed: () => showSettingsSheet(
+                        context,
+                        session,
+                        onReconnect,
+                        onLogout,
+                      ),
+                      icon: const Icon(Icons.more_horiz_rounded, size: 23),
+                      tooltip: '设置',
+                    ),
+                  ],
                 ),
               ),
             ],
@@ -1713,6 +1843,181 @@ Future<void> showSettingsSheet(
       onLogout: onLogout,
     ),
   );
+}
+
+Future<void> showSessionNavigator(
+  BuildContext context, {
+  required List<RemoteProjectSummary> projects,
+  required List<RemoteSessionSummary> sessions,
+  required String? activeProjectId,
+  required String? activeSessionId,
+  required bool running,
+  required ValueChanged<String> onSelect,
+  required ValueChanged<String> onCreate,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (sheetContext) => SessionNavigatorSheet(
+      projects: projects,
+      sessions: sessions,
+      activeProjectId: activeProjectId,
+      activeSessionId: activeSessionId,
+      running: running,
+      onSelect: (sessionId) {
+        Navigator.pop(sheetContext);
+        onSelect(sessionId);
+      },
+      onCreate: (projectId) {
+        Navigator.pop(sheetContext);
+        onCreate(projectId);
+      },
+    ),
+  );
+}
+
+class SessionNavigatorSheet extends StatefulWidget {
+  const SessionNavigatorSheet({
+    super.key,
+    required this.projects,
+    required this.sessions,
+    required this.activeProjectId,
+    required this.activeSessionId,
+    required this.running,
+    required this.onSelect,
+    required this.onCreate,
+  });
+
+  final List<RemoteProjectSummary> projects;
+  final List<RemoteSessionSummary> sessions;
+  final String? activeProjectId;
+  final String? activeSessionId;
+  final bool running;
+  final ValueChanged<String> onSelect;
+  final ValueChanged<String> onCreate;
+
+  @override
+  State<SessionNavigatorSheet> createState() => _SessionNavigatorSheetState();
+}
+
+class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
+  late String selectedProjectId =
+      widget.activeProjectId ?? widget.projects.first.id;
+
+  @override
+  Widget build(BuildContext context) {
+    final projectSessions = widget.sessions
+        .where((session) => session.projectId == selectedProjectId)
+        .toList();
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.72,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      '项目与会话',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  FilledButton.tonalIcon(
+                    key: const ValueKey('create-session'),
+                    onPressed: widget.running
+                        ? null
+                        : () => widget.onCreate(selectedProjectId),
+                    icon: const Icon(Icons.add_rounded, size: 18),
+                    label: const Text('新会话'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    for (final project in widget.projects) ...[
+                      ChoiceChip(
+                        key: ValueKey('project-${project.id}'),
+                        selected: project.id == selectedProjectId,
+                        label: Text(project.name),
+                        avatar: project.running
+                            ? const SizedBox.square(
+                                dimension: 12,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 1.6,
+                                ),
+                              )
+                            : null,
+                        onSelected: (_) =>
+                            setState(() => selectedProjectId = project.id),
+                      ),
+                      const SizedBox(width: 8),
+                    ],
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: projectSessions.isEmpty
+                    ? const Center(child: Text('这个项目还没有会话'))
+                    : ListView.separated(
+                        itemCount: projectSessions.length,
+                        separatorBuilder: (_, _) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final item = projectSessions[index];
+                          final active = item.id == widget.activeSessionId;
+                          return ListTile(
+                            key: ValueKey('session-${item.id}'),
+                            enabled: !widget.running || active,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                            ),
+                            leading: Icon(
+                              item.running
+                                  ? Icons.pending_outlined
+                                  : Icons.chat_bubble_outline_rounded,
+                              color: item.running
+                                  ? AppColors.accent
+                                  : AppColors.muted,
+                            ),
+                            title: Text(
+                              item.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Text(
+                              item.summary,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            trailing: active
+                                ? const Icon(
+                                    Icons.check_circle_rounded,
+                                    color: AppColors.accent,
+                                  )
+                                : const Icon(Icons.chevron_right_rounded),
+                            onTap: active || widget.running
+                                ? null
+                                : () => widget.onSelect(item.id),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class SettingsSheet extends StatelessWidget {
@@ -3443,12 +3748,141 @@ class SavedSession {
   }
 }
 
+class RemoteProjectCatalog {
+  const RemoteProjectCatalog({
+    required this.activeProjectId,
+    required this.activeSessionId,
+    required this.projects,
+    required this.sessions,
+  });
+
+  final String activeProjectId;
+  final String activeSessionId;
+  final List<RemoteProjectSummary> projects;
+  final List<RemoteSessionSummary> sessions;
+
+  RemoteProjectSummary? get activeProject {
+    for (final project in projects) {
+      if (project.id == activeProjectId) return project;
+    }
+    return null;
+  }
+
+  static RemoteProjectCatalog? tryParse(Map<String, dynamic> json) {
+    final activeProjectId = json['activeProjectId'];
+    final activeSessionId = json['activeSessionId'];
+    final rawProjects = json['projects'];
+    final rawSessions = json['sessions'];
+    if (activeProjectId is! String ||
+        activeSessionId is! String ||
+        rawProjects is! List ||
+        rawSessions is! List) {
+      return null;
+    }
+    return RemoteProjectCatalog(
+      activeProjectId: activeProjectId,
+      activeSessionId: activeSessionId,
+      projects: rawProjects
+          .whereType<Map>()
+          .map(
+            (item) =>
+                RemoteProjectSummary.tryParse(Map<String, dynamic>.from(item)),
+          )
+          .whereType<RemoteProjectSummary>()
+          .toList(),
+      sessions: rawSessions
+          .whereType<Map>()
+          .map(
+            (item) =>
+                RemoteSessionSummary.tryParse(Map<String, dynamic>.from(item)),
+          )
+          .whereType<RemoteSessionSummary>()
+          .toList(),
+    );
+  }
+}
+
+class RemoteProjectSummary {
+  const RemoteProjectSummary({
+    required this.id,
+    required this.name,
+    required this.path,
+    required this.sessionCount,
+    required this.running,
+  });
+
+  final String id;
+  final String name;
+  final String path;
+  final int sessionCount;
+  final bool running;
+
+  static RemoteProjectSummary? tryParse(Map<String, dynamic> json) {
+    final id = json['id'];
+    final name = json['name'];
+    final path = json['path'];
+    if (id is! String || name is! String || path is! String) return null;
+    return RemoteProjectSummary(
+      id: id,
+      name: name,
+      path: path,
+      sessionCount: (json['sessionCount'] as num?)?.toInt() ?? 0,
+      running: json['running'] == true,
+    );
+  }
+}
+
+class RemoteSessionSummary {
+  const RemoteSessionSummary({
+    required this.id,
+    required this.projectId,
+    required this.title,
+    required this.updatedAt,
+    required this.running,
+    required this.messageCount,
+    this.model,
+  });
+
+  final String id;
+  final String projectId;
+  final String title;
+  final int updatedAt;
+  final bool running;
+  final int messageCount;
+  final String? model;
+
+  String get summary {
+    final parts = <String>[];
+    if (running) parts.add('运行中');
+    if (model != null) parts.add(formatModelName(model!));
+    parts.add('$messageCount 条消息');
+    return parts.join(' · ');
+  }
+
+  static RemoteSessionSummary? tryParse(Map<String, dynamic> json) {
+    final id = json['id'];
+    final projectId = json['projectId'];
+    final title = json['title'];
+    if (id is! String || projectId is! String || title is! String) return null;
+    return RemoteSessionSummary(
+      id: id,
+      projectId: projectId,
+      title: title,
+      updatedAt: (json['updatedAt'] as num?)?.toInt() ?? 0,
+      running: json['running'] == true,
+      messageCount: (json['messageCount'] as num?)?.toInt() ?? 0,
+      model: json['model'] as String?,
+    );
+  }
+}
+
 class RemoteStatus {
   const RemoteStatus({
     required this.deviceName,
     required this.workspaceDir,
     required this.running,
     required this.hasSessionInfo,
+    this.catalog,
     this.modelName,
     this.contextWindow,
     this.remainingContext,
@@ -3458,6 +3892,7 @@ class RemoteStatus {
   final String? workspaceDir;
   final bool running;
   final bool hasSessionInfo;
+  final RemoteProjectCatalog? catalog;
   final String? modelName;
   final int? contextWindow;
   final int? remainingContext;
@@ -3472,6 +3907,11 @@ class RemoteStatus {
       workspaceDir: json['workspaceDir'] as String?,
       running: json['running'] == true,
       hasSessionInfo: rawSessionInfo is Map<String, dynamic>,
+      catalog: json['catalog'] is Map<String, dynamic>
+          ? RemoteProjectCatalog.tryParse(
+              json['catalog'] as Map<String, dynamic>,
+            )
+          : null,
       modelName: sessionInfo['model'] as String?,
       contextWindow: (sessionInfo['contextWindow'] as num?)?.toInt(),
       remainingContext: (sessionInfo['remainingTokens'] as num?)?.toInt(),

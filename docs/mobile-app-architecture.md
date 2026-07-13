@@ -6,7 +6,7 @@ CC Remote 的手机端按 Flutter App 做。网页只保留为本地调试入口
 
 这份文档负责约束 App、daemon、协议和实现顺序。视觉和交互以 `docs/mobile-ui-app-design.md` 为准，参考图放在 `docs/mobile-ui-reference/`。
 
-第一版只服务一台电脑、一个 token、一个 Claude Code session。已跑通扫码配对、恢复连接、发送 prompt、流式输出、Stop、Logout、权限审批、transcript 恢复和工作区只读浏览。多电脑、多会话历史列表、文件上传/下载、推送通知和商店材料仍不进入当前范围。
+当前仍只服务一台电脑和一个手机 token，但一个 daemon 可以注册多个项目，每个项目可以保存多条 Claude Code 会话。已跑通扫码配对、恢复连接、发送 prompt、流式输出、Stop、Logout、权限审批、独立 transcript 恢复、项目切换、会话切换和工作区只读浏览。多电脑、会话全文搜索、文件上传/下载、推送通知和商店材料仍不进入当前范围。
 
 ## 产品路径
 
@@ -72,6 +72,8 @@ cc-remote/
     authState.ts
     claudeBridge.ts
     transcriptState.ts
+    projectSessionState.ts
+    localControlState.ts
     workspaceService.ts
     web/
 
@@ -349,4 +351,4 @@ daemon 的 App token 主协议已经在代码里，Flutter App 也已经完成�
 
 待专项验证：第二条 prompt 通过 `--resume <claudeSessionId>` 延续上下文；运行中 Stop 能中断任务且没有残留 Claude 进程。
 
-当前只持久化一份当前对话，不提供多会话历史列表。多设备、历史搜索、可写文件能力、推送和上架材料等核心链路稳定后再补。
+daemon 在 `.data/projects.json` 保存项目与会话索引，在 `.data/sessions/` 为每条会话保存独立 transcript。旧 `.data/transcript.json` 会在首次启动时迁移成默认项目的第一条会话。手机端已经提供项目与会话列表；多设备、全文搜索、归档、可写文件能力、推送和上架材料后续再补。
