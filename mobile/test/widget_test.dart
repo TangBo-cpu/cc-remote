@@ -7,6 +7,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:cc_remote/main.dart';
+import 'package:cc_remote/attachments.dart';
 import 'package:cc_remote/notification_service.dart';
 import 'package:cc_remote/workspace_drawer.dart';
 
@@ -19,7 +20,17 @@ void main() {
     final snapshot = TranscriptSnapshot(
       running: true,
       messages: [
-        TranscriptMessage.user('user text'),
+        TranscriptMessage.user(
+          'user text',
+          attachments: const [
+            RemoteAttachment(
+              id: 'attachment-1',
+              name: 'screen.png',
+              mimeType: 'image/png',
+              size: 1024,
+            ),
+          ],
+        ),
         TranscriptMessage.assistant('assistant text'),
         TranscriptMessage.system('system text'),
         TranscriptMessage.activity(
@@ -39,6 +50,7 @@ void main() {
     expect(restored.messages, hasLength(4));
     expect(restored.messages[0].role, MessageRole.user);
     expect(restored.messages[0].text, 'user text');
+    expect(restored.messages[0].attachments.single.name, 'screen.png');
     expect(restored.messages[1].role, MessageRole.assistant);
     expect(restored.messages[1].text, 'assistant text');
     expect(restored.messages[2].role, MessageRole.system);
@@ -667,6 +679,46 @@ void main() {
     await tester.tap(find.text('仅本次开启'));
     await tester.pumpAndSettle();
     expect(selected, PermissionMode.bypassPermissions);
+  });
+
+  testWidgets('an attachment can be sent without prompt text', (tester) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    var sent = false;
+    const attachment = AttachmentDraft(
+      path: 'missing-error.log',
+      name: 'error.log',
+      size: 2048,
+      mimeType: 'text/plain',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PromptBar(
+            controller: controller,
+            attachments: const [attachment],
+            commands: const [],
+            running: false,
+            connected: true,
+            offline: false,
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: false,
+            onPermissionModeSelected: (_) {},
+            onCommandSelected: (_) {},
+            onAddAttachment: () {},
+            onRemoveAttachment: (_) {},
+            onSend: () => sent = true,
+            onStop: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('error.log'), findsOneWidget);
+    expect(find.byTooltip('添加附件'), findsOneWidget);
+    await tester.tap(find.byTooltip('发送'));
+    expect(sent, isTrue);
   });
 
   testWidgets('permission request card submits one-time approval', (

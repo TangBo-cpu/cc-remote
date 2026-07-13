@@ -40,6 +40,8 @@
 - 手机端可切换项目与会话；每条会话独立保存 Claude session、上下文和 transcript。
 - App 退到后台或锁屏后，任务完成、失败、停止和等待权限时发送 Android 系统通知。
 - 通知可在 App 设置中关闭，点击通知会回到对应会话。
+- 手机端可拍照、选择图片或文件，附件按会话上传并交给 Claude Code 读取。
+- 附件保存在 daemon 的 `.data/uploads/`，不会写入或污染用户项目。
 - 在其他项目目录再次运行 `cc-remote`，会把该目录注册到正在运行的 daemon。
 - daemon 原子保存当前对话快照，App 重连后补回断线期间的输出。
 - daemon 重启后恢复当前对话；未完成任务会归一化为已中断。
@@ -58,7 +60,7 @@
 未完成：
 
 - 还没做多设备管理。
-- 还没做文件上传/下载，工作区只读。
+- 工作区浏览仍为只读，附件只能通过输入区上传给 Claude Code。
 - 会话标题支持自动生成，全文搜索和归档还没做。
 - App 进程被系统彻底杀死后的可靠推送尚未接 FCM。
 
@@ -179,6 +181,7 @@ POST /api/pair
 发送 prompt
 输入 `/` 搜索 Claude Code 指令
 接收 text/done/error/stopped
+拍照、选择图片或文件并随 prompt 发送
 显示思考计时和运行中的工具调用
 显示当前模型和剩余上下文
 POST /api/new-conversation
@@ -233,6 +236,8 @@ GET  /api/projects
 GET  /api/sessions/:sessionId
 POST /api/projects/:projectId/sessions
 POST /api/sessions/:sessionId/select
+POST /api/sessions/:sessionId/attachments
+GET  /api/sessions/:sessionId/attachments/:attachmentId/content
 POST /api/new-conversation
 POST /api/stop
 POST /api/logout
@@ -268,8 +273,10 @@ wss://tbhaoshuai.ccwu.cc/ws
 鉴权成功后可发送：
 
 ```json
-{ "type": "prompt", "sessionId": "...", "text": "帮我检查这个项目", "permissionMode": "manual" }
+{ "type": "prompt", "sessionId": "...", "text": "帮我检查这个项目", "attachmentIds": ["..."], "permissionMode": "manual" }
 ```
+
+附件先通过 multipart HTTP 接口上传，字段名为 `files`。单轮最多 5 个附件，单个文件最大 25MB。WebSocket 只发送返回的附件 ID，不传文件正文或本机路径。
 
 ```json
 { "type": "stop" }

@@ -35,6 +35,7 @@ export type ClaudePermissionRequest = {
 export type ClaudeRunOptions = {
   prompt: string;
   sessionId?: string;
+  additionalDirectories?: string[];
   permissionMode: ClaudePermissionMode;
   onEvent: (event: unknown) => void;
   onText: (text: string) => void;
@@ -118,6 +119,9 @@ export class ClaudeBridge {
       if (!this.options.allowBypassPermissions) throw new Error('bypass_permissions_disabled');
       args.push('--allow-dangerously-skip-permissions');
     }
+    const additionalDirectories = [...new Set(options.additionalDirectories ?? [])]
+      .filter(directory => directory.trim().length > 0);
+    if (additionalDirectories.length) args.push('--add-dir', ...additionalDirectories);
     if (options.sessionId) args.push('--resume', options.sessionId);
 
     const child = spawn(this.options.claudeBin, args, {

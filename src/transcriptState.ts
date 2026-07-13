@@ -6,6 +6,7 @@ import type {
   ClaudePermissionRequest,
   ClaudeSessionInfo,
 } from './claudeBridge.js';
+import type { AttachmentDescriptor } from './attachmentStore.js';
 
 const SCHEMA_VERSION = 1;
 const SAVE_DELAY_MS = 200;
@@ -14,6 +15,7 @@ const INTERRUPTED_MESSAGE = '电脑端重启，任务已中断';
 export type TranscriptMessage = {
   role: 'user' | 'assistant' | 'system' | 'activity';
   text: string;
+  attachments?: AttachmentDescriptor[];
   activityId?: string;
   activityKind?: ClaudeActivity['kind'];
   activityState?: ClaudeActivity['state'] | 'stopped';
@@ -37,7 +39,11 @@ export type TranscriptPermissionRequest = Omit<ClaudePermissionRequest, 'input'>
 
 export type TranscriptState = {
   snapshot(): TranscriptSnapshot;
-  beginPrompt(prompt: string, permissionMode: ClaudePermissionMode): void;
+  beginPrompt(
+    prompt: string,
+    permissionMode: ClaudePermissionMode,
+    attachments?: AttachmentDescriptor[],
+  ): void;
   appendText(text: string): void;
   mergeActivity(activity: ClaudeActivity): void;
   setSessionInfo(info: ClaudeSessionInfo): void;
@@ -113,12 +119,20 @@ export async function createTranscriptState(
       return cloneSnapshot(state);
     },
 
-    beginPrompt(prompt: string, permissionMode: ClaudePermissionMode): void {
+    beginPrompt(
+      prompt: string,
+      permissionMode: ClaudePermissionMode,
+      attachments: AttachmentDescriptor[] = [],
+    ): void {
       mutate(() => {
         state.running = true;
         state.permissionMode = permissionMode;
         state.pendingPermissions = [];
-        state.messages.push({ role: 'user', text: prompt });
+        state.messages.push({
+          role: 'user',
+          text: prompt,
+          attachments: attachments.length ? structuredClone(attachments) : undefined,
+        });
       });
     },
 
@@ -315,7 +329,19 @@ function cloneSnapshot(snapshot: TranscriptSnapshot): TranscriptSnapshot {
 
 function isTranscriptMessage(value: unknown): value is TranscriptMessage {
   if (!isRecord(value) || typeof value.text !== 'string') return false;
+  if (value.attachments !== undefined
+    && (!Array.isArray(value.attachments) || !value.attachments.every(isAttachmentDescriptor))) {
+    return false;
+  }
   return value.role === 'user' || value.role === 'assistant' || value.role === 'system' || value.role === 'activity';
+}
+
+function isAttachmentDescriptor(value: unknown): value is AttachmentDescriptor {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && typeof value.name === 'string'
+    && typeof value.mimeType === 'string'
+    && typeof value.size === 'number';
 }
 
 function isTranscriptPermissionRequest(value: unknown): value is TranscriptPermissionRequest {

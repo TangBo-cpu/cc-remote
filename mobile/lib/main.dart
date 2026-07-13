@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -9,6 +10,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'notification_service.dart';
+import 'attachments.dart';
 import 'workspace_drawer.dart';
 
 void main() {
@@ -95,6 +97,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   bool notificationsEnabled = true;
   bool notificationsReady = false;
   bool currentRunFailed = false;
+  bool uploadingAttachments = false;
   PermissionMode selectedPermissionMode = PermissionMode.manual;
   PermissionMode activePermissionMode = PermissionMode.manual;
   SavedSession? session;
@@ -104,7 +107,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final TranscriptStore transcriptStore = TranscriptStore();
   final http.Client httpClient = http.Client();
   final TextEditingController promptController = TextEditingController();
+  final AttachmentPicker attachmentPicker = AttachmentPicker();
   final List<TranscriptMessage> messages = [];
+  final List<AttachmentDraft> pendingAttachments = [];
   final List<String> commands = [];
   final List<RemoteProjectSummary> projects = [];
   final List<RemoteSessionSummary> remoteSessions = [];
@@ -532,6 +537,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           activeProjectId = catalog.activeProjectId;
           activeSessionId = catalog.activeSessionId;
           if (changedSession) {
+            uploadingAttachments = false;
+            pendingAttachments.clear();
             remoteTranscriptRevision = 0;
             messages.clear();
             pendingPermissions.clear();
@@ -785,13 +792,18 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     persistTranscriptSnapshotLater();
   }
 
-  void sendPrompt() {
+  Future<void> sendPrompt() async {
     final text = promptController.text.trim();
-    if (text.isEmpty || running) return;
+    if ((text.isEmpty && pendingAttachments.isEmpty) ||
+        running ||
+        uploadingAttachments) {
+      return;
+    }
 
     if (widget.demoMode) {
       setState(() {
         promptController.clear();
+        pendingAttachments.clear();
         running = false;
         messages
           ..add(TranscriptMessage.user(text))
@@ -803,7 +815,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
     final channel = ws;
     final current = session;
-    if (!wsReady || channel == null || current == null) {
+    final currentSessionId = activeSessionId;
+    if (!wsReady ||
+        channel == null ||
+        current == null ||
+        currentSessionId == null) {
       if (current != null) refreshConnection();
       setState(() {
         running = false;
@@ -817,12 +833,47 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       return;
     }
 
+    final drafts = List<AttachmentDraft>.from(pendingAttachments);
+    var uploaded = const <RemoteAttachment>[];
+    if (drafts.isNotEmpty) {
+      setState(() => uploadingAttachments = true);
+      try {
+        uploaded = await AttachmentUploader(client: httpClient).upload(
+          origin: current.origin,
+          token: current.token,
+          sessionId: currentSessionId,
+          files: drafts,
+        );
+      } catch (error) {
+        if (!mounted || activeSessionId != currentSessionId) {
+          return;
+        }
+        setState(() => uploadingAttachments = false);
+        if (error is AttachmentException && error.code == 'unauthorized') {
+          await recoverUnauthorizedSession();
+          return;
+        }
+        showAttachmentError(error);
+        return;
+      }
+      if (!mounted || activeSessionId != currentSessionId) {
+        return;
+      }
+    }
+    if (!wsReady || ws != channel) {
+      setState(() => uploadingAttachments = false);
+      showAttachmentError(const AttachmentException('upload_aborted'));
+      return;
+    }
+
     setState(() {
       promptController.clear();
+      pendingAttachments.clear();
+      uploadingAttachments = false;
       running = true;
       currentRunFailed = false;
       activePermissionMode = selectedPermissionMode;
-      beginPrompt(messages, text);
+      beginPrompt(messages, text, attachments: uploaded);
       if (selectedPermissionMode == PermissionMode.bypassPermissions) {
         selectedPermissionMode = PermissionMode.manual;
       }
@@ -832,10 +883,76 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       jsonEncode({
         'type': 'prompt',
         'text': text,
+        if (uploaded.isNotEmpty)
+          'attachmentIds': uploaded.map((attachment) => attachment.id).toList(),
         'permissionMode': activePermissionMode.wireName,
-        if (activeSessionId != null) 'sessionId': activeSessionId,
+        'sessionId': currentSessionId,
       }),
     );
+  }
+
+  Future<void> chooseAttachments() async {
+    if (running || uploadingAttachments) return;
+    if (pendingAttachments.length >= maxAttachmentsPerPrompt) {
+      showAttachmentError(const AttachmentException('too_many_attachments'));
+      return;
+    }
+    FocusScope.of(context).unfocus();
+    final source = await showAttachmentSourceSheet(context);
+    if (source == null || !mounted) return;
+    try {
+      final picked = switch (source) {
+        AttachmentSource.camera => await attachmentPicker.takePhoto(),
+        AttachmentSource.photos => await attachmentPicker.pickPhotos(),
+        AttachmentSource.files => await attachmentPicker.pickFiles(),
+      };
+      if (!mounted || picked.isEmpty) return;
+      final oversized = picked.where(
+        (attachment) => attachment.size > maxAttachmentBytes,
+      );
+      if (oversized.isNotEmpty) {
+        throw const AttachmentException('attachment_too_large');
+      }
+      final next = <AttachmentDraft>[...pendingAttachments];
+      var wasTruncated = false;
+      for (final attachment in picked) {
+        if (next.any((existing) => existing.path == attachment.path)) continue;
+        if (next.length >= maxAttachmentsPerPrompt) {
+          wasTruncated = true;
+          break;
+        }
+        next.add(attachment);
+      }
+      setState(() {
+        pendingAttachments
+          ..clear()
+          ..addAll(next);
+      });
+      if (wasTruncated) {
+        showAttachmentError(const AttachmentException('too_many_attachments'));
+      }
+    } catch (error) {
+      if (mounted) showAttachmentError(error);
+    }
+  }
+
+  void removePendingAttachment(AttachmentDraft attachment) {
+    if (uploadingAttachments) return;
+    setState(() => pendingAttachments.remove(attachment));
+  }
+
+  void showAttachmentError(Object error) {
+    final code = error is AttachmentException ? error.code : error.toString();
+    final message = switch (code) {
+      'too_many_attachments' => '一次最多发送 5 个附件',
+      'attachment_too_large' => '单个附件不能超过 25MB',
+      'attachment_empty' => '不能发送空文件',
+      'upload_aborted' => '上传已中断，请重试',
+      _ => '附件上传失败，请重试',
+    };
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
   }
 
   void selectPermissionMode(PermissionMode mode) {
@@ -902,6 +1019,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         messages
           ..clear()
           ..add(TranscriptMessage.system('已开启新对话'));
+        pendingAttachments.clear();
+        uploadingAttachments = false;
       });
       persistTranscriptSnapshotLater();
       return;
@@ -937,6 +1056,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         contextWindow = null;
         remainingContext = null;
         messages.clear();
+        pendingAttachments.clear();
+        uploadingAttachments = false;
         pendingPermissions.clear();
         respondingPermissionIds.clear();
       });
@@ -982,6 +1103,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       pendingPermissions.clear();
       respondingPermissionIds.clear();
       promptController.clear();
+      pendingAttachments.clear();
+      uploadingAttachments = false;
     });
   }
 
@@ -1176,7 +1299,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           ),
           ShellRoute.chat => ChatScreen(
             session: session,
+            activeSessionId: activeSessionId,
             running: running,
+            uploadingAttachments: uploadingAttachments,
             connected: wsReady,
             offline: remoteOffline,
             modelName: modelName,
@@ -1192,6 +1317,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             pendingPermissions: pendingPermissions,
             respondingPermissionIds: respondingPermissionIds,
             promptController: promptController,
+            pendingAttachments: pendingAttachments,
             onFillPrompt: fillPrompt,
             onReconnect: refreshConnection,
             onNotificationsChanged: setNotificationsEnabled,
@@ -1202,6 +1328,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             onPermissionAllow: (request) =>
                 respondToPermission(request, 'allow'),
             onPermissionDeny: (request) => respondToPermission(request, 'deny'),
+            onAddAttachment: chooseAttachments,
+            onRemoveAttachment: removePendingAttachment,
             onSend: sendPrompt,
             onStop: stopRun,
             onLogout: logoutPairedDevice,
@@ -1642,7 +1770,9 @@ class ChatScreen extends StatelessWidget {
   const ChatScreen({
     super.key,
     required this.session,
+    this.activeSessionId,
     required this.running,
+    this.uploadingAttachments = false,
     required this.connected,
     required this.offline,
     required this.modelName,
@@ -1656,6 +1786,7 @@ class ChatScreen extends StatelessWidget {
     required this.pendingPermissions,
     required this.respondingPermissionIds,
     required this.promptController,
+    this.pendingAttachments = const [],
     required this.onFillPrompt,
     required this.onReconnect,
     required this.onNotificationsChanged,
@@ -1665,13 +1796,17 @@ class ChatScreen extends StatelessWidget {
     required this.onPermissionModeSelected,
     required this.onPermissionAllow,
     required this.onPermissionDeny,
+    this.onAddAttachment,
+    this.onRemoveAttachment,
     required this.onSend,
     required this.onStop,
     required this.onLogout,
   });
 
   final SavedSession? session;
+  final String? activeSessionId;
   final bool running;
+  final bool uploadingAttachments;
   final bool connected;
   final bool offline;
   final String? modelName;
@@ -1685,6 +1820,7 @@ class ChatScreen extends StatelessWidget {
   final List<RemotePermissionRequest> pendingPermissions;
   final Set<String> respondingPermissionIds;
   final TextEditingController promptController;
+  final List<AttachmentDraft> pendingAttachments;
   final ValueChanged<String> onFillPrompt;
   final VoidCallback onReconnect;
   final Future<bool> Function(bool) onNotificationsChanged;
@@ -1694,6 +1830,8 @@ class ChatScreen extends StatelessWidget {
   final ValueChanged<PermissionMode> onPermissionModeSelected;
   final ValueChanged<RemotePermissionRequest> onPermissionAllow;
   final ValueChanged<RemotePermissionRequest> onPermissionDeny;
+  final VoidCallback? onAddAttachment;
+  final ValueChanged<AttachmentDraft>? onRemoveAttachment;
   final VoidCallback onSend;
   final VoidCallback onStop;
   final VoidCallback onLogout;
@@ -1721,6 +1859,8 @@ class ChatScreen extends StatelessWidget {
     final transcript = RepaintBoundary(
       child: TranscriptView(
         messages: messages,
+        session: session,
+        activeSessionId: activeSessionId,
         pendingPermissions: pendingPermissions,
         respondingPermissionIds: respondingPermissionIds,
         connected: connected,
@@ -1748,8 +1888,10 @@ class ChatScreen extends StatelessWidget {
                 const SizedBox(height: 10),
                 PromptBar(
                   controller: promptController,
+                  attachments: pendingAttachments,
                   commands: commands,
                   running: running,
+                  uploading: uploadingAttachments,
                   connected: connected,
                   offline: offline,
                   permissionMode: permissionMode,
@@ -1757,6 +1899,8 @@ class ChatScreen extends StatelessWidget {
                   suggestionMaxHeight: suggestionMaxHeight,
                   onPermissionModeSelected: onPermissionModeSelected,
                   onCommandSelected: (command) => onFillPrompt('/$command '),
+                  onAddAttachment: onAddAttachment,
+                  onRemoveAttachment: onRemoveAttachment,
                   onSend: onSend,
                   onStop: onStop,
                 ),
@@ -2372,6 +2516,47 @@ class InfoRow extends StatelessWidget {
   }
 }
 
+Future<AttachmentSource?> showAttachmentSourceSheet(BuildContext context) {
+  return showModalBottomSheet<AttachmentSource>(
+    context: context,
+    showDragHandle: true,
+    builder: (context) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt_outlined),
+              title: const Text('拍照'),
+              subtitle: const Text('拍一张照片发送给 Claude Code'),
+              onTap: () => Navigator.pop(context, AttachmentSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('选择图片'),
+              subtitle: const Text('从相册选择一张或多张图片'),
+              onTap: () => Navigator.pop(context, AttachmentSource.photos),
+            ),
+            ListTile(
+              leading: const Icon(Icons.folder_open_outlined),
+              title: const Text('选择文件'),
+              subtitle: const Text('发送代码、日志、文档或压缩包'),
+              onTap: () => Navigator.pop(context, AttachmentSource.files),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+String formatAttachmentSize(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+}
+
 Future<void> confirmLogout(BuildContext context, VoidCallback onLogout) async {
   final shouldLogout = await showDialog<bool>(
     context: context,
@@ -2403,6 +2588,8 @@ class TranscriptView extends StatelessWidget {
   const TranscriptView({
     super.key,
     required this.messages,
+    this.session,
+    this.activeSessionId,
     required this.pendingPermissions,
     required this.respondingPermissionIds,
     required this.connected,
@@ -2412,6 +2599,8 @@ class TranscriptView extends StatelessWidget {
   });
 
   final List<TranscriptMessage> messages;
+  final SavedSession? session;
+  final String? activeSessionId;
   final List<RemotePermissionRequest> pendingPermissions;
   final Set<String> respondingPermissionIds;
   final bool connected;
@@ -2531,7 +2720,13 @@ class TranscriptView extends StatelessWidget {
       separatorBuilder: (_, _) => const SizedBox(height: 14),
       itemBuilder: (context, index) {
         final item = items[index];
-        if (item is TranscriptMessage) return MessageBlock(message: item);
+        if (item is TranscriptMessage) {
+          return MessageBlock(
+            message: item,
+            session: session,
+            activeSessionId: activeSessionId,
+          );
+        }
         final request = item as RemotePermissionRequest;
         return PermissionRequestCard(
           request: request,
@@ -2666,9 +2861,16 @@ class PermissionRequestCard extends StatelessWidget {
 }
 
 class MessageBlock extends StatelessWidget {
-  const MessageBlock({super.key, required this.message});
+  const MessageBlock({
+    super.key,
+    required this.message,
+    this.session,
+    this.activeSessionId,
+  });
 
   final TranscriptMessage message;
+  final SavedSession? session;
+  final String? activeSessionId;
 
   @override
   Widget build(BuildContext context) {
@@ -2759,15 +2961,163 @@ class MessageBlock extends StatelessWidget {
             ),
             border: Border.all(color: AppColors.accent.withValues(alpha: 0.10)),
           ),
-          child: Text(
-            message.text,
-            style: const TextStyle(
-              height: 1.45,
-              color: AppColors.ink,
-              fontWeight: FontWeight.w500,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (message.attachments.isNotEmpty)
+                AttachmentMessageGrid(
+                  attachments: message.attachments,
+                  session: session,
+                  activeSessionId: activeSessionId,
+                ),
+              if (message.attachments.isNotEmpty && message.text.isNotEmpty)
+                const SizedBox(height: 9),
+              if (message.text.isNotEmpty)
+                Text(
+                  message.text,
+                  style: const TextStyle(
+                    height: 1.45,
+                    color: AppColors.ink,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class AttachmentMessageGrid extends StatelessWidget {
+  const AttachmentMessageGrid({
+    super.key,
+    required this.attachments,
+    required this.session,
+    required this.activeSessionId,
+  });
+
+  final List<RemoteAttachment> attachments;
+  final SavedSession? session;
+  final String? activeSessionId;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var index = 0; index < attachments.length; index++) ...[
+          RemoteAttachmentTile(
+            attachment: attachments[index],
+            session: session,
+            activeSessionId: activeSessionId,
+          ),
+          if (index != attachments.length - 1) const SizedBox(height: 7),
+        ],
+      ],
+    );
+  }
+}
+
+class RemoteAttachmentTile extends StatelessWidget {
+  const RemoteAttachmentTile({
+    super.key,
+    required this.attachment,
+    required this.session,
+    required this.activeSessionId,
+  });
+
+  final RemoteAttachment attachment;
+  final SavedSession? session;
+  final String? activeSessionId;
+
+  @override
+  Widget build(BuildContext context) {
+    final saved = session;
+    final sessionId = activeSessionId;
+    if (attachment.isImage && saved != null && sessionId != null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: AspectRatio(
+          aspectRatio: 4 / 3,
+          child: Image.network(
+            attachment.contentUri(saved.origin, sessionId).toString(),
+            headers: {'Authorization': 'Bearer ${saved.token}'},
+            fit: BoxFit.cover,
+            cacheWidth: 720,
+            semanticLabel: attachment.name,
+            errorBuilder: (_, _, _) => AttachmentFileTile(
+              name: attachment.name,
+              size: attachment.size,
+              mimeType: attachment.mimeType,
             ),
           ),
         ),
+      );
+    }
+    return AttachmentFileTile(
+      name: attachment.name,
+      size: attachment.size,
+      mimeType: attachment.mimeType,
+    );
+  }
+}
+
+class AttachmentFileTile extends StatelessWidget {
+  const AttachmentFileTile({
+    super.key,
+    required this.name,
+    required this.size,
+    required this.mimeType,
+  });
+
+  final String name;
+  final int size;
+  final String mimeType;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      constraints: const BoxConstraints(minHeight: 58),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.58),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.shadow.withValues(alpha: 0.10)),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            mimeType == 'application/pdf'
+                ? Icons.picture_as_pdf_outlined
+                : Icons.insert_drive_file_outlined,
+            size: 22,
+            color: AppColors.accent,
+          ),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  formatAttachmentSize(size),
+                  style: const TextStyle(color: AppColors.muted, fontSize: 11),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3140,8 +3490,10 @@ class PromptBar extends StatelessWidget {
   const PromptBar({
     super.key,
     required this.controller,
+    this.attachments = const [],
     required this.commands,
     required this.running,
+    this.uploading = false,
     required this.connected,
     required this.offline,
     required this.permissionMode,
@@ -3149,13 +3501,17 @@ class PromptBar extends StatelessWidget {
     this.suggestionMaxHeight = 292,
     required this.onPermissionModeSelected,
     required this.onCommandSelected,
+    this.onAddAttachment,
+    this.onRemoveAttachment,
     required this.onSend,
     required this.onStop,
   });
 
   final TextEditingController controller;
+  final List<AttachmentDraft> attachments;
   final List<String> commands;
   final bool running;
+  final bool uploading;
   final bool connected;
   final bool offline;
   final PermissionMode permissionMode;
@@ -3163,6 +3519,8 @@ class PromptBar extends StatelessWidget {
   final double suggestionMaxHeight;
   final ValueChanged<PermissionMode> onPermissionModeSelected;
   final ValueChanged<String> onCommandSelected;
+  final VoidCallback? onAddAttachment;
+  final ValueChanged<AttachmentDraft>? onRemoveAttachment;
   final VoidCallback onSend;
   final VoidCallback onStop;
 
@@ -3171,12 +3529,17 @@ class PromptBar extends StatelessWidget {
     return ValueListenableBuilder<TextEditingValue>(
       valueListenable: controller,
       builder: (context, value, _) {
-        final canSend = value.text.trim().isNotEmpty && !running && connected;
+        final canSend =
+            (value.text.trim().isNotEmpty || attachments.isNotEmpty) &&
+            !running &&
+            !uploading &&
+            connected;
         final query = commandQuery(value.text);
         final matchingCommands = query == null
             ? const <String>[]
             : filterCommands(commands, query);
-        final showSuggestions = query != null && !running && connected;
+        final showSuggestions =
+            query != null && !running && !uploading && connected;
 
         return Column(
           mainAxisSize: MainAxisSize.min,
@@ -3194,7 +3557,7 @@ class PromptBar extends StatelessWidget {
               alignment: Alignment.centerLeft,
               child: PermissionModeChip(
                 mode: permissionMode,
-                enabled: !running,
+                enabled: !running && !uploading,
                 onPressed: () => showPermissionModePicker(
                   context,
                   selected: permissionMode,
@@ -3204,20 +3567,42 @@ class PromptBar extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 7),
+            if (attachments.isNotEmpty) ...[
+              PendingAttachmentStrip(
+                attachments: attachments,
+                uploading: uploading,
+                onRemove: (attachment) => onRemoveAttachment?.call(attachment),
+              ),
+              const SizedBox(height: 7),
+            ],
             GlassPanel(
               padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
               radius: AppRadii.input,
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
+                  SizedBox(
+                    width: 44,
+                    height: 44,
+                    child: IconButton(
+                      onPressed: running || uploading || !connected
+                          ? null
+                          : onAddAttachment,
+                      icon: const Icon(Icons.attach_file_rounded, size: 21),
+                      tooltip: '添加附件',
+                      color: AppColors.accent,
+                    ),
+                  ),
                   Expanded(
                     child: TextField(
                       controller: controller,
-                      enabled: !running,
+                      enabled: !running && !uploading,
                       minLines: 1,
                       maxLines: 4,
                       decoration: InputDecoration(
-                        hintText: running
+                        hintText: uploading
+                            ? '正在上传附件…'
+                            : running
                             ? 'Claude 正在输出…'
                             : connected
                             ? '输入要发给 Claude Code 的内容'
@@ -3255,6 +3640,15 @@ class PromptBar extends StatelessWidget {
                         ),
                       ),
                     )
+                  else if (uploading)
+                    const SizedBox(
+                      width: 40,
+                      height: 40,
+                      child: Padding(
+                        padding: EdgeInsets.all(10),
+                        child: CircularProgressIndicator(strokeWidth: 2.2),
+                      ),
+                    )
                   else
                     SizedBox(
                       width: 40,
@@ -3278,6 +3672,108 @@ class PromptBar extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+class PendingAttachmentStrip extends StatelessWidget {
+  const PendingAttachmentStrip({
+    super.key,
+    required this.attachments,
+    required this.uploading,
+    required this.onRemove,
+  });
+
+  final List<AttachmentDraft> attachments;
+  final bool uploading;
+  final ValueChanged<AttachmentDraft> onRemove;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 68,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: attachments.length,
+        separatorBuilder: (_, _) => const SizedBox(width: 8),
+        itemBuilder: (context, index) {
+          final attachment = attachments[index];
+          return Container(
+            key: ValueKey('pending-attachment-${attachment.path}'),
+            width: 174,
+            padding: const EdgeInsets.fromLTRB(7, 7, 2, 7),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.60),
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(
+                color: AppColors.shadow.withValues(alpha: 0.10),
+              ),
+            ),
+            child: Row(
+              children: [
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(9),
+                  child: SizedBox.square(
+                    dimension: 48,
+                    child:
+                        attachment.isImage && attachmentFileExists(attachment)
+                        ? Image.file(
+                            File(attachment.path),
+                            fit: BoxFit.cover,
+                            cacheWidth: 160,
+                            semanticLabel: attachment.name,
+                          )
+                        : ColoredBox(
+                            color: AppColors.accent.withValues(alpha: 0.08),
+                            child: const Icon(
+                              Icons.insert_drive_file_outlined,
+                              color: AppColors.accent,
+                              size: 22,
+                            ),
+                          ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        attachment.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        uploading
+                            ? '上传中'
+                            : formatAttachmentSize(attachment.size),
+                        style: const TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox.square(
+                  dimension: 44,
+                  child: IconButton(
+                    onPressed: uploading ? null : () => onRemove(attachment),
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    tooltip: '移除 ${attachment.name}',
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 }
@@ -4225,8 +4721,12 @@ bool hasAssistantReplyAfterLastUser(List<TranscriptMessage> messages) {
       .any((message) => message.role == MessageRole.assistant);
 }
 
-void beginPrompt(List<TranscriptMessage> messages, String text) {
-  messages.add(TranscriptMessage.user(text));
+void beginPrompt(
+  List<TranscriptMessage> messages,
+  String text, {
+  List<RemoteAttachment> attachments = const [],
+}) {
+  messages.add(TranscriptMessage.user(text, attachments: attachments));
   mergeRemoteActivity(
     messages,
     const RemoteActivity(
@@ -4557,6 +5057,7 @@ class TranscriptMessage {
   const TranscriptMessage(
     this.role,
     this.text, {
+    this.attachments = const [],
     this.activityId,
     this.activityKind,
     this.activityState,
@@ -4564,8 +5065,10 @@ class TranscriptMessage {
     this.activityDetail,
   });
 
-  factory TranscriptMessage.user(String text) =>
-      TranscriptMessage(MessageRole.user, text);
+  factory TranscriptMessage.user(
+    String text, {
+    List<RemoteAttachment> attachments = const [],
+  }) => TranscriptMessage(MessageRole.user, text, attachments: attachments);
   factory TranscriptMessage.assistant(String text) =>
       TranscriptMessage(MessageRole.assistant, text);
   factory TranscriptMessage.system(String text) =>
@@ -4589,6 +5092,7 @@ class TranscriptMessage {
 
   final MessageRole role;
   final String text;
+  final List<RemoteAttachment> attachments;
   final String? activityId;
   final ActivityKind? activityKind;
   final ActivityState? activityState;
@@ -4599,6 +5103,10 @@ class TranscriptMessage {
     return {
       'role': role.name,
       'text': text,
+      if (attachments.isNotEmpty)
+        'attachments': attachments
+            .map((attachment) => attachment.toJson())
+            .toList(),
       if (activityId != null) 'activityId': activityId,
       if (activityKind != null) 'activityKind': activityKind!.name,
       if (activityState != null) 'activityState': activityState!.name,
@@ -4617,7 +5125,19 @@ class TranscriptMessage {
     };
     final text = json['text'];
     if (text is! String) throw const FormatException('bad_transcript_message');
-    if (role != MessageRole.activity) return TranscriptMessage(role, text);
+    final rawAttachments = json['attachments'];
+    final attachments = rawAttachments is List
+        ? rawAttachments
+              .map(
+                (attachment) => RemoteAttachment.fromJson(
+                  Map<String, dynamic>.from(attachment as Map),
+                ),
+              )
+              .toList()
+        : const <RemoteAttachment>[];
+    if (role != MessageRole.activity) {
+      return TranscriptMessage(role, text, attachments: attachments);
+    }
 
     final id = json['activityId'];
     final kind = ActivityKind.values.where(

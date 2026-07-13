@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { hostname } from 'node:os';
 import { readFile } from 'node:fs/promises';
 import { extname, join } from 'node:path';
+import Busboy from 'busboy';
 import qrcode from 'qrcode-terminal';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createAuthState } from './authState.js';
@@ -12,6 +13,14 @@ import {
 } from './projectSessionState.js';
 import { WorkspaceService } from './workspaceService.js';
 import {
+  AttachmentStore,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENTS_PER_PROMPT,
+  attachmentDescriptor,
+  promptWithAttachments,
+  type StoredAttachment,
+} from './attachmentStore.js';
+import {
   ClaudeBridge,
   discoverClaudeCommands,
   extractClaudeActivities,
@@ -19,6 +28,7 @@ import {
   extractClaudeSessionInfo,
   isMissingConversationError,
   restoreClaudeSessionInfo,
+  type ClaudeActivity,
   type ClaudePermissionMode,
   type ClaudePermissionRequest,
   type ClaudeSessionInfo,
@@ -37,6 +47,7 @@ const publicUrl = new URL(PUBLIC_ORIGIN);
 const auth = await createAuthState();
 const localControl = await createLocalControlState();
 const projectSessions = await createProjectSessionState({ initialWorkspace: WORKSPACE_DIR });
+const attachments = new AttachmentStore();
 let activeContext = projectSessions.active();
 let workspace = new WorkspaceService(activeContext.project.path);
 let bridge = createBridge(activeContext.project.path);
@@ -254,6 +265,39 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     return;
   }
 
+  const uploadAttachmentsMatch = req.method === 'POST'
+    ? url.pathname.match(/^\/api\/sessions\/([^/]+)\/attachments$/)
+    : null;
+  if (uploadAttachmentsMatch) {
+    const context = projectSessions.getSession(decodeURIComponent(uploadAttachmentsMatch[1]));
+    if (!context) return sendJson(res, 404, { error: 'session_not_found' });
+    try {
+      const saved = await readAttachments(req, context);
+      sendJson(res, 201, { attachments: saved.map(attachmentDescriptor) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = message === 'attachment_too_large' ? 413 : 400;
+      sendJson(res, status, { error: message });
+    }
+    return;
+  }
+
+  const attachmentContentMatch = req.method === 'GET'
+    ? url.pathname.match(/^\/api\/sessions\/([^/]+)\/attachments\/([^/]+)\/content$/)
+    : null;
+  if (attachmentContentMatch) {
+    const context = projectSessions.getSession(decodeURIComponent(attachmentContentMatch[1]));
+    if (!context) return sendJson(res, 404, { error: 'session_not_found' });
+    const attachment = await attachments.resolve(
+      context.project.id,
+      context.session.id,
+      decodeURIComponent(attachmentContentMatch[2]),
+    );
+    if (!attachment) return sendJson(res, 404, { error: 'attachment_not_found' });
+    sendAttachment(res, attachment);
+    return;
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/workspace') {
     sendJson(res, 200, await workspace.snapshot());
     return;
@@ -320,6 +364,7 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     requestId?: string;
     decision?: string;
     sessionId?: string;
+    attachmentIds?: unknown;
   };
 
   if (!session.isAuthenticated()) {
@@ -358,7 +403,13 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
 
   if (msg.type !== 'prompt') throw new Error('unknown_message_type');
   const prompt = (msg.text || '').trim();
-  if (!prompt) return;
+  if (msg.attachmentIds !== undefined
+    && (!Array.isArray(msg.attachmentIds)
+      || !msg.attachmentIds.every(id => typeof id === 'string'))) {
+    throw new Error('invalid_attachments');
+  }
+  const attachmentIds = (msg.attachmentIds ?? []) as string[];
+  if (!prompt && attachmentIds.length === 0) return;
   if (prompt.length > MAX_BODY_BYTES) throw new Error('prompt_too_large');
   if (bridge.isRunning()) throw new Error('claude_is_busy');
   if (msg.sessionId && msg.sessionId !== activeContext.session.id) {
@@ -372,8 +423,26 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
   }
 
   const runContext = activeContext;
-  runContext.transcript.beginPrompt(prompt, permissionMode);
-  await projectSessions.setSessionTitleFromPrompt(runContext.session.id, prompt);
+  const promptAttachments = await attachments.resolveMany(
+    runContext.project.id,
+    runContext.session.id,
+    attachmentIds,
+  );
+  const uploadDirectory = await attachments.ensureSessionDirectory(
+    runContext.project.id,
+    runContext.session.id,
+  );
+  const displayPrompt = prompt;
+  const claudePrompt = promptWithAttachments(prompt, promptAttachments);
+  runContext.transcript.beginPrompt(
+    displayPrompt,
+    permissionMode,
+    promptAttachments.map(attachmentDescriptor),
+  );
+  await projectSessions.setSessionTitleFromPrompt(
+    runContext.session.id,
+    prompt || promptAttachments[0]?.name || '附件会话',
+  );
   broadcastCatalog();
   broadcast(sessionMessage({
     type: 'status',
@@ -383,8 +452,9 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
   }, runContext));
 
   const runClaude = (sessionId: string | undefined) => bridge.run({
-    prompt,
+    prompt: claudePrompt,
     sessionId,
+    additionalDirectories: [uploadDirectory],
     permissionMode,
     onEvent: event => {
       const commands = extractClaudeCommands(event);
@@ -400,8 +470,13 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
         broadcast(sessionMessage({ type: 'session_info', ...sessionInfo }, runContext));
       }
       for (const activity of extractClaudeActivities(event)) {
-        runContext.transcript.mergeActivity(activity);
-        broadcast(sessionMessage({ type: 'activity', ...activity }, runContext));
+        const publicActivity = redactAttachmentPaths(
+          activity,
+          promptAttachments,
+          uploadDirectory,
+        );
+        runContext.transcript.mergeActivity(publicActivity);
+        broadcast(sessionMessage({ type: 'activity', ...publicActivity }, runContext));
       }
     },
     onText: text => {
@@ -457,6 +532,90 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     hasClaudeSessionId: Boolean(runContext.transcript.snapshot().claudeSessionId),
   }, runContext));
   broadcastCatalog();
+}
+
+function readAttachments(req: IncomingMessage, context: SessionContext): Promise<StoredAttachment[]> {
+  return new Promise((resolve, reject) => {
+    let parser: ReturnType<typeof Busboy>;
+    try {
+      parser = Busboy({
+        headers: req.headers,
+        limits: {
+          files: MAX_ATTACHMENTS_PER_PROMPT,
+          fileSize: MAX_ATTACHMENT_BYTES,
+          fields: 0,
+          parts: MAX_ATTACHMENTS_PER_PROMPT,
+        },
+      });
+    } catch {
+      reject(new Error('invalid_multipart'));
+      return;
+    }
+
+    const writes: Promise<StoredAttachment>[] = [];
+    let settled = false;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+
+    parser.on('file', (fieldName, file, info) => {
+      if (fieldName !== 'files') {
+        file.resume();
+        return;
+      }
+      file.on('limit', () => file.destroy(new Error('attachment_too_large')));
+      writes.push(attachments.save({
+        projectId: context.project.id,
+        sessionId: context.session.id,
+        name: info.filename,
+        mimeType: info.mimeType,
+        input: file,
+      }));
+    });
+    parser.on('filesLimit', () => fail(new Error('too_many_attachments')));
+    parser.on('partsLimit', () => fail(new Error('too_many_attachments')));
+    parser.on('error', error => fail(error instanceof Error ? error : new Error(String(error))));
+    parser.on('finish', () => {
+      if (settled) return;
+      void Promise.all(writes).then(saved => {
+        if (!saved.length) throw new Error('attachment_required');
+        settled = true;
+        resolve(saved);
+      }).catch(error => fail(error instanceof Error ? error : new Error(String(error))));
+    });
+    req.on('aborted', () => fail(new Error('upload_aborted')));
+    req.pipe(parser);
+  });
+}
+
+function redactAttachmentPaths(
+  activity: ClaudeActivity,
+  promptAttachments: StoredAttachment[],
+  uploadDirectory: string,
+): ClaudeActivity {
+  if (!activity.detail) return activity;
+  let detail = activity.detail;
+  for (const attachment of promptAttachments) {
+    detail = detail.split(attachment.path).join(`附件/${attachment.name}`);
+  }
+  detail = detail.split(uploadDirectory).join('附件');
+  return detail === activity.detail ? activity : { ...activity, detail };
+}
+
+function sendAttachment(res: ServerResponse, attachment: StoredAttachment): void {
+  const dispositionName = encodeURIComponent(attachment.name).replace(/'/g, '%27');
+  res.writeHead(200, {
+    'Content-Type': attachment.mimeType,
+    'Content-Length': attachment.size,
+    'Content-Disposition': `inline; filename*=UTF-8''${dispositionName}`,
+    'Cache-Control': 'private, max-age=3600',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  const stream = attachments.open(attachment);
+  stream.on('error', () => res.destroy());
+  stream.pipe(res);
 }
 
 async function serveStatic(res: ServerResponse, pathname: string): Promise<void> {

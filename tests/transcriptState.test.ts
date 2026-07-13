@@ -139,3 +139,29 @@ test('persists pending approvals and resets bypass mode after the task', async (
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('persists attachment metadata without exposing local file paths', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-transcript-attachments-'));
+  const path = join(dir, 'transcript.json');
+  try {
+    const state = await createTranscriptState(path);
+    state.beginPrompt('分析截图', 'manual', [{
+      id: 'attachment-1',
+      name: 'screen.png',
+      mimeType: 'image/png',
+      size: 2048,
+    }]);
+    await state.flush();
+
+    const message = state.snapshot().messages[0];
+    assert.deepEqual(message.attachments, [{
+      id: 'attachment-1',
+      name: 'screen.png',
+      mimeType: 'image/png',
+      size: 2048,
+    }]);
+    assert.equal(JSON.stringify(message).includes('uploads'), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
