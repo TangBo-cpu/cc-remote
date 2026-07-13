@@ -30,25 +30,20 @@ Flutter 手机 App，用于扫码配对本机 CC Remote daemon，并远程发送
 - 本地缓存当前 transcript，连接 daemon 后用权威快照补回断线输出。
 - 可选择 Claude Code 六种权限模式。
 - `manual` 模式下显示工具审批卡，支持允许一次和拒绝。
+- 左侧工作区抽屉可浏览当前目录文件、查看 Git 修改和 diff。
 
 未实现：
 
 - 多会话历史列表和搜索。
 - 多设备管理。
-- 手机端权限审批流。
+- 文件上传/下载；工作区只读。
 
 ## 运行
 
-电脑端优先使用一键命令：
+电脑端在 PowerShell 中直接运行：
 
 ```powershell
 cc-remote
-```
-
-如果全局命令不可用，在项目根目录运行：
-
-```powershell
-.\cc-remote.cmd
 ```
 
 手机端调试运行：
@@ -127,7 +122,7 @@ send { "type": "stop" }
 
 App 离线时先显示本地缓存。WebSocket 鉴权后收到 `transcript_snapshot`，若 daemon 已有快照则以 daemon 为准，从而补回断线期间的输出。daemon 没有快照时保留升级前的本地内容。
 
-权限模式入口位于输入框上方。`bypassPermissions` 只有电脑端使用 `-AllowBypassPermissions` 启动时可选，并且只对下一次任务生效。
+权限模式入口位于输入框上方。`bypassPermissions` 默认可用；电脑端用 `-DisableBypassPermissions` 或 `ALLOW_BYPASS_PERMISSIONS=0` 可关闭。开启时需手机二次确认，并且只对下一次任务生效。
 
 ## 连接状态
 
@@ -148,4 +143,4 @@ App 回到前台时会重新调用 `/api/status`。电脑端关闭后，App 保�
 
 ## 真机验证状态
 
-最新 Android 调试版已安装到真机。扫码配对、真实指令加载与筛选、列表滚动、流式回复、消息气泡、思考计时、工具调用、模型和剩余上下文均已完成真机验证。
+最新 Android 调试版已安装到真机。扫码配对、真实指令加载与筛选、列表滚动、流式回复、消息气泡、思考计时、工具调用、模型和剩余上下文均已完成真机验证。权限模式、工具审批卡、transcript 恢复与工作区只读抽屉已在代码落地；第二条 `--resume` 与 Stop 中断长任务仍待专项验证。

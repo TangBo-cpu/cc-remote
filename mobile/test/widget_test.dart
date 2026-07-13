@@ -51,6 +51,9 @@ void main() {
     final store = TranscriptStore();
     final snapshot = TranscriptSnapshot(
       running: true,
+      modelName: 'claude-opus-4-8',
+      contextWindow: 200000,
+      remainingContext: 175000,
       messages: [
         TranscriptMessage.user('user text'),
         TranscriptMessage.assistant('assistant text'),
@@ -63,6 +66,9 @@ void main() {
 
     expect(restored, isNotNull);
     expect(restored!.running, isTrue);
+    expect(restored.modelName, 'claude-opus-4-8');
+    expect(restored.contextWindow, 200000);
+    expect(restored.remainingContext, 175000);
     expect(restored.messages.map((message) => message.text), [
       'user text',
       'assistant text',
@@ -72,6 +78,23 @@ void main() {
     await store.clear();
 
     expect(await store.load(), isNull);
+  });
+
+  test('remote status carries the current model and context', () {
+    final status = RemoteStatus.fromJson({
+      'deviceName': 'tb',
+      'workspaceDir': 'cc-remote',
+      'running': false,
+      'sessionInfo': {
+        'model': 'claude-opus-4-8',
+        'contextWindow': 200000,
+        'remainingTokens': 175000,
+      },
+    });
+
+    expect(status.modelName, 'claude-opus-4-8');
+    expect(status.contextWindow, 200000);
+    expect(status.remainingContext, 175000);
   });
 
   test('remote transcript snapshot restores messages and session context', () {
@@ -734,6 +757,28 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('本机已连接，可以发送任务给 Claude Code'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('slash suggestions fit above an open keyboard', (tester) async {
+    tester.view.physicalSize = const Size(393, 640);
+    tester.view.devicePixelRatio = 1;
+    tester.view.viewInsets = const FakeViewPadding(bottom: 260);
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    addTearDown(tester.view.resetViewInsets);
+
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), '/');
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('command-suggestions')), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

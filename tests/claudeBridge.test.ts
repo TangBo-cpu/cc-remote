@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import {
   ClaudeBridge,
@@ -8,6 +11,7 @@ import {
   extractClaudeSessionInfo,
   isMissingConversationError,
   permissionControlResponse,
+  restoreClaudeSessionInfo,
 } from '../src/claudeBridge.js';
 
 test('ClaudeBridge reports a missing CLI as a run result instead of throwing', async () => {
@@ -129,6 +133,49 @@ test('extracts the active model and exact remaining context', () => {
     usedTokens: 25081,
     remainingTokens: 174919,
   });
+});
+
+test('restores model and remaining context from an existing Claude session', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-session-info-'));
+  const projectsDir = join(dir, 'projects');
+  const sessionDir = join(projectsDir, 'old-worktree');
+  const settingsPath = join(dir, 'settings.json');
+  const sessionId = '2c732c81-e207-4de5-856e-2ec4f7f14199';
+  try {
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(settingsPath, JSON.stringify({
+      env: { ANTHROPIC_MODEL: 'claude-opus-4-8' },
+    }), 'utf8');
+    await writeFile(join(sessionDir, `${sessionId}.jsonl`), [
+      JSON.stringify({ type: 'user', sessionId }),
+      JSON.stringify({
+        type: 'assistant',
+        sessionId,
+        message: {
+          model: 'gpt-5.6-terra',
+          usage: {
+            input_tokens: 13688,
+            cache_read_input_tokens: 11264,
+            cache_creation_input_tokens: 0,
+          },
+        },
+      }),
+    ].join('\n'), 'utf8');
+
+    assert.deepEqual(await restoreClaudeSessionInfo({
+      sessionId,
+      projectsDir,
+      settingsPath,
+      environment: {},
+    }), {
+      model: 'claude-opus-4-8',
+      contextWindow: 200000,
+      usedTokens: 24952,
+      remainingTokens: 175048,
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test('normalizes permission control requests and builds one-time decisions', () => {

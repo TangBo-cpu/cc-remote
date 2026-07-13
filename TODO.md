@@ -18,7 +18,7 @@
 - [x] auth state 写入串行化，避免并发写 `.data/state.json` 临时文件 race
 - [x] Claude bridge 对重复 `session_id` 去重，避免同一轮 prompt 重复写状态
 - [x] `POST /api/new-conversation` 可清空当前 `claudeSessionId`
-- [x] 电脑端一键启动脚本：`cc-remote` / `.\cc-remote.cmd` / `npm run cc-remote`
+- [x] 电脑端使用 `cc-remote` 一键启动
 
 ### Flutter App
 
@@ -57,13 +57,16 @@
 - [x] 手机端允许一次或拒绝工具请求
 - [x] 等待审批状态随 transcript 快照恢复
 - [x] 支持六种 Claude Code 权限模式
-- [x] `bypassPermissions` 电脑端开关、手机确认和单任务自动复位
+- [x] `bypassPermissions` 默认开启，可用 `-DisableBypassPermissions` 关闭；手机确认后只对单次任务生效
+- [x] 左侧工作区抽屉：浏览文件、查看 Git 修改和 diff
+- [x] daemon 提供只读 `GET /api/workspace`、`/api/workspace/file`、`/api/workspace/diff`
 
 ### 文档和保存点
 
 - [x] README 更新为 App-first token 协议
 - [x] mobile README 更新为真实 WebSocket 对话流程
 - [x] 移动端活动与会话上下文功能已合并回 `master`：`3cad17f merge: mobile activity and session context UI`
+- [x] 文档同步代码现状：权限审批、transcript 恢复、工作区只读、bypass 默认策略
 
 ## 真机 UI 验证
 
@@ -130,19 +133,18 @@
 - [ ] 只有单设备授权态，没有多设备管理
 - [ ] 只有单项目工作目录，通过 `WORKSPACE_DIR` 固定
 - [ ] 网页/PWA 只作为调试壳，不是主产品入口
-- [ ] 没有文件上传/下载
-- [ ] 没有手机端权限审批流
+- [ ] 没有文件上传/下载；工作区只读，不提供远程编辑/暂存/提交
 - [ ] 没有多会话历史列表和搜索
+- [ ] 当前只持久化一份当前对话（App 本地缓存 + daemon 权威快照）
 
 ## 后续可加
 
 - [ ] daemon API / WebSocket 自动化测试覆盖 token 协议
 - [ ] 设备列表和撤销单个设备
-- [ ] Transcript 本地持久化
+- [ ] 多会话历史列表和搜索
 - [ ] Claude CLI 真实 stream-json fixture 测试
 - [ ] Cloudflare Access 可选保护
 - [ ] 文件上传到固定临时目录，再让 Claude Code 读取
-- [ ] 权限请求/审批事件的手机端 UI
 - [ ] 一键重置配对接口
 - [ ] 桌面托盘二维码窗口
 

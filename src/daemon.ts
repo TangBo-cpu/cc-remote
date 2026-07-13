@@ -14,6 +14,7 @@ import {
   extractClaudeCommands,
   extractClaudeSessionInfo,
   isMissingConversationError,
+  restoreClaudeSessionInfo,
   type ClaudePermissionMode,
   type ClaudePermissionRequest,
   type ClaudeSessionInfo,
@@ -42,6 +43,16 @@ const authedSockets = new Set<WebSocket>();
 let commandCache: string[] = [];
 let commandDiscovery: Promise<string[]> | undefined;
 let sessionInfo: ClaudeSessionInfo = transcript.snapshot().sessionInfo;
+if (!Object.keys(sessionInfo).length) {
+  const restoredSessionInfo = await restoreClaudeSessionInfo({
+    sessionId: auth.getClaudeSessionId() || '',
+  });
+  if (restoredSessionInfo) {
+    sessionInfo = restoredSessionInfo;
+    transcript.setSessionInfo(restoredSessionInfo);
+    await transcript.flush();
+  }
+}
 
 const server = createServer(async (req, res) => {
   try {
@@ -159,6 +170,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       running: bridge.isRunning(),
       deviceName: DEVICE_NAME,
       workspaceDir: WORKSPACE_DIR,
+      sessionInfo,
       ...auth.status(),
     });
     return;

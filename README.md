@@ -47,47 +47,39 @@
 - App 回到前台时重新探测 daemon 状态。
 - daemon auth state 写入串行化，避免并发写 `.data/state.json` 临时文件冲突。
 - stale Claude Code session 自动清理并用新会话重试一次。
-- 电脑端一键启动命令：`cc-remote` / `.\cc-remote.cmd` / `npm run cc-remote`。
+- 电脑端实际使用 `cc-remote` 一键启动。
 - 当前开发分支已合并回 `master`。
 
 未完成：
 
 - 还没做多会话历史列表和搜索。
-- 还没做多设备管理和手机端权限审批流。
+- 还没做多设备管理。
+- 还没做文件上传/下载，工作区只读。
 
-最新 Android 调试版已完成真机安装和核心对话流程验证。
+最新 Android 调试版已完成真机安装和核心对话流程验证。手机端工具审批、权限模式、工作区抽屉、transcript 恢复均已落地。
 
 ## 一键启动电脑端
+
+在任意 PowerShell 目录运行：
 
 ```powershell
 cc-remote
 ```
 
-如果全局命令不可用，也可在项目根目录运行：
+它会同时启动 Cloudflare Tunnel 和 daemon。终端会显示手机配对用的二维码，按 `Ctrl+C` 会停止 daemon，并清理本次启动的 tunnel。
+
+项目内的底层脚本仍可作为故障排查入口：
 
 ```powershell
 .\cc-remote.cmd
 ```
 
-这个命令会同时启动：
-
-- Cloudflare Tunnel：`tbhaoshuai.ccwu.cc` -> `127.0.0.1:8787`
-- daemon：打印 App 扫码二维码，调用本机 Claude Code CLI
-
-按 `Ctrl+C` 会停止 daemon，并清理本次脚本启动的 tunnel。
-
-也可以用 npm：
-
-```powershell
-npm run cc-remote
-```
-
 可选参数：
 
 ```powershell
-.\cc-remote.cmd -NoTunnel
-.\cc-remote.cmd -WorkspaceDir "E:\\Code-All\\cc-remote" -DeviceName "tb"
-.\cc-remote.cmd -DisableBypassPermissions
+cc-remote -NoTunnel
+cc-remote -WorkspaceDir "E:\\Code-All\\cc-remote" -DeviceName "tb"
+cc-remote -DisableBypassPermissions
 ```
 
 ## 手动运行 daemon

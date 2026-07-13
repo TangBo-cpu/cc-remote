@@ -1,5 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
+import { createReadStream } from 'node:fs';
+import { readdir, readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { createInterface } from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
 
 export type ClaudeBridgeOptions = {
@@ -61,6 +66,13 @@ export type ClaudeSessionInfo = {
   contextWindow?: number;
   usedTokens?: number;
   remainingTokens?: number;
+};
+
+export type ClaudeSessionInfoRestoreOptions = {
+  sessionId: string;
+  projectsDir?: string;
+  settingsPath?: string;
+  environment?: NodeJS.ProcessEnv;
 };
 
 type CurrentRun = {
@@ -408,6 +420,91 @@ export function extractClaudeSessionInfo(event: unknown): ClaudeSessionInfo | nu
     if (!selected || usedTokens > (selected.usedTokens ?? 0)) selected = candidate;
   }
   return selected;
+}
+
+export async function restoreClaudeSessionInfo({
+  sessionId,
+  projectsDir = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects'),
+  settingsPath = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'settings.json'),
+  environment = process.env,
+}: ClaudeSessionInfoRestoreOptions): Promise<ClaudeSessionInfo | null> {
+  if (!sessionId) return null;
+  const transcriptPath = await findSessionTranscript(projectsDir, `${sessionId}.jsonl`);
+  if (!transcriptPath) return null;
+
+  const configuredModel = await readConfiguredClaudeModel(settingsPath, environment);
+  let latestModel: string | undefined;
+  let latestUsedTokens: number | undefined;
+  const lines = createInterface({
+    input: createReadStream(transcriptPath, { encoding: 'utf8' }),
+    crlfDelay: Infinity,
+  });
+  for await (const line of lines) {
+    try {
+      const entry = JSON.parse(line) as unknown;
+      if (!isRecord(entry) || entry.type !== 'assistant' || !isRecord(entry.message)) continue;
+      const message = entry.message;
+      if (typeof message.model === 'string') latestModel = message.model;
+      if (!isRecord(message.usage)) continue;
+      latestUsedTokens = tokenValue(message.usage.input_tokens)
+        + tokenValue(message.usage.cache_read_input_tokens)
+        + tokenValue(message.usage.cache_creation_input_tokens);
+    } catch {}
+  }
+
+  const model = configuredModel || latestModel;
+  if (!model) return null;
+  const contextWindow = contextWindowForModel(model);
+  const usedTokens = latestUsedTokens ?? 0;
+  return {
+    model,
+    contextWindow,
+    usedTokens,
+    remainingTokens: Math.max(0, contextWindow - usedTokens),
+  };
+}
+
+async function findSessionTranscript(root: string, fileName: string): Promise<string | null> {
+  const pending = [root];
+  while (pending.length) {
+    const directory = pending.shift()!;
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) pending.push(path);
+      else if (entry.isFile() && entry.name === fileName) return path;
+    }
+  }
+  return null;
+}
+
+async function readConfiguredClaudeModel(
+  settingsPath: string,
+  environment: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  if (environment.ANTHROPIC_MODEL) return environment.ANTHROPIC_MODEL;
+  try {
+    const settings = JSON.parse(await readFile(settingsPath, 'utf8')) as unknown;
+    if (!isRecord(settings)) return undefined;
+    const settingsEnv = isRecord(settings.env) ? settings.env : {};
+    if (typeof settingsEnv.ANTHROPIC_MODEL === 'string') return settingsEnv.ANTHROPIC_MODEL;
+    if (typeof settings.model !== 'string') return undefined;
+    const aliasKey = `ANTHROPIC_DEFAULT_${settings.model.toUpperCase()}_MODEL`;
+    const aliasModel = settingsEnv[aliasKey];
+    if (typeof aliasModel === 'string') return aliasModel;
+    return settings.model.includes('-') ? settings.model : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function contextWindowForModel(model: string): number {
+  return /(?:^|[-_])(1m|1000k)(?:$|[-_])/i.test(model) ? 1_000_000 : 200_000;
 }
 
 export async function discoverClaudeCommands(options: ClaudeBridgeOptions): Promise<string[]> {

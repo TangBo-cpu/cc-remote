@@ -35,15 +35,17 @@ Flutter App 是 CC Remote 的主入口，不是网页壳。
 - 思考计时和运行中的工具调用状态。
 - 当前模型和剩余上下文展示。
 - Claude Code 权限模式选择和工具审批卡。
+- transcript 本地缓存与 daemon 权威快照恢复。
+- 工作区只读抽屉：文件列表、文件内容、Git diff。
 
 ### 暂不做
 
 - 多电脑管理。
 - 多项目目录切换。
-- 文件上传/下载。
+- 文件上传/下载与远程写操作。
+- 多会话历史列表和搜索。
 - 历史记录云同步。
 - 推送通知。
-- 权限审批 UI。
 - 后台长时间保活。
 - 复杂状态管理框架。
 
@@ -73,46 +75,34 @@ dependencies:
 
 ## 4. 目录结构
 
+当前实际结构：
+
 ```text
 mobile/
   pubspec.yaml
   lib/
-    main.dart
-    app.dart
+    main.dart              # 配对、会话、WS、权限、审批、transcript、设置
+    workspace_drawer.dart  # 工作区文件 / Git diff 只读抽屉
+  test/
+    widget_test.dart
+```
 
-    screens/
-      bootstrap_screen.dart
-      pair_screen.dart
-      chat_screen.dart
-      settings_screen.dart
+目标分层仍可保留，但尚未落地：
 
-    services/
-      token_store.dart
-      pairing_service.dart
-      remote_api.dart
-      remote_ws.dart
-
-    models/
-      pairing_payload.dart
-      pairing_result.dart
-      server_message.dart
-      chat_message.dart
-      app_status.dart
-
-    controllers/
-      session_controller.dart
-      chat_controller.dart
-
-    widgets/
-      status_banner.dart
-      transcript_view.dart
-      prompt_bar.dart
-      message_bubble.dart
+```text
+mobile/lib/
+  screens/
+  services/
+  models/
+  controllers/
+  widgets/
 ```
 
 ### 分层原则
 
 ```text
+当前实现：main.dart 承载状态与协议，workspace_drawer.dart 承载工作区 UI
+目标拆分：
 screens      只负责 UI 组合和用户交互
 controllers 负责页面状态和调用 service
 services    负责网络、存储、协议
@@ -120,7 +110,7 @@ models      负责数据结构和 JSON 解析
 widgets     纯 UI 小组件
 ```
 
-不要在 widget 里直接写 HTTP/WebSocket 细节。
+新功能优先落在现有 `main.dart` / `workspace_drawer.dart`。只有文件继续膨胀时再拆分层。
 
 ## 5. 页面设计
 
@@ -157,7 +147,7 @@ CC Remote
 [打开扫码]
 
 说明：
-1. 在电脑上启动 cc-remote daemon
+1. 在电脑 PowerShell 中运行 `cc-remote`
 2. 确保 Cloudflare Tunnel 指向本机 127.0.0.1:8787
 3. 扫描终端二维码完成配对
 ```
@@ -618,7 +608,7 @@ class ChatController extends ChangeNotifier {}
 - [x] logout 清 token hash、递增 authGeneration、关闭旧 WS。
 - [x] auth state 写入串行化，避免并发写 `.data/state.json` 临时文件 race。
 - [x] stale Claude Code session 自动清理并重试新会话。
-- [x] 电脑端一键启动命令 `cc-remote` / `.\cc-remote.cmd`。
+- [x] 电脑端使用 `cc-remote` 一键启动。
 
 保留：
 
@@ -701,6 +691,9 @@ Logout 后旧 App 不能继续控制电脑
 - [x] App 可在真机显示 Claude 真实流式输出。
 - [x] App 可获取、搜索并滚动选择 Claude Code 斜杠指令。
 - [x] App 可显示思考计时、工具调用、当前模型和剩余上下文。
+- [x] App 可选择权限模式，并在 `manual` 下审批工具请求。
+- [x] App 可本地缓存 transcript，并在重连后用 daemon 快照恢复。
+- [x] App 可打开工作区抽屉，只读浏览文件与 Git diff。
 - [ ] App 可真机 Stop Claude 长任务。
 - [x] App 可 Logout。
 - [x] Logout 后旧 WebSocket 失效。
@@ -709,14 +702,14 @@ Logout 后旧 App 不能继续控制电脑
 
 ## 16. 后续增强
 
-第一版跑通后再考虑：
+核心链路已跑通后再考虑：
 
 - 多电脑管理。
 - 给电脑设置别名。
 - 多会话历史列表和搜索。
 - 文件上传。
-- 权限审批 UI。
 - 后台通知。
 - App deep link。
 - 桌面托盘二维码窗口。
 - Cloudflare Access 额外保护。
+- 把 `main.dart` 拆成 screens / services / controllers。

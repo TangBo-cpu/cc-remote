@@ -133,6 +133,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           .where((message) => message.role != MessageRole.activity)
           .toList(),
       running: running,
+      modelName: modelName,
+      contextWindow: contextWindow,
+      remainingContext: remainingContext,
     );
     return queueTranscriptWrite(() => transcriptStore.save(snapshot));
   }
@@ -153,6 +156,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           ),
         );
       running = snapshot.running;
+      modelName = snapshot.modelName;
+      contextWindow = snapshot.contextWindow;
+      remainingContext = snapshot.remainingContext;
       if (snapshot.running &&
           !messages.any((message) => message.text == interruptedRunMessage)) {
         messages.add(TranscriptMessage.system(interruptedRunMessage));
@@ -191,6 +197,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         session = restored;
         remoteOffline = false;
         running = status.running;
+        if (status.hasSessionInfo) {
+          modelName = status.modelName;
+          contextWindow = status.contextWindow;
+          remainingContext = status.remainingContext;
+        }
         if (!status.running) removeInterruptedRunNotice();
       });
       persistTranscriptSnapshotLater();
@@ -253,6 +264,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         route = ShellRoute.chat;
         remoteOffline = false;
         running = status.running;
+        if (status.hasSessionInfo) {
+          modelName = status.modelName;
+          contextWindow = status.contextWindow;
+          remainingContext = status.remainingContext;
+        }
         if (!status.running) removeInterruptedRunNotice();
       });
       persistTranscriptSnapshotLater();
@@ -448,6 +464,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           contextWindow = (decoded['contextWindow'] as num?)?.toInt();
           remainingContext = (decoded['remainingTokens'] as num?)?.toInt();
         });
+        persistTranscriptSnapshotLater();
       case 'activity':
         final activity = RemoteActivity.tryParse(decoded);
         if (activity == null) return;
@@ -1397,55 +1414,65 @@ class ChatScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      key: const ValueKey('chat'),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
-        child: Column(
-          children: [
-            ConnectionHeader(
-              session: session,
-              running: running,
-              connected: connected,
-              offline: offline,
-              modelName: modelName,
-              contextWindow: contextWindow,
-              remainingContext: remainingContext,
-              onReconnect: onReconnect,
-              onNewConversation: onNewConversation,
-              onOpenWorkspace: onOpenWorkspace,
-              onLogout: onLogout,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final reservedHeight = modelName != null || remainingContext != null
+            ? 312.0
+            : 277.0;
+        final suggestionMaxHeight = (constraints.maxHeight - reservedHeight)
+            .clamp(48.0, 292.0);
+        return SafeArea(
+          key: const ValueKey('chat'),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+            child: Column(
+              children: [
+                ConnectionHeader(
+                  session: session,
+                  running: running,
+                  connected: connected,
+                  offline: offline,
+                  modelName: modelName,
+                  contextWindow: contextWindow,
+                  remainingContext: remainingContext,
+                  onReconnect: onReconnect,
+                  onNewConversation: onNewConversation,
+                  onOpenWorkspace: onOpenWorkspace,
+                  onLogout: onLogout,
+                ),
+                const SizedBox(height: 10),
+                Expanded(
+                  child: TranscriptView(
+                    messages: messages,
+                    pendingPermissions: pendingPermissions,
+                    respondingPermissionIds: respondingPermissionIds,
+                    connected: connected,
+                    onFillPrompt: onFillPrompt,
+                    onPermissionAllow: onPermissionAllow,
+                    onPermissionDeny: onPermissionDeny,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                PromptBar(
+                  controller: promptController,
+                  commands: commands,
+                  running: running,
+                  connected: connected,
+                  offline: offline,
+                  permissionMode: permissionMode,
+                  allowBypassPermissions: allowBypassPermissions,
+                  suggestionMaxHeight: suggestionMaxHeight,
+                  onChanged: onChanged,
+                  onPermissionModeSelected: onPermissionModeSelected,
+                  onCommandSelected: (command) => onFillPrompt('/$command '),
+                  onSend: onSend,
+                  onStop: onStop,
+                ),
+              ],
             ),
-            const SizedBox(height: 10),
-            Expanded(
-              child: TranscriptView(
-                messages: messages,
-                pendingPermissions: pendingPermissions,
-                respondingPermissionIds: respondingPermissionIds,
-                connected: connected,
-                onFillPrompt: onFillPrompt,
-                onPermissionAllow: onPermissionAllow,
-                onPermissionDeny: onPermissionDeny,
-              ),
-            ),
-            const SizedBox(height: 10),
-            PromptBar(
-              controller: promptController,
-              commands: commands,
-              running: running,
-              connected: connected,
-              offline: offline,
-              permissionMode: permissionMode,
-              allowBypassPermissions: allowBypassPermissions,
-              onChanged: onChanged,
-              onPermissionModeSelected: onPermissionModeSelected,
-              onCommandSelected: (command) => onFillPrompt('/$command '),
-              onSend: onSend,
-              onStop: onStop,
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
     );
   }
 }
@@ -2597,6 +2624,7 @@ class PromptBar extends StatelessWidget {
     required this.offline,
     required this.permissionMode,
     required this.allowBypassPermissions,
+    this.suggestionMaxHeight = 292,
     required this.onChanged,
     required this.onPermissionModeSelected,
     required this.onCommandSelected,
@@ -2611,6 +2639,7 @@ class PromptBar extends StatelessWidget {
   final bool offline;
   final PermissionMode permissionMode;
   final bool allowBypassPermissions;
+  final double suggestionMaxHeight;
   final VoidCallback onChanged;
   final ValueChanged<PermissionMode> onPermissionModeSelected;
   final ValueChanged<String> onCommandSelected;
@@ -2633,6 +2662,7 @@ class PromptBar extends StatelessWidget {
           CommandSuggestions(
             commands: matchingCommands,
             loading: commands.isEmpty,
+            maxHeight: suggestionMaxHeight,
             onSelected: onCommandSelected,
           ),
           const SizedBox(height: 8),
@@ -2932,11 +2962,13 @@ class CommandSuggestions extends StatelessWidget {
     super.key,
     required this.commands,
     required this.loading,
+    this.maxHeight = 292,
     required this.onSelected,
   });
 
   final List<String> commands;
   final bool loading;
+  final double maxHeight;
   final ValueChanged<String> onSelected;
 
   @override
@@ -2946,7 +2978,7 @@ class CommandSuggestions extends StatelessWidget {
       radius: AppRadii.control,
       padding: const EdgeInsets.symmetric(vertical: 6),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxHeight: 292),
+        constraints: BoxConstraints(maxHeight: maxHeight),
         child: loading
             ? const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -3435,17 +3467,33 @@ class RemoteStatus {
     required this.deviceName,
     required this.workspaceDir,
     required this.running,
+    required this.hasSessionInfo,
+    this.modelName,
+    this.contextWindow,
+    this.remainingContext,
   });
 
   final String? deviceName;
   final String? workspaceDir;
   final bool running;
+  final bool hasSessionInfo;
+  final String? modelName;
+  final int? contextWindow;
+  final int? remainingContext;
 
   static RemoteStatus fromJson(Map<String, dynamic> json) {
+    final rawSessionInfo = json['sessionInfo'];
+    final sessionInfo = rawSessionInfo is Map<String, dynamic>
+        ? rawSessionInfo
+        : const <String, dynamic>{};
     return RemoteStatus(
       deviceName: json['deviceName'] as String?,
       workspaceDir: json['workspaceDir'] as String?,
       running: json['running'] == true,
+      hasSessionInfo: rawSessionInfo is Map<String, dynamic>,
+      modelName: sessionInfo['model'] as String?,
+      contextWindow: (sessionInfo['contextWindow'] as num?)?.toInt(),
+      remainingContext: (sessionInfo['remainingTokens'] as num?)?.toInt(),
     );
   }
 }
@@ -3805,16 +3853,28 @@ bool shouldApplyRemoteTranscriptSnapshot({
 }
 
 class TranscriptSnapshot {
-  const TranscriptSnapshot({required this.messages, required this.running});
+  const TranscriptSnapshot({
+    required this.messages,
+    required this.running,
+    this.modelName,
+    this.contextWindow,
+    this.remainingContext,
+  });
 
   static const schemaVersion = 1;
   final List<TranscriptMessage> messages;
   final bool running;
+  final String? modelName;
+  final int? contextWindow;
+  final int? remainingContext;
 
   Map<String, dynamic> toJson() {
     return {
       'version': schemaVersion,
       'running': running,
+      'modelName': modelName,
+      'contextWindow': contextWindow,
+      'remainingContext': remainingContext,
       'messages': messages.map((message) => message.toJson()).toList(),
     };
   }
@@ -3829,6 +3889,9 @@ class TranscriptSnapshot {
     }
     return TranscriptSnapshot(
       running: json['running'] == true,
+      modelName: json['modelName'] as String?,
+      contextWindow: (json['contextWindow'] as num?)?.toInt(),
+      remainingContext: (json['remainingContext'] as num?)?.toInt(),
       messages: rawMessages
           .map(
             (message) =>
