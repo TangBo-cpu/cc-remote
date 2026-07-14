@@ -1,715 +1,85 @@
-# CC Remote Flutter App 设计架构
-
-## 1. 产品定位
-
-Flutter App 是 CC Remote 的主入口，不是网页壳。
-
-目标体验：
-
-```text
-电脑启动 daemon
-  -> 本地终端显示二维码
-  -> 手机 App 扫码配对
-  -> App 连接 tbhaoshuai.ccwu.cc
-  -> Cloudflare Tunnel 转发到电脑本地 daemon
-  -> daemon 调用本机 Claude Code
-  -> App 显示 Claude Code 流式输出并可 Stop
-```
-
-第一版只做一台电脑、一个授权 token、一个 Claude Code session。
-
-## 2. MVP 范围
-
-### 必须有
-
-- 扫码配对。
-- 安全保存 token。
-- 自动恢复已配对状态。
-- WebSocket 连接 daemon。
-- 发送 prompt。
-- 流式显示 Claude 输出。
-- Stop 当前任务。
-- Logout / 清除配对。
-- 基础错误展示和手动重连。
-- Claude Code 斜杠指令发现、搜索和选择。
-- 思考计时和运行中的工具调用状态。
-- 当前模型和剩余上下文展示。
-- Claude Code 权限模式选择和工具审批卡。
-- transcript 本地缓存与 daemon 权威快照恢复。
-- 工作区只读抽屉：文件列表、文件内容、Git diff。
-
-### 暂不做
-
-- 多电脑管理。
-- 多项目目录切换。
-- 文件上传/下载与远程写操作。
-- 多会话历史列表和搜索。
-- 历史记录云同步。
-- 推送通知。
-- 后台长时间保活。
-- 复杂状态管理框架。
-
-## 3. 技术选型
-
-| 能力 | 推荐方案 | 说明 |
-|---|---|---|
-| App 框架 | Flutter | Android/iOS 一套代码，适合后续打包 |
-| 扫码 | `mobile_scanner` | 简单稳定，支持二维码 |
-| 安全存储 | `flutter_secure_storage` | iOS Keychain / Android Keystore |
-| HTTP | `http` | MVP 足够 |
-| WebSocket | `web_socket_channel` | Dart 官方生态常用库 |
-| 状态管理 | `ChangeNotifier` + `ValueNotifier` | MVP 足够，不先引入 Riverpod/Bloc |
-| 路由 | `Navigator` | 两三个页面不用上复杂路由 |
-
-推荐依赖：
-
-```yaml
-dependencies:
-  flutter:
-    sdk: flutter
-  mobile_scanner: ^6.0.0
-  flutter_secure_storage: ^9.2.0
-  http: ^1.2.0
-  web_socket_channel: ^3.0.0
-```
-
-## 4. 目录结构
-
-当前实际结构：
-
-```text
-mobile/
-  pubspec.yaml
-  lib/
-    main.dart              # 配对、会话、WS、权限、审批、transcript、设置
-    workspace_drawer.dart  # 工作区文件 / Git diff 只读抽屉
-  test/
-    widget_test.dart
-```
-
-目标分层仍可保留，但尚未落地：
-
-```text
-mobile/lib/
-  screens/
-  services/
-  models/
-  controllers/
-  widgets/
-```
-
-### 分层原则
+# CC Remote Flutter 实现说明
 
-```text
-当前实现：main.dart 承载状态与协议，workspace_drawer.dart 承载工作区 UI
-目标拆分：
-screens      只负责 UI 组合和用户交互
-controllers 负责页面状态和调用 service
-services    负责网络、存储、协议
-models      负责数据结构和 JSON 解析
-widgets     纯 UI 小组件
-```
+## 实现原则
 
-新功能优先落在现有 `main.dart` / `workspace_drawer.dart`。只有文件继续膨胀时再拆分层。
+Flutter App 是产品主入口。当前实现集中在少量文件中，优先保证状态一致、断线可恢复和真机布局稳定。文档描述现有代码，不维护一套与代码分离的理想架构。
 
-## 5. 页面设计
+## 入口与路由
 
-### 5.1 BootstrapScreen
+`CcRemoteApp` 创建 Material App 和 Signal Console 主题。`DemoShell` 持有应用级状态，监听页面前后台变化，并在 `boot`、`pair` 和 `chat` 三个路由之间切换。
 
-启动页，决定进入哪个页面。
+启动时加载 Secure Storage、通知偏好和本地 transcript。存在已保存 session 时调用 `/api/status`，恢复电脑名、工作区、项目 catalog、活动会话、模型和上下文，再建立 WebSocket。
 
-职责：
+## 主要文件
 
-1. 从 Secure Storage 读取 token。
-2. 如果没有 token，进入 `PairScreen`。
-3. 如果有 token，调用 `/api/status`。
-4. status 成功，进入 `ChatScreen`。
-5. status 失败，清 token 或提示重新配对。
+`main.dart` 包含配对、HTTP、WebSocket、项目与会话、transcript、权限模式、主要页面和组件。`signal_console_theme.dart` 包含颜色、字体、圆角、动效和自绘部件。`workspace_drawer.dart` 实现文件树、文件阅读和 Git diff。`attachments.dart` 实现相机、相册、文件选择与 multipart 上传。`notification_service.dart` 封装 Android 本地通知和偏好保存。
 
-UI：
+## 页面与组件
 
-```text
-CC Remote
-正在检查连接…
-```
+`BootstrapScreen` 只显示恢复状态。`PairScreen` 负责相机扫描、紧凑横屏布局和错误恢复。`PairReviewSheet` 在换 token 前确认设备、origin 和二维码有效期。
 
-### 5.2 PairScreen
+`ChatScreen` 由 `ConnectionHeader`、`TranscriptView` 和 `PromptBar` 组成。连接头是紧凑双栏，右侧放项目、工作区、新对话、设置、目录、模型和剩余上下文。键盘打开或屏幕高度不足时切换到固定高度紧凑布局。
 
-扫码配对页。
+`TranscriptView` 展示用户消息、Claude Markdown 回复、活动状态、审批卡和离线重连卡。`MessageBlock` 与附件组件负责历史内容。`ActivityBlock` 合并思考和工具活动，任务结束后清理临时活动。
 
-UI：
+`PromptBar` 是黑色 Command Dock。它处理权限模式、信号轨、附件预览、多行输入、发送和停止。输入以 `/` 开头且没有空格时，`CommandSuggestions` 按前缀优先规则筛选 daemon 同步的 Claude Code 指令。
 
-```text
-CC Remote
+`SessionNavigatorSheet` 展示项目和各自会话，允许切换或创建会话。`SettingsSheet` 管理通知、重连和退出配对。`WorkspaceDrawer` 只读显示活动项目文件与 Git diff。
 
-扫描电脑终端里的二维码
+## 核心状态
 
-[打开扫码]
+保存的配对信息由 `SavedSession` 表示，包含 origin、token、deviceName 和 workspaceDir。项目与会话 catalog 使用 `RemoteProjectCatalog`、`RemoteProjectSummary` 和 `RemoteSessionSummary`。
 
-说明：
-1. 在电脑 PowerShell 中运行 `cc-remote`
-2. 确保 Cloudflare Tunnel 指向本机 127.0.0.1:8787
-3. 扫描终端二维码完成配对
-```
-
-交互：
+transcript 使用 `TranscriptMessage`，角色分为 user、assistant、system 和 activity。daemon 快照由 `RemoteTranscriptSnapshot` 解析，包含消息、运行状态、权限模式、审批请求、Claude session id 和 session info。
 
-- 点击“打开扫码”进入相机扫码视图。
-- 扫到二维码后暂停扫描。
-- 解析 payload。
-- 调用 `/api/pair`。
-- 成功后保存 token，进入 `ChatScreen`。
-- 失败则显示错误并允许重新扫码。
+运行状态由 `connected`、`remoteOffline`、`running`、`stopping` 和 `uploadingAttachments` 等字段共同表达。它们是互斥操作的依据，不另设重复状态机对象。
 
-### 5.3 ChatScreen
+## 网络行为
 
-主控制页。
+配对成功后 token 写入 `flutter_secure_storage`。HTTP 使用 Bearer token。WebSocket 从扫码 origin 推导 `ws` 或 `wss` 地址，连接后先发送 `auth`。
 
-UI：
+发送任务前，App 将附件上传到当前会话，得到附件 ID，再发送 prompt。纯附件任务允许文本为空。发送后立即在本地追加用户消息和思考活动，等待 daemon 权威事件修正状态。
 
-```text
-顶部：
-  Jayson PC · 已连接 / 运行中 / 已断开
-  [设置]
+WebSocket 处理 `status`、`catalog`、`transcript_snapshot`、`permission_capabilities`、`permission_request`、`permission_resolved`、`permission_expired`、`commands`、`session_info`、`activity`、`text`、`done`、`stopped` 和 `error`。
 
-中间：
-  transcript 消息列表
+会话消息必须与当前 `projectId` 和 `sessionId` 匹配。重新连接后，daemon snapshot 覆盖本地推测状态，避免重复消息或丢失断线输出。
 
-底部：
-  多行输入框
-  [发送] [停止]
-```
-
-交互：
-
-- 发送 prompt 后：
-  - 添加 user message。
-  - 禁用发送按钮。
-  - 启用 Stop。
-  - WebSocket 发送 `{ type: "prompt", text }`。
-- 收到 `text`：
-  - 追加到当前 assistant message。
-- 收到 `done`：
-  - 标记当前 assistant message 完成。
-  - 启用发送按钮。
-  - 禁用 Stop。
-- 收到 `stopped`：
-  - 标记当前 assistant message 为已停止。
-- 断线：
-  - 显示断线状态。
-  - 不自动重发 prompt。
-  - 给“重新连接”入口。
-
-### 5.4 SettingsScreen
-
-设置页。
-
-MVP 只放：
-
-```text
-电脑：Jayson PC
-服务地址：https://tbhaoshuai.ccwu.cc
-状态：已连接
+## 权限模式
 
-[重新连接]
-[退出配对]
-```
-
-退出配对：
-
-1. 调用 `POST /api/logout`。
-2. 本地删除 token。
-3. 关闭 WebSocket。
-4. 回到 `PairScreen`。
-
-## 6. 状态机
-
-App 全局状态：
+App 支持 `manual`、`acceptEdits`、`auto`、`dontAsk`、`plan` 和 `bypassPermissions`。默认是 `manual`。权限请求显示一次性审批卡，只能允许或拒绝。
 
-```text
-booting
-  -> unpaired
-  -> pairing
-  -> paired
-  -> connecting
-  -> connected
-  -> running
-  -> disconnected
-  -> error
-```
+如果 daemon 关闭 bypass 能力，选择项禁用。选择 bypass 时必须弹出确认，任务结束后自动恢复询问权限。
 
-状态含义：
-
-| 状态 | 含义 | UI 行为 |
-|---|---|---|
-| `booting` | 启动检查 token | 显示加载 |
-| `unpaired` | 没有 token | 显示扫码页 |
-| `pairing` | 正在换 token | 显示配对中 |
-| `paired` | 有 token 但未连 WS | 准备连接 |
-| `connecting` | 正在连 WS | 禁用输入 |
-| `connected` | WS 已鉴权 | 可发送 prompt |
-| `running` | Claude 正在执行 | 禁用发送，启用 Stop |
-| `disconnected` | WS 断开 | 显示重连 |
-| `error` | 当前操作失败 | 显示错误 |
-
-App 断线期间 Claude 可以继续运行。重新鉴权后 daemon 发送当前对话快照，App 用它补回缺失输出。daemon 自身重启时无法续跑旧进程，会把未完成任务标记为已中断。
-
-## 7. 数据模型
-
-### 7.1 PairingPayload
-
-二维码 JSON：
-
-```json
-{
-  "type": "cc-remote-pair",
-  "version": 1,
-  "origin": "https://tbhaoshuai.ccwu.cc",
-  "nonce": "base64url-random-nonce",
-  "deviceName": "Jayson PC",
-  "expiresAt": 1780000000000
-}
-```
-
-Dart model：
-
-```dart
-class PairingPayload {
-  final String type;
-  final int version;
-  final Uri origin;
-  final String nonce;
-  final String deviceName;
-  final DateTime expiresAt;
-}
-```
-
-校验规则：
+## 附件
 
-- `type == "cc-remote-pair"`
-- `version == 1`
-- `origin.scheme == "https"`
-- `nonce.isNotEmpty`
-- `expiresAt` 晚于当前时间
-
-### 7.2 PairingResult
-
-```dart
-class PairingResult {
-  final String token;
-  final String deviceName;
-  final Uri origin;
-}
-```
+附件来源包括相机、相册和文件。选择后先在 Command Dock 上方预览。一次最多 5 个，单个最大 25MB。上传期间禁止发送、删除附件和切换会话。
 
-### 7.3 ChatMessage
+图片历史使用 daemon 鉴权 content API 加载缩略图，普通文件显示名称和大小。App 与 transcript 只保存附件描述，不保存 daemon 本机绝对路径。
 
-```dart
-enum ChatRole { user, assistant, system }
+## 错误与恢复
 
-enum ChatMessageState { streaming, done, stopped, error }
+二维码格式错误、过期、网络失败和配对失败都留在 PairScreen，并提供重新扫描。HTTP 401 清除 token，回到配对页。普通网络错误保留配对和 transcript，主控制台显示电脑端离线。
 
-class ChatMessage {
-  final String id;
-  final ChatRole role;
-  final String text;
-  final ChatMessageState state;
-  final DateTime createdAt;
-}
-```
+运行中断线不自动重发 prompt。重新连接后通过 transcript snapshot 判断任务是否继续、完成或中断。Stop 进入停止中状态，禁用重复点击；收到 `stopped`、`done` 或 `error` 后恢复输入。
 
-App 本地保存当前 transcript 作为离线缓存，daemon 保存权威快照。当前版本只恢复一份当前对话，不提供多会话历史列表。
+## 布局要求
 
-### 7.4 ServerMessage
+主界面使用 SafeArea。顶部连接舱正常模式最小高度约 84 像素，紧凑模式固定 84 像素。右侧元信息必须单行截断或缩放。PromptBar 固定在底部安全区上方，键盘出现时 transcript 和指令建议让出空间。
 
-WebSocket 服务端消息：
+系统大字体、小屏、横屏和键盘场景都有回归测试。中文显示需要真机验证，测试环境的 Ahem 字体只用于布局。
 
-```dart
-sealed class ServerMessage {}
+## 测试范围
 
-class StatusMessage extends ServerMessage {
-  final bool authenticated;
-  final bool running;
-  final bool hasClaudeSessionId;
-}
+`mobile/test/widget_test.dart` 覆盖启动、配对、设置确认、会话导航、工作区、指令筛选、权限模式、审批卡、运行和停止状态、减少动态效果、小屏大字体、双栏连接舱溢出、横屏扫码、离线重连、Markdown 回复和活动展示。
 
-class CommandsMessage extends ServerMessage {
-  final List<String> commands;
-}
-
-class SessionInfoMessage extends ServerMessage {
-  final String? model;
-  final int? contextWindow;
-  final int? remainingTokens;
-}
-
-class ActivityMessage extends ServerMessage {
-  final String id;
-  final String kind;
-  final String state;
-  final String? toolName;
-  final String? detail;
-}
-
-class TextMessage extends ServerMessage {
-  final String text;
-}
-
-class DoneMessage extends ServerMessage {
-  final int? exitCode;
-  final String? claudeSessionId;
-}
-
-class StoppedMessage extends ServerMessage {}
-
-class ErrorMessage extends ServerMessage {
-  final String message;
-}
-```
-
-如果 Dart sealed class 写起来麻烦，MVP 可以先用普通 enum + data class，不强求。
-
-## 8. Service 设计
-
-### 8.1 TokenStore
-
-职责：安全保存 token 和 origin。
-
-接口：
-
-```dart
-class TokenStore {
-  Future<SavedSession?> load();
-  Future<void> save(SavedSession session);
-  Future<void> clear();
-}
-```
-
-保存内容：
-
-```json
-{
-  "origin": "https://tbhaoshuai.ccwu.cc",
-  "token": "...",
-  "deviceName": "Jayson PC"
-}
-```
-
-实现：`flutter_secure_storage`。
-
-### 8.2 PairingService
-
-职责：解析二维码并换取 token。
-
-接口：
-
-```dart
-class PairingService {
-  Future<PairingPayload> parseQr(String raw);
-  Future<PairingResult> pair(PairingPayload payload);
-}
-```
-
-请求：
-
-```http
-POST {origin}/api/pair
-Content-Type: application/json
-
-{
-  "nonce": "...",
-  "appName": "CC Remote",
-  "platform": "android"
-}
-```
-
-### 8.3 RemoteApi
-
-职责：普通 HTTP API。
-
-接口：
-
-```dart
-class RemoteApi {
-  Future<RemoteStatus> status(SavedSession session);
-  Future<void> stop(SavedSession session);
-  Future<void> logout(SavedSession session);
-}
-```
-
-请求头：
-
-```http
-Authorization: Bearer <token>
-```
-
-### 8.4 RemoteWs
-
-职责：WebSocket 生命周期和协议。
-
-接口：
-
-```dart
-class RemoteWs {
-  Stream<ServerMessage> get messages;
-
-  Future<void> connect(SavedSession session);
-  void sendPrompt(String text);
-  void stop();
-  Future<void> close();
-}
-```
-
-连接流程：
-
-```text
-connect wss://host/ws
-  -> send { type: "auth", token }
-  -> wait status authenticated=true
-  -> ready
-```
-
-不在 URL query 里放 token。
-
-## 9. Controller 设计
-
-### 9.1 SessionController
-
-管理 App 是否已配对、当前电脑信息、连接状态。
-
-职责：
-
-- 启动时加载 token。
-- status 检查。
-- 配对成功后保存 session。
-- logout 后清理 session。
-
-核心状态：
-
-```dart
-class SessionState {
-  final AppStatus status;
-  final SavedSession? session;
-  final String? error;
-}
-```
-
-### 9.2 ChatController
-
-管理 WebSocket 和消息流。
-
-职责：
-
-- 连接 WS。
-- 发送 prompt。
-- 收流式 text。
-- stop。
-- 断线处理。
-
-核心状态：
-
-```dart
-class ChatState {
-  final bool connected;
-  final bool running;
-  final List<ChatMessage> messages;
-  final String? error;
-}
-```
-
-MVP 用 `ChangeNotifier`：
-
-```dart
-class ChatController extends ChangeNotifier {}
-```
-
-## 10. 网络错误处理
-
-### Pairing 错误
-
-| 错误 | UI 文案 |
-|---|---|
-| QR 格式错误 | 这不是 CC Remote 配对二维码 |
-| QR 过期 | 配对二维码已过期，请重新启动或刷新电脑端二维码 |
-| 网络失败 | 无法连接电脑，请检查 Cloudflare Tunnel |
-| 401 | 配对码无效或已使用 |
-| 5xx | 电脑端 daemon 出错 |
-
-### WebSocket 错误
-
-| 错误 | UI 行为 |
-|---|---|
-| 连接失败 | 显示“重新连接” |
-| auth 失败 | 清 token，回到配对页 |
-| 运行中断线 | 不自动重发 prompt，提示输出可能不完整 |
-| stop 失败 | 显示错误，不清空 transcript |
-
-## 11. UI 细节
-
-### 11.1 ChatScreen 布局
-
-```text
-┌─────────────────────────┐
-│ Jayson PC        设置    │
-│ 已连接 / 运行中           │
-├─────────────────────────┤
-│ user: ...               │
-│ assistant: ...          │
-│ assistant streaming...  │
-├─────────────────────────┤
-│ 输入框                  │
-│ [发送] [停止]            │
-└─────────────────────────┘
-```
-
-### 11.2 输入框规则
-
-- 支持多行。
-- 空内容不能发送。
-- `running` 时禁止发送。
-- Stop 只在 `running` 时启用。
-- 发送后不自动清 transcript，只清输入框。
-
-### 11.3 Transcript 规则
-
-- user 消息右侧。
-- assistant 消息左侧。
-- system 消息居中小字。
-- `text` event 追加到当前 assistant 消息。
-- 输入框以 `/` 开头时展示可搜索、可滚动的 Claude Code 指令列表。
-- 任务运行时展示思考计时和工具调用，结束后移除这些临时状态。
-- 顶部展示当前模型和剩余上下文。
-- `done` 后 assistant message 状态变 done。
-- `stopped` 后状态变 stopped。
-
-## 12. 安全设计
-
-- token 只存在 Secure Storage。
-- 不把 token 打印到日志。
-- 不把 token 放 WebSocket URL。
-- QR payload 里只有一次性 nonce，没有长期 secret。
-- App logout 时同时调用 daemon logout 和本地清理。
-- auth 失败时立即清理本地 token。
-- App 不提供修改 `WORKSPACE_DIR` 的入口。
-- App 不提供任意 shell 命令入口。
-
-## 13. 与 daemon 的配套改造
-
-当前 daemon 已完成 App/token 主协议。
-
-已完成：
-
-- [x] `/api/pair` 返回 token，不再设置 cookie。
-- [x] `AuthState` 提供 `verifyBearerToken()` 和 `verifyToken()`。
-- [x] `AuthState` 保留 token hash，不保存 token 明文。
-- [x] WebSocket 支持第一条 `auth` 消息。
-- [x] 未 auth 的 WebSocket 不接受 `prompt` / `stop`。
-- [x] QR 生成 JSON payload。
-- [x] logout 清 token hash、递增 authGeneration、关闭旧 WS。
-- [x] auth state 写入串行化，避免并发写 `.data/state.json` 临时文件 race。
-- [x] stale Claude Code session 自动清理并重试新会话。
-- [x] 电脑端使用 `cc-remote` 一键启动。
-
-保留：
-
-- [x] `web/` 调试页，但不作为主产品入口。
-
-## 14. 实现顺序
-
-### Step 1：daemon 协议迁移（已完成）
-
-- 改 `/api/pair` 返回 token。
-- 改 QR payload 为 JSON。
-- 改 WS auth 消息。
-- 保留现有 Claude bridge。
-- 修复 auth state 并发写 race。
-- stale Claude Code session 自动清理并重试新会话。
-- 添加电脑端一键启动命令。
-- 跑 `npm run typecheck && npm run build && npm test`。
-
-### Step 2：创建 Flutter 项目（已完成）
-
-```powershell
-flutter create mobile
-```
-
-加依赖：
+`mobile/test/attachments_test.dart` 覆盖附件上传、限制和错误清理。提交前运行：
 
 ```powershell
 cd mobile
-flutter pub add mobile_scanner flutter_secure_storage web_socket_channel http
+flutter analyze
+flutter test
 ```
 
-### Step 3：实现配对（已完成）
+## 后续拆分条件
 
-- `PairingPayload.fromJson`
-- `PairingService.pair`
-- `TokenStore.save`
-- `PairScreen` 扫码
-
-成功标准：
-
-```text
-电脑终端二维码 -> 手机扫码 -> App 显示已连接 Jayson PC
-```
-
-### Step 4：实现 WebSocket 聊天（已完成并通过真机验证）
-
-- `RemoteWs.connect`
-- auth 消息
-- prompt 消息
-- text/done/stopped/error 解析
-- `ChatScreen` transcript
-
-成功标准：
-
-```text
-App 发 prompt -> 电脑 Claude Code 执行 -> App 流式显示输出
-```
-
-### Step 5：Stop、Logout 和离线状态（已完成，Stop 真机中断待验证）
-
-- Stop 当前任务。
-- Logout 撤销 token。
-- auth 失败回到 PairScreen。
-
-成功标准：
-
-```text
-Stop 可中断长任务
-Logout 后旧 App 不能继续控制电脑
-```
-
-## 15. 第一版验收标准
-
-- [x] 电脑端 daemon 终端显示 JSON payload 二维码。
-- [x] Flutter App 可扫码并配对。
-- [x] token 存入 Secure Storage。
-- [x] 关闭重开 App 后自动恢复已配对状态。
-- [x] daemon 离线时 App 显示“电脑端离线”。
-- [x] App 可发送 prompt 到 WebSocket。
-- [x] App 可在真机显示 Claude 真实流式输出。
-- [x] App 可获取、搜索并滚动选择 Claude Code 斜杠指令。
-- [x] App 可显示思考计时、工具调用、当前模型和剩余上下文。
-- [x] App 可选择权限模式，并在 `manual` 下审批工具请求。
-- [x] App 可本地缓存 transcript，并在重连后用 daemon 快照恢复。
-- [x] App 可打开工作区抽屉，只读浏览文件与 Git diff。
-- [ ] App 可真机 Stop Claude 长任务。
-- [x] App 可 Logout。
-- [x] Logout 后旧 WebSocket 失效。
-- [x] daemon 仍只监听 `127.0.0.1`。
-- [x] Cloudflare Tunnel 指向 `127.0.0.1:8787`。
-
-## 16. 后续增强
-
-核心链路已跑通后再考虑：
-
-- 多电脑管理。
-- 给电脑设置别名。
-- 多会话历史列表和搜索。
-- 文件上传。
-- 后台通知。
-- App deep link。
-- 桌面托盘二维码窗口。
-- Cloudflare Access 额外保护。
-- 把 `main.dart` 拆成 screens / services / controllers。
+只有当 `main.dart` 的状态修改开始出现跨功能冲突，或需要独立集成测试替身时，再拆出 session controller、remote client 和 screen 文件。拆分必须保持现有协议和视觉行为，不以文件数量作为目标。

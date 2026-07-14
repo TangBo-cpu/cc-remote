@@ -1,345 +1,104 @@
-# CC Remote 手机 App 整体架构设计
+# CC Remote 整体架构
 
-## 当前结论
+## 系统边界
 
-CC Remote 的手机端按 Flutter App 做。网页只保留为本地调试入口，不再作为产品主路径。现有 daemon 已经进入 App token 协议，二维码是 JSON payload，HTTP 使用 Bearer token，WebSocket 建立后第一条消息鉴权。
-
-这份文档负责约束 App、daemon、协议和实现顺序。视觉和交互以 `docs/mobile-ui-app-design.md` 为准。
-
-当前仍只服务一台电脑和一个手机 token，但一个 daemon 可以注册多个项目，每个项目可以保存多条 Claude Code 会话。已跑通扫码配对、恢复连接、发送 prompt、流式输出、Stop、Logout、权限审批、独立 transcript 恢复、项目切换、会话切换、Android 后台本地通知和工作区只读浏览。多电脑、会话全文搜索、文件上传/下载、FCM 远程推送和商店材料仍不进入当前范围。
-
-## 产品路径
-
-用户在电脑 PowerShell 中运行 `cc-remote` 启动 daemon。daemon 只监听 `127.0.0.1:8787`，终端显示 CC Remote 配对二维码。手机 App 扫码后读取公网 `origin` 和一次性 `nonce`，调用 `/api/pair` 换取 token。之后 App 通过 Cloudflare Tunnel 访问电脑本地 daemon，daemon 再调用本机 Claude Code CLI。
+CC Remote 由 Flutter 手机 App、本机 TypeScript daemon、Cloudflare Tunnel 和本机 Claude Code CLI 组成。网页位于 `src/web/`，只用于调试，不是产品主入口。
 
 ```text
-电脑端运行 cc-remote
-  -> 终端显示 JSON 二维码
-  -> Flutter App 扫码确认
-  -> POST /api/pair 换 token
-  -> token 存入 Secure Storage
-  -> WebSocket 连接并发送 auth
-  -> App 发送 prompt
-  -> daemon spawn 本机 claude
-  -> App 流式显示输出并可 Stop
+Flutter App
+  -> HTTPS / WSS
+  -> Cloudflare Tunnel
+  -> local daemon on 127.0.0.1:8787
+  -> Claude Code CLI
 ```
 
-## 总体拓扑
-
-```text
-┌──────────────────────────┐
-│ Flutter Mobile App        │
-│ - scan QR                 │
-│ - secure token            │
-│ - transcript UI           │
-│ - permission approval     │
-│ - workspace drawer        │
-│ - prompt / stop / logout  │
-└────────────┬─────────────┘
-             │ HTTPS / WSS
-             ▼
-┌──────────────────────────┐
-│ Cloudflare Tunnel         │
-│ public origin             │
-└────────────┬─────────────┘
-             │ http://127.0.0.1:8787
-             ▼
-┌──────────────────────────┐
-│ Local daemon              │
-│ Node.js / TypeScript      │
-│ src/daemon.ts             │
-│ src/authState.ts          │
-│ src/claudeBridge.ts       │
-│ src/transcriptState.ts    │
-│ src/workspaceService.ts   │
-└────────────┬─────────────┘
-             │ spawn("claude")
-             ▼
-┌──────────────────────────┐
-│ Local Claude Code CLI     │
-│ current desktop auth      │
-└──────────────────────────┘
-```
+当前是单设备授权模型。一个 daemon 可以注册多个项目，每个项目拥有多条独立会话。项目只能从电脑端注册，手机不能提交任意文件系统路径。
 
 ## 仓库结构
-
-当前 daemon 继续留在 `src/`，不要为了目录洁癖先拆 `daemon/`。手机端在 `mobile/`。文档继续放在 `docs/`。
 
 ```text
 cc-remote/
   src/
-    daemon.ts
-    authState.ts
-    claudeBridge.ts
-    transcriptState.ts
-    projectSessionState.ts
-    localControlState.ts
-    workspaceService.ts
-    web/
+    daemon.ts                 HTTP、WebSocket 和运行编排
+    authState.ts              配对、token hash 和授权代际
+    claudeBridge.ts           Claude Code stream-json 桥接
+    projectSessionState.ts    项目、会话和活动上下文
+    transcriptState.ts        权威 transcript 和运行状态
+    workspaceService.ts       只读文件与 Git diff
+    attachmentStore.ts        附件隔离存储
+    attachmentUpload.ts       multipart 上传
+    localControlState.ts      本机项目注册凭据
+    web/                      调试网页
 
-  mobile/
-    lib/
-      main.dart
-      workspace_drawer.dart
-    pubspec.yaml
-    test/
+  mobile/lib/
+    main.dart                 App shell、网络状态和主要页面
+    signal_console_theme.dart 主题令牌与视觉部件
+    workspace_drawer.dart     只读工作区和 Git diff
+    attachments.dart          选择、上传和附件模型
+    notification_service.dart Android 本地通知
 
-  docs/
-    mobile-app-architecture.md
-    flutter-app-design.md
-    mobile-ui-app-design.md
+  tests/                      daemon 单元测试
+  mobile/test/               Flutter 逻辑与组件测试
 ```
 
-当前 Flutter 实现是单文件主入口 `main.dart` 加 `workspace_drawer.dart`，尚未拆成完整 `screens/services/controllers` 分层。`docs/flutter-app-design.md` 保留更细的目标分层设计，以实际代码结构为准。
+Flutter 当前仍以 `main.dart` 集中管理应用状态。这个结构与现有规模匹配。后续只有在功能继续增长时才拆 controllers、services 和 screens，不为目录形式提前重构。
 
-## 现有 daemon 事实
+## 启动与项目注册
 
-daemon 启动时读取这些环境变量。`HOST` 默认 `127.0.0.1`，`PORT` 默认 `8787`，`PUBLIC_ORIGIN` 默认本地地址，正式手机访问时应设成 Cloudflare Tunnel 的 HTTPS 地址。`WORKSPACE_DIR` 默认当前目录，`CLAUDE_BIN` 默认 `claude`，`DEVICE_NAME` 默认电脑 hostname。`ALLOW_BYPASS_PERMISSIONS` 默认 `1`，设为 `0` 可关闭手机端 `bypassPermissions`。
+`cc-remote` 启动脚本检查 `127.0.0.1:8787`。没有运行实例时，它启动 daemon 和可选 tunnel。已有新版 daemon 时，它通过 `/api/local/projects/register` 注册当前目录并切换活动项目。该接口使用本机私有控制 token，不接受手机 Bearer token。
 
-启动后 daemon 会生成一次性配对 payload，终端打印 JSON 并渲染二维码。payload 格式如下。
+daemon 将项目与会话目录保存在 `.data/projects.json`，各会话 transcript 保存在 `.data/sessions/`。附件保存在 `.data/uploads/`。旧版单会话 transcript 会在加载时迁移到默认项目的第一条会话。
 
-```json
-{
-  "type": "cc-remote-pair",
-  "version": 1,
-  "origin": "https://tbhaoshuai.ccwu.cc",
-  "nonce": "base64url-random-nonce",
-  "deviceName": "Jayson PC",
-  "expiresAt": 1780000000000
-}
-```
+## 配对与鉴权
 
-nonce 只保存 hash，5 分钟过期，一次配对后作废。配对成功后 daemon 只保存 token hash，不保存 token 明文。已有 token 或重新配对会递增 `authGeneration`，旧 WebSocket 会被关闭。
+daemon 生成一次性二维码，payload 包含 `type`、`version`、`origin`、`nonce`、`deviceName` 和 `expiresAt`。nonce 5 分钟过期，只保存 hash，使用一次后失效。
 
-## HTTP 协议
+App 调用 `POST /api/pair` 换取 Bearer token。token 明文只返回给 App，App 存入 Secure Storage，daemon 只保存 hash。重新配对和 logout 会增加授权代际并关闭旧 WebSocket。
 
-`GET /api/health` 不需要鉴权，只返回 daemon 是否存活。
+普通 HTTP 请求使用 `Authorization: Bearer <token>`。WebSocket token 不放 URL，连接 `/ws` 后第一条消息必须是 `auth`。
 
-```json
-{
-  "ok": true
-}
-```
+## HTTP API
 
-`POST /api/pair` 不需要 Bearer token，但需要合法 nonce。第一版请求体只需要 `nonce`。`appName`、`platform`、设备列表以后再加。
+`GET /api/health` 和 `POST /api/pair` 不需要 Bearer token。其余手机 API 都需要授权。
 
-```http
-POST /api/pair
-Content-Type: application/json
+项目与会话接口包括 `/api/status`、`/api/projects`、`/api/sessions/:id`、创建会话和选择会话。活动 Claude 任务运行时禁止切换或创建会话。
 
-{
-  "nonce": "base64url-random-nonce"
-}
-```
+工作区接口包括 `/api/workspace`、`/api/workspace/file` 和 `/api/workspace/diff`。路径必须位于活动项目内，Git 内部文件、被忽略文件和路径穿越会被拒绝。接口只读。
 
-成功响应会返回 token 和设备名。
+附件通过 `/api/sessions/:id/attachments` 上传，通过带会话归属的 content 接口读取。上传是事务式的，失败时清理已经写入的同批文件。附件路径不会进入 transcript 或手机 UI。
 
-```json
-{
-  "ok": true,
-  "token": "base64url-app-token",
-  "deviceName": "Jayson PC"
-}
-```
+`POST /api/new-conversation` 是兼容入口，实际会在活动项目下创建新会话。`POST /api/stop` 停止当前进程。`POST /api/logout` 撤销配对。
 
-失败响应使用 401。
+## WebSocket 运行流
 
-```json
-{
-  "ok": false,
-  "error": "invalid_pairing_code"
-}
-```
+鉴权完成后，daemon 发送 `catalog`、`status`、`transcript_snapshot`、`permission_capabilities` 和当前 `session_info`。App 由此恢复项目、会话、运行状态、待审批请求、模型和剩余上下文。
 
-`GET /api/status` 需要 `Authorization: Bearer <token>`。
+任务消息包含 `sessionId`、文本、附件 ID 和权限模式。daemon 校验会话归属和附件归属，将可信附件路径拼入交给 Claude 的 prompt，并通过 `--add-dir` 允许 Claude 读取隔离目录。
 
-```json
-{
-  "authorized": true,
-  "running": false,
-  "deviceName": "Jayson PC",
-  "workspaceDir": "E:\\Code-All\\cc-remote",
-  "paired": true,
-  "hasClaudeSessionId": true
-}
-```
+Claude Code 运行期间，daemon 将输出归一化为 `text`、`activity`、`session_info` 和 `permission_request`。`activity` 会移除私有思考文本、完整工具结果和附件本机路径。任务结束时发送 `done`、`stopped` 或 `error`，随后广播空闲状态和更新后的 catalog。
 
-`POST /api/stop` 需要 Bearer token。它会尝试停止当前 Claude 子进程，并广播状态。
+`transcript_snapshot` 是会话内容的权威来源。App 可以先显示本地缓存，WebSocket 鉴权后再以 daemon 快照补齐断线输出。daemon 重启时，持久化为 running 的任务会归一化为 interrupted。
 
-```json
-{
-  "stopped": true
-}
-```
+## Flutter 状态流
 
-`POST /api/logout` 需要 Bearer token。它会清掉服务端 token hash，递增授权代际，并关闭旧 WebSocket。
+App 启动后读取 Secure Storage。没有 token 时进入配对页。有 token 时调用 `/api/status`。成功后进入主控制台并建立 WebSocket。401 会清除本地配对并返回扫码页。网络失败会保留 token 和 transcript，进入电脑端离线状态。
 
-```json
-{
-  "ok": true
-}
-```
+App 区分已配对、正在连接、已连接、运行中、停止中、上传中和离线。上传附件、运行任务或停止任务时，相关导航和重复操作会被禁用。App 回到前台会重新探测 daemon。
 
-`POST /api/new-conversation` 需要 Bearer token。它会清空当前 `claudeSessionId` 和 daemon 对话快照。
+多项目和多会话由 catalog 驱动。会话消息带 `projectId` 与 `sessionId`，App 忽略不属于当前会话的运行消息。通知点击后在安全状态下切换到对应会话。
 
-```json
-{
-  "ok": true
-}
-```
+## 通知
 
-工作区读取接口同样需要 Bearer token，只允许访问启动时固定的 `WORKSPACE_DIR`：
+Android 本地通知由已建立的 App WebSocket 触发，覆盖任务完成、失败、停止和等待权限。通知偏好本地持久化，点击通知返回对应会话。
 
-```text
-GET /api/workspace
-GET /api/workspace/file?path=src/daemon.ts
-GET /api/workspace/diff?path=src/daemon.ts
-GET /api/workspace/diff?path=src/daemon.ts&staged=1
-```
-
-文件列表遵循 Git 忽略规则。文件与 diff 只读，不提供远程编辑、暂存或提交入口。
-
-## WebSocket 协议
-
-连接地址由扫码 payload 的 `origin` 推导。`https` 对应 `wss`，路径固定为 `/ws`。token 不放 URL query。连接后第一条消息必须是 `auth`。
-
-```json
-{
-  "type": "auth",
-  "token": "base64url-app-token"
-}
-```
-
-鉴权成功后服务端返回状态。
-
-```json
-{
-  "type": "status",
-  "authenticated": true,
-  "running": false,
-  "hasClaudeSessionId": true
-}
-```
-
-App 发送 prompt。`permissionMode` 可选，默认 `manual`。
-
-```json
-{
-  "type": "prompt",
-  "text": "帮我检查这个项目",
-  "permissionMode": "manual"
-}
-```
-
-收到 `permission_request` 后，App 返回一次性审批结果：
-
-```json
-{
-  "type": "permission_response",
-  "requestId": "...",
-  "decision": "allow"
-}
-```
-
-`decision` 只接受 `allow` 或 `deny`。原始工具输入保留在 daemon，手机不能修改执行参数。
-
-App 停止任务。
-
-```json
-{
-  "type": "stop"
-}
-```
-
-服务端会发送这些消息。鉴权后先发送 `transcript_snapshot` 和 `permission_capabilities`，恢复 daemon 持久化的当前对话、断线期间输出和待审批请求。`permission_request` 由 Claude Code stdio 控制协议产生，App 只能返回允许一次或拒绝，不能修改原始工具输入。`commands` 提供 Claude Code 真实斜杠指令。`session_info` 提供当前模型、上下文窗口和剩余 token。`activity` 提供安全化的思考与工具调用状态，不暴露私有思考文本或工具结果正文。`text` 直接追加到当前 assistant message。`done`、`stopped`、`error` 用来结束当前运行态并更新 transcript。
-
-```json
-{ "type": "text", "text": "..." }
-```
-
-```json
-{ "type": "claude_event", "event": {} }
-```
-
-```json
-{ "type": "done", "exitCode": 0, "claudeSessionId": "..." }
-```
-
-```json
-{ "type": "stopped" }
-```
-
-```json
-{ "type": "error", "message": "..." }
-```
-
-## Flutter App 结构
-
-Flutter App 的细节以 `docs/flutter-app-design.md` 为准。当前依赖为 `mobile_scanner`、`flutter_secure_storage`、`http` 和 `web_socket_channel`。状态管理仍在 `main.dart` 内，两三个页面不用上复杂路由。
-
-当前实际代码结构：
-
-```text
-mobile/lib/
-  main.dart              # 配对、会话、WS、权限模式、审批卡、transcript
-  workspace_drawer.dart  # 工作区文件列表、文件内容、Git diff
-```
-
-设计稿中的 `screens/services/controllers` 分层仍可作为后续拆分目标，但不是当前仓库事实。
-
-## App 状态流
-
-启动时进入 `booting`，读取 Secure Storage。没有 token 进入 `unpaired`。有 token 就调用 `/api/status`：成功进入主控制台并建立 WebSocket；失败但 token 未过期时保留已配对态，显示 `offline`；401 时清 token 并回到扫码配对。扫码后先进入配对确认 sheet，用户确认后才调用 `/api/pair`。配对成功保存 `origin`、`token` 和 `deviceName`，再进入主控制台。
-
-运行时状态分两层：已配对不等于已连接。`connected` 代表 WebSocket 已 auth，可发送 prompt。`running` 禁用发送并显示 Stop。`offline` 保留本地 transcript 缓存，禁用输入，显示“电脑端离线”和重新连接。App 回到前台会重新调用 `/api/status` 探测 daemon，鉴权后用 daemon 快照恢复完整 transcript。`authExpired` 清理 token 并回到扫码配对。`error` 只显示当前操作错误，不清空 transcript。
-
-```text
-booting
-  -> unpaired
-  -> scanning
-  -> pairReview
-  -> pairing
-  -> pairedOffline
-  -> connected
-  -> running
-  -> authExpired
-```
-
-## UI 对接边界
-
-界面结构以 `Signal Console · Porcelain` 浅色主题为准。矿物灰白背景承载瓷白表面，青蓝信号轨道负责连接与运行状态。主屏不是聊天 App，也不是网页 dashboard。启动页只做状态检查。扫码页展示相机区域和配对确认 sheet。主控制台由连接状态舱、transcript、任务轨道、权限 Gate 和底部 Command Dock 组成。左侧工作区抽屉提供只读文件与窄色带 Git diff。设置用半屏 sheet，放设备信息、新对话、重新连接和退出配对。
-
-实现时以设计文档、组件规范和真机效果为准，不再维护独立参考图。
+App 进程被系统彻底杀死后没有常驻连接，因此不能继续接收事件。这个场景需要后续接入 FCM。
 
 ## 安全边界
 
-daemon 默认只监听 loopback。公网入口只通过 Cloudflare Tunnel。二维码里只有短期 nonce，没有长期 secret。token 明文只返回给 App 一次。App 只能把 token 存进 Secure Storage。HTTP 使用 Bearer token。WebSocket 未鉴权前只接受 `auth`。Logout 和重新配对都会撤销旧 token 和旧连接。
+daemon 默认只监听 loopback。公网访问由 tunnel 提供。手机不能注册项目、不能修改工作区、不能调用任意 shell。工作区读取遵循路径限制和 Git 忽略规则。
 
-App 不提供修改 `WORKSPACE_DIR` 的入口，不开放任意 shell 命令。工作区文件与 Git diff 只读。权限模式直接映射 Claude Code 原生模式。`bypassPermissions` 默认由电脑端开启，可用 `ALLOW_BYPASS_PERMISSIONS=0` 或 `-DisableBypassPermissions` 关闭；开启后仍需手机二次确认，并只对单次任务生效。
+权限模式映射 Claude Code 原生模式。`bypassPermissions` 可在电脑端关闭；即使开启，手机也需要二次确认，并只对单次任务生效。审批请求只能允许一次或拒绝，手机不能修改工具参数。
 
-## 当前实现状态
+## 当前未完成
 
-daemon 的 App token 主协议已经在代码里，Flutter App 也已经完成扫码配对、状态恢复、WebSocket 对话、Stop、Logout、离线状态、权限审批、transcript 恢复和工作区只读浏览。当前代码已合并回 `master`。
-
-已完成：
-
-1. 创建 `mobile/` Flutter 项目，接入基础依赖和浅色 Signal Console UI 骨架。
-2. 实现扫码配对。解析 JSON QR，校验 `type`、`version`、`origin`、`nonce` 和 `expiresAt`，展示配对确认 sheet，确认后调用 `/api/pair`，把 `origin`、`token`、`deviceName` 存进 Secure Storage。
-3. 实现状态恢复。App 重启后读取本地 session，调用 `/api/status`。成功进入主控制台；daemon 离线时保留配对态并显示“电脑端离线”；401 时清 token 并回到配对页。
-4. 实现 WebSocket 聊天。连接 `/ws`，发送 `auth`，处理 `status`、`transcript_snapshot`、`permission_*`、`commands`、`session_info`、`activity`、`text`、`done`、`stopped`、`error`，把文本流追加到当前 assistant message。
-5. 实现 Stop、重新连接、Logout 和新对话。Stop 走 WebSocket `stop`。Logout 先调 `/api/logout`，再清本地 token。新对话走 `POST /api/new-conversation`。
-6. 实现权限模式选择与手机端工具审批卡；`manual` 模式可 allow/deny 单次请求。
-7. 实现 transcript 本地缓存与 daemon 权威快照恢复。
-8. 实现工作区只读抽屉：`/api/workspace`、`/api/workspace/file`、`/api/workspace/diff`。
-9. 电脑端使用 `cc-remote` 一键启动。
-10. daemon 修复 auth state 并发写 race，stale Claude Code session 会自动清理并用新会话重试一次。
-
-真机已验证真实指令、流式输出、`done`、消息气泡、思考计时、工具调用、模型和剩余上下文。`--resume` 和 Stop 中断长任务仍待专项验证。
-
-## 第一版验收
-
-已满足：电脑端 daemon 能显示 JSON 二维码。Flutter App 能扫码并展示确认 sheet。确认后 App 能保存 token，并在关闭重开后恢复已配对状态。主控制台能显示设备名、工作目录、连接状态、当前模型、剩余上下文和 transcript。输入框能发现、筛选并滚动选择 Claude Code 指令。App 能发送 prompt，并在运行中显示思考计时和工具调用。手机端可审批工具请求并切换权限模式。工作区抽屉可只读浏览文件与 Git diff。Logout 后旧 WebSocket 失效，旧 token 不能继续控制电脑。daemon 离线时 App 能显示“电脑端离线”。
-
-待专项验证：第二条 prompt 通过 `--resume <claudeSessionId>` 延续上下文；运行中 Stop 能中断任务且没有残留 Claude 进程。
-
-daemon 在 `.data/projects.json` 保存项目与会话索引，在 `.data/sessions/` 为每条会话保存独立 transcript。旧 `.data/transcript.json` 会在首次启动时迁移成默认项目的第一条会话。手机端已经提供项目与会话列表；多设备、全文搜索、归档、可写文件能力、推送和上架材料后续再补。
+多设备管理、会话全文搜索、归档、删除、FCM 推送、发布签名和商店材料尚未实现。Stop 长任务和第二轮 session resume 仍需专项真机验证。
