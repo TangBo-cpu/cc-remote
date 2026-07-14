@@ -11,6 +11,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'notification_service.dart';
 import 'attachments.dart';
+import 'signal_console_theme.dart';
 import 'workspace_drawer.dart';
 
 void main() {
@@ -36,17 +37,7 @@ class CcRemoteApp extends StatelessWidget {
     return MaterialApp(
       title: 'CC Remote',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: AppColors.accent,
-          brightness: Brightness.light,
-        ),
-        textTheme: Typography.blackMountainView.apply(
-          bodyColor: AppColors.ink,
-          displayColor: AppColors.ink,
-        ),
-      ),
+      theme: buildSignalConsoleTheme(),
       home: DemoShell(
         enableCamera: enableCamera,
         demoMode: demoMode,
@@ -81,6 +72,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   ShellRoute route = ShellRoute.boot;
   bool running = false;
+  bool stopping = false;
   bool pairing = false;
   bool handlingQr = false;
   bool wsReady = false;
@@ -305,6 +297,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           ),
         );
       running = snapshot.running;
+      stopping = false;
       modelName = snapshot.modelName;
       contextWindow = snapshot.contextWindow;
       remainingContext = snapshot.remainingContext;
@@ -346,6 +339,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         session = restored;
         remoteOffline = false;
         running = status.running;
+        stopping = false;
         if (status.hasSessionInfo) {
           modelName = status.modelName;
           contextWindow = status.contextWindow;
@@ -369,6 +363,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           pairError = '无法恢复连接，请重新扫码';
           remoteOffline = false;
           running = false;
+          stopping = false;
           messages.clear();
         });
         return;
@@ -376,6 +371,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       setState(() {
         remoteOffline = true;
         running = false;
+        stopping = false;
       });
       persistTranscriptSnapshotLater();
     }
@@ -414,6 +410,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         route = ShellRoute.chat;
         remoteOffline = false;
         running = status.running;
+        stopping = false;
         if (status.hasSessionInfo) {
           modelName = status.modelName;
           contextWindow = status.contextWindow;
@@ -434,6 +431,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           pairError = '无法恢复连接，请重新扫码';
           route = ShellRoute.pair;
           running = false;
+          stopping = false;
           messages.clear();
         });
         return;
@@ -444,6 +442,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         wsReady = false;
         remoteOffline = true;
         running = false;
+        stopping = false;
       });
       persistTranscriptSnapshotLater();
     }
@@ -461,6 +460,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       );
       route = ShellRoute.chat;
       running = false;
+      stopping = false;
       wsReady = true;
       remoteOffline = false;
       modelName = 'claude-opus-4-8';
@@ -538,6 +538,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           activeSessionId = catalog.activeSessionId;
           if (changedSession) {
             uploadingAttachments = false;
+            stopping = false;
             pendingAttachments.clear();
             remoteTranscriptRevision = 0;
             messages.clear();
@@ -565,6 +566,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           wsReady = decoded['authenticated'] == true;
           remoteOffline = false;
           running = decoded['running'] == true;
+          if (!running) stopping = false;
           if (running) currentRunFailed = false;
           if (!running) removeInterruptedRunNotice();
         });
@@ -583,6 +585,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         setState(() {
           remoteTranscriptRevision = snapshot.revision;
           running = snapshot.running;
+          if (!running) stopping = false;
           messages
             ..clear()
             ..addAll(snapshot.messages);
@@ -676,6 +679,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         final failed = currentRunFailed;
         setState(() {
           running = false;
+          stopping = false;
           currentRunFailed = false;
           activePermissionMode = PermissionMode.manual;
           pendingPermissions.clear();
@@ -696,6 +700,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       case 'stopped':
         setState(() {
           running = false;
+          stopping = false;
           currentRunFailed = false;
           activePermissionMode = PermissionMode.manual;
           pendingPermissions.clear();
@@ -712,6 +717,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         final errorMessage = decoded['message']?.toString() ?? '未知错误';
         setState(() {
           running = false;
+          stopping = false;
           currentRunFailed = true;
           activePermissionMode = PermissionMode.manual;
           pendingPermissions.clear();
@@ -739,6 +745,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       pairError = '无法恢复连接，请重新扫码';
       remoteOffline = false;
       running = false;
+      stopping = false;
       messages.clear();
       commands.clear();
       projects.clear();
@@ -759,6 +766,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     setState(() {
       wsReady = false;
       remoteOffline = true;
+      stopping = false;
       if (running) {
         running = false;
         finishRunningActivities(messages, ActivityState.stopped);
@@ -805,6 +813,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         promptController.clear();
         pendingAttachments.clear();
         running = false;
+        stopping = false;
         messages
           ..add(TranscriptMessage.user(text))
           ..add(TranscriptMessage.assistant('演示模式：真实对话需要连接 daemon WebSocket。'));
@@ -823,6 +832,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       if (current != null) refreshConnection();
       setState(() {
         running = false;
+        stopping = false;
         messages.add(
           TranscriptMessage.system(
             remoteOffline ? '电脑端离线，请先重连' : '正在连接电脑端，请稍后再试',
@@ -871,6 +881,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       pendingAttachments.clear();
       uploadingAttachments = false;
       running = true;
+      stopping = false;
       currentRunFailed = false;
       activePermissionMode = selectedPermissionMode;
       beginPrompt(messages, text, attachments: uploaded);
@@ -981,12 +992,21 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     );
   }
 
-  void stopRun() {
-    if (!running) return;
+  Future<void> stopRun() async {
+    if (!running || stopping) return;
+
+    setState(() {
+      stopping = true;
+      messages.add(TranscriptMessage.system('正在停止'));
+    });
+    persistTranscriptSnapshotLater();
 
     if (widget.demoMode) {
+      await Future<void>.delayed(AppMotion.feedback);
+      if (!mounted || !stopping) return;
       setState(() {
         running = false;
+        stopping = false;
         messages.add(TranscriptMessage.system('已停止'));
       });
       persistTranscriptSnapshotLater();
@@ -997,6 +1017,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     if (channel == null || !wsReady) {
       setState(() {
         running = false;
+        stopping = false;
         messages.add(TranscriptMessage.system('未连接，无法发送停止指令'));
       });
       persistTranscriptSnapshotLater();
@@ -1004,7 +1025,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     }
 
     channel.sink.add(jsonEncode({'type': 'stop'}));
-    setState(() => messages.add(TranscriptMessage.system('正在停止')));
+    final requestedSessionId = activeSessionId;
+    await Future<void>.delayed(networkTimeout);
+    if (!mounted || !stopping || activeSessionId != requestedSessionId) return;
+    setState(() {
+      stopping = false;
+      messages.add(TranscriptMessage.system('停止请求未确认，任务仍在运行'));
+    });
     persistTranscriptSnapshotLater();
   }
 
@@ -1084,6 +1111,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       session = null;
       route = ShellRoute.pair;
       running = false;
+      stopping = false;
       wsReady = false;
       remoteOffline = false;
       pausedQrRaw = null;
@@ -1258,6 +1286,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         session = saved;
         route = ShellRoute.chat;
         running = false;
+        stopping = false;
         remoteOffline = false;
         pausedQrRaw = null;
         pairError = null;
@@ -1283,58 +1312,72 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final screen = switch (route) {
+      ShellRoute.boot => const BootstrapScreen(),
+      ShellRoute.pair => PairScreen(
+        enableCamera: widget.enableCamera,
+        pairing: pairing,
+        canResetScan: pausedQrRaw != null,
+        error: pairError,
+        onQr: handleQr,
+        onClearError: resetScanner,
+        onDemoConnect: widget.demoMode ? connectDemoDevice : null,
+      ),
+      ShellRoute.chat => ChatScreen(
+        session: session,
+        activeSessionId: activeSessionId,
+        running: running,
+        stopping: stopping,
+        uploadingAttachments: uploadingAttachments,
+        connected: wsReady,
+        offline: remoteOffline,
+        modelName: modelName,
+        contextWindow: contextWindow,
+        remainingContext: remainingContext,
+        messages: messages,
+        commands: commands,
+        permissionMode: running ? activePermissionMode : selectedPermissionMode,
+        allowBypassPermissions: allowBypassPermissions,
+        notificationsEnabled: notificationsEnabled,
+        pendingPermissions: pendingPermissions,
+        respondingPermissionIds: respondingPermissionIds,
+        promptController: promptController,
+        pendingAttachments: pendingAttachments,
+        onFillPrompt: fillPrompt,
+        onReconnect: refreshConnection,
+        onNotificationsChanged: setNotificationsEnabled,
+        onNewConversation: beginNewConversation,
+        onOpenSessions: openSessions,
+        onOpenWorkspace: openWorkspace,
+        onPermissionModeSelected: selectPermissionMode,
+        onPermissionAllow: (request) => respondToPermission(request, 'allow'),
+        onPermissionDeny: (request) => respondToPermission(request, 'deny'),
+        onAddAttachment: chooseAttachments,
+        onRemoveAttachment: removePendingAttachment,
+        onSend: sendPrompt,
+        onStop: stopRun,
+        onLogout: logoutPairedDevice,
+      ),
+    };
     return AppBackground(
       child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 220),
-        child: switch (route) {
-          ShellRoute.boot => const BootstrapScreen(),
-          ShellRoute.pair => PairScreen(
-            enableCamera: widget.enableCamera,
-            pairing: pairing,
-            canResetScan: pausedQrRaw != null,
-            error: pairError,
-            onQr: handleQr,
-            onClearError: resetScanner,
-            onDemoConnect: widget.demoMode ? connectDemoDevice : null,
-          ),
-          ShellRoute.chat => ChatScreen(
-            session: session,
-            activeSessionId: activeSessionId,
-            running: running,
-            uploadingAttachments: uploadingAttachments,
-            connected: wsReady,
-            offline: remoteOffline,
-            modelName: modelName,
-            contextWindow: contextWindow,
-            remainingContext: remainingContext,
-            messages: messages,
-            commands: commands,
-            permissionMode: running
-                ? activePermissionMode
-                : selectedPermissionMode,
-            allowBypassPermissions: allowBypassPermissions,
-            notificationsEnabled: notificationsEnabled,
-            pendingPermissions: pendingPermissions,
-            respondingPermissionIds: respondingPermissionIds,
-            promptController: promptController,
-            pendingAttachments: pendingAttachments,
-            onFillPrompt: fillPrompt,
-            onReconnect: refreshConnection,
-            onNotificationsChanged: setNotificationsEnabled,
-            onNewConversation: beginNewConversation,
-            onOpenSessions: openSessions,
-            onOpenWorkspace: openWorkspace,
-            onPermissionModeSelected: selectPermissionMode,
-            onPermissionAllow: (request) =>
-                respondToPermission(request, 'allow'),
-            onPermissionDeny: (request) => respondToPermission(request, 'deny'),
-            onAddAttachment: chooseAttachments,
-            onRemoveAttachment: removePendingAttachment,
-            onSend: sendPrompt,
-            onStop: stopRun,
-            onLogout: logoutPairedDevice,
-          ),
+        duration: reduceMotion ? Duration.zero : AppMotion.standard,
+        reverseDuration: reduceMotion ? Duration.zero : AppMotion.fast,
+        switchInCurve: AppMotion.enter,
+        switchOutCurve: AppMotion.exit,
+        transitionBuilder: (child, animation) {
+          if (reduceMotion) return child;
+          final offset = Tween<Offset>(
+            begin: const Offset(0.035, 0),
+            end: Offset.zero,
+          ).animate(animation);
+          return FadeTransition(
+            opacity: animation,
+            child: SlideTransition(position: offset, child: child),
+          );
         },
+        child: KeyedSubtree(key: ValueKey(route), child: screen),
       ),
     );
   }
@@ -1359,15 +1402,8 @@ class BootstrapScreen extends StatelessWidget {
               height: 84,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(26),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    Colors.white.withValues(alpha: 0.92),
-                    Colors.white.withValues(alpha: 0.55),
-                  ],
-                ),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.86)),
+                color: AppColors.porcelain,
+                border: Border.all(color: AppColors.line),
                 boxShadow: [
                   BoxShadow(
                     color: AppColors.shadow.withValues(alpha: 0.10),
@@ -1444,203 +1480,322 @@ class PairScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return SafeArea(
       key: const ValueKey('pair'),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(18, 12, 18, 16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final compact = constraints.maxHeight < 520;
+          final content = Padding(
+            padding: EdgeInsets.fromLTRB(18, compact ? 8 : 14, 18, 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.62),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.8),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: AppColors.mintSoft,
+                              borderRadius: BorderRadius.circular(
+                                AppRadii.pill,
+                              ),
+                              border: Border.all(
+                                color: AppColors.ink,
+                                width: 1.2,
+                              ),
+                            ),
+                            child: const Text(
+                              '手机端 · 第一次见面',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                          SizedBox(height: compact ? 7 : 10),
+                          Text(
+                            '让手机找到电脑',
+                            style: TextStyle(
+                              fontSize: compact ? 25 : 31,
+                              height: 1.04,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: -1.0,
+                            ),
+                          ),
+                          const SizedBox(height: 5),
+                          const Text(
+                            '扫描电脑终端里的二维码',
+                            style: TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(width: compact ? 10 : 14),
+                    SizedBox(
+                      width: compact ? 64 : 82,
+                      height: compact ? 60 : 76,
+                      child: const LivelyTerminalPal(
+                        mood: TerminalPalMood.ready,
+                        showBadge: true,
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: compact ? 12 : 16),
+                if (compact)
+                  SizedBox(
+                    height: 126,
+                    child: Center(
+                      child: AspectRatio(
+                        aspectRatio: 1.68,
+                        child: ScanFrame(
+                          compact: true,
+                          child: enableCamera
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(20),
+                                  child: MobileScanner(
+                                    onDetect: (capture) {
+                                      for (final barcode in capture.barcodes) {
+                                        final value = barcode.rawValue;
+                                        if (value != null && value.isNotEmpty) {
+                                          onQr(value);
+                                          break;
+                                        }
+                                      }
+                                    },
+                                  ),
+                                )
+                              : const ScanPlaceholder(compact: true),
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  Expanded(
+                    child: Center(
+                      child: AspectRatio(
+                        aspectRatio: 0.94,
+                        child: ScanFrame(
+                          child: enableCamera
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(28),
+                                  child: MobileScanner(
+                                    onDetect: (capture) {
+                                      for (final barcode in capture.barcodes) {
+                                        final value = barcode.rawValue;
+                                        if (value != null && value.isNotEmpty) {
+                                          onQr(value);
+                                          break;
+                                        }
+                                      }
+                                    },
+                                  ),
+                                )
+                              : const ScanPlaceholder(),
+                        ),
+                      ),
                     ),
                   ),
-                  child: const Icon(
-                    Icons.qr_code_scanner_rounded,
-                    size: 18,
-                    color: AppColors.accent,
+                SizedBox(height: compact ? 12 : 16),
+                Container(
+                  padding: const EdgeInsets.fromLTRB(16, 15, 16, 16),
+                  decoration: ShapeDecoration(
+                    color: AppColors.porcelain,
+                    shadows: const [
+                      BoxShadow(
+                        color: AppColors.coral,
+                        blurRadius: 0,
+                        offset: Offset(5, 6),
+                      ),
+                    ],
+                    shape: const SignalCutCornerBorder(
+                      side: BorderSide(color: AppColors.ink, width: 1.6),
+                      radius: 22,
+                      cut: 20,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                const Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        '扫描电脑二维码',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -0.3,
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: 42,
+                            height: 42,
+                            decoration: BoxDecoration(
+                              color: AppColors.yellow,
+                              borderRadius: BorderRadius.circular(13),
+                              border: Border.all(
+                                color: AppColors.ink,
+                                width: 1.4,
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.desktop_windows_rounded,
+                              size: 20,
+                              color: AppColors.ink,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  pairing ? '正在连接电脑' : '等待配对二维码',
+                                  style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: -0.3,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  error ??
+                                      (canResetScan
+                                          ? '已暂停扫描，点重新扫描可继续'
+                                          : '扫到后会确认设备信息再连接'),
+                                  style: TextStyle(
+                                    color: error == null
+                                        ? AppColors.muted
+                                        : AppColors.stop,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          StatusPill(
+                            label: pairing
+                                ? '配对中'
+                                : error == null
+                                ? canResetScan
+                                      ? '等待确认'
+                                      : '相机已就绪'
+                                : '需要重试',
+                            color: error == null
+                                ? AppColors.success
+                                : AppColors.stop,
+                          ),
+                        ],
+                      ),
+                      if (pairing) ...[
+                        const SizedBox(height: 14),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(AppRadii.pill),
+                          child: const LinearProgressIndicator(
+                            minHeight: 3,
+                            color: AppColors.accent,
+                            backgroundColor: Color(0xFFE8F3F6),
+                          ),
                         ),
-                      ),
-                      SizedBox(height: 2),
-                      Text(
-                        '扫描电脑终端里的二维码',
-                        style: TextStyle(color: AppColors.muted, fontSize: 13),
-                      ),
+                      ],
+                      if (onDemoConnect != null) ...[
+                        const SizedBox(height: 14),
+                        SizedBox(
+                          width: double.infinity,
+                          child: SignalPressEffect(
+                            child: FilledButton.icon(
+                              onPressed: onDemoConnect,
+                              icon: const Icon(Icons.link_rounded),
+                              label: const Text('连接这台电脑'),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: AppColors.ink,
+                                foregroundColor: AppColors.porcelain,
+                                minimumSize: const Size.fromHeight(48),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ] else if (!pairing &&
+                          error == null &&
+                          !canResetScan) ...[
+                        const SizedBox(height: 14),
+                        const SignalTrack(color: AppColors.mint, active: true),
+                      ],
+                      if (canResetScan || error != null) ...[
+                        const SizedBox(height: 10),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: onClearError,
+                            icon: const Icon(Icons.refresh_rounded, size: 18),
+                            label: const Text('重新扫描'),
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: AppColors.ink,
+                              minimumSize: const Size.fromHeight(46),
+                              side: const BorderSide(
+                                color: AppColors.ink,
+                                width: 1.3,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(
+                                  AppRadii.control,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
               ],
             ),
-            const SizedBox(height: 18),
-            Expanded(
-              child: Center(
-                child: AspectRatio(
-                  aspectRatio: 0.86,
-                  child: ScanFrame(
-                    child: enableCamera
-                        ? ClipRRect(
-                            borderRadius: BorderRadius.circular(28),
-                            child: MobileScanner(
-                              onDetect: (capture) {
-                                for (final barcode in capture.barcodes) {
-                                  final value = barcode.rawValue;
-                                  if (value != null && value.isNotEmpty) {
-                                    onQr(value);
-                                    break;
-                                  }
-                                }
-                              },
-                            ),
-                          )
-                        : const ScanPlaceholder(),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            GlassPanel(
-              padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        width: 38,
-                        height: 38,
-                        decoration: BoxDecoration(
-                          color: AppColors.accent.withValues(alpha: 0.10),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: const Icon(
-                          Icons.desktop_windows_rounded,
-                          size: 19,
-                          color: AppColors.accent,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              pairing ? '正在连接电脑' : '等待配对二维码',
-                              style: const TextStyle(
-                                fontSize: 17,
-                                fontWeight: FontWeight.w700,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              error ??
-                                  (canResetScan
-                                      ? '已暂停扫描，点重新扫描可继续'
-                                      : '扫到后会确认设备信息再连接'),
-                              style: TextStyle(
-                                color: error == null
-                                    ? AppColors.muted
-                                    : AppColors.stop,
-                                fontSize: 13,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  StatusPill(
-                    label: pairing
-                        ? '配对中'
-                        : error == null
-                        ? canResetScan
-                              ? '等待确认'
-                              : '相机已就绪'
-                        : '需要重试',
-                    color: error == null ? AppColors.accent : AppColors.stop,
-                  ),
-                  if (pairing) ...[
-                    const SizedBox(height: 14),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(AppRadii.pill),
-                      child: const LinearProgressIndicator(
-                        minHeight: 3,
-                        color: AppColors.accent,
-                        backgroundColor: Color(0xFFE8F3F6),
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 16),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ActionButton(
-                      label: onDemoConnect == null ? '扫描中' : '连接这台电脑',
-                      icon: onDemoConnect == null
-                          ? Icons.qr_code_scanner_rounded
-                          : Icons.link_rounded,
-                      onPressed: onDemoConnect,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton(
-                      onPressed: canResetScan || error != null
-                          ? onClearError
-                          : null,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.accent,
-                        minimumSize: const Size.fromHeight(46),
-                        side: BorderSide(
-                          color: AppColors.accent.withValues(alpha: 0.22),
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(AppRadii.pill),
-                        ),
-                      ),
-                      child: const Text('重新扫描'),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+          );
+          return compact ? SingleChildScrollView(child: content) : content;
+        },
       ),
     );
   }
 }
 
 class ScanPlaceholder extends StatelessWidget {
-  const ScanPlaceholder({super.key});
+  const ScanPlaceholder({super.key, this.compact = false});
+
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
-      children: const [
-        Icon(Icons.qr_code_scanner_rounded, size: 54, color: AppColors.accent),
-        SizedBox(height: 14),
-        Text('等待二维码', style: TextStyle(color: AppColors.muted)),
+      children: [
+        Container(
+          width: compact ? 46 : 68,
+          height: compact ? 46 : 68,
+          decoration: BoxDecoration(
+            color: AppColors.ink,
+            borderRadius: BorderRadius.circular(compact ? 14 : 20),
+          ),
+          child: Icon(
+            Icons.qr_code_2_rounded,
+            size: compact ? 28 : 42,
+            color: AppColors.porcelain,
+          ),
+        ),
+        SizedBox(height: compact ? 6 : 14),
+        const Text(
+          '把二维码放进取景框',
+          style: TextStyle(color: AppColors.ink, fontWeight: FontWeight.w800),
+        ),
+        if (!compact) ...[
+          const SizedBox(height: 4),
+          const Text(
+            '识别后会先显示电脑信息',
+            style: TextStyle(color: AppColors.muted, fontSize: 12),
+          ),
+        ],
       ],
     );
   }
@@ -1725,19 +1880,22 @@ class PairReviewSheet extends StatelessWidget {
               const SizedBox(height: 16),
               SizedBox(
                 width: double.infinity,
-                child: FilledButton(
-                  onPressed: expired
-                      ? null
-                      : () => Navigator.pop(context, true),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.accent,
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size.fromHeight(48),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppRadii.pill),
+                child: SignalPressEffect(
+                  enabled: !expired,
+                  child: FilledButton(
+                    onPressed: expired
+                        ? null
+                        : () => Navigator.pop(context, true),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.accent,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size.fromHeight(48),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppRadii.control),
+                      ),
                     ),
+                    child: const Text('连接这台电脑'),
                   ),
-                  child: const Text('连接这台电脑'),
                 ),
               ),
               const SizedBox(height: 8),
@@ -1752,7 +1910,7 @@ class PairReviewSheet extends StatelessWidget {
                       color: AppColors.accent.withValues(alpha: 0.22),
                     ),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppRadii.pill),
+                      borderRadius: BorderRadius.circular(AppRadii.control),
                     ),
                   ),
                   child: const Text('重新扫描'),
@@ -1772,6 +1930,7 @@ class ChatScreen extends StatelessWidget {
     required this.session,
     this.activeSessionId,
     required this.running,
+    this.stopping = false,
     this.uploadingAttachments = false,
     required this.connected,
     required this.offline,
@@ -1806,6 +1965,7 @@ class ChatScreen extends StatelessWidget {
   final SavedSession? session;
   final String? activeSessionId;
   final bool running;
+  final bool stopping;
   final bool uploadingAttachments;
   final bool connected;
   final bool offline;
@@ -1842,6 +2002,7 @@ class ChatScreen extends StatelessWidget {
       child: ConnectionHeader(
         session: session,
         running: running,
+        stopping: stopping,
         uploadingAttachments: uploadingAttachments,
         connected: connected,
         offline: offline,
@@ -1866,6 +2027,7 @@ class ChatScreen extends StatelessWidget {
         respondingPermissionIds: respondingPermissionIds,
         connected: connected,
         onFillPrompt: onFillPrompt,
+        onReconnect: onReconnect,
         onPermissionAllow: onPermissionAllow,
         onPermissionDeny: onPermissionDeny,
       ),
@@ -1873,25 +2035,26 @@ class ChatScreen extends StatelessWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final reservedHeight = modelName != null || remainingContext != null
-            ? 312.0
-            : 277.0;
+            ? 324.0
+            : 292.0;
         final suggestionMaxHeight = (constraints.maxHeight - reservedHeight)
-            .clamp(48.0, 292.0);
+            .clamp(44.0, 292.0);
         return SafeArea(
           key: const ValueKey('chat'),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
             child: Column(
               children: [
                 header,
-                const SizedBox(height: 10),
+                const SizedBox(height: 12),
                 Expanded(child: transcript),
-                const SizedBox(height: 10),
+                const SizedBox(height: 7),
                 PromptBar(
                   controller: promptController,
                   attachments: pendingAttachments,
                   commands: commands,
                   running: running,
+                  stopping: stopping,
                   uploading: uploadingAttachments,
                   connected: connected,
                   offline: offline,
@@ -1919,6 +2082,7 @@ class ConnectionHeader extends StatelessWidget {
     super.key,
     required this.session,
     required this.running,
+    this.stopping = false,
     required this.uploadingAttachments,
     required this.connected,
     required this.offline,
@@ -1936,6 +2100,7 @@ class ConnectionHeader extends StatelessWidget {
 
   final SavedSession? session;
   final bool running;
+  final bool stopping;
   final bool uploadingAttachments;
   final bool connected;
   final bool offline;
@@ -1952,7 +2117,396 @@ class ConnectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final statusLabel = running
+    final statusLabel = stopping
+        ? '正在停下来'
+        : running
+        ? '运行中 · 小终在干活'
+        : uploadingAttachments
+        ? '正在收附件'
+        : connected
+        ? '手机在线'
+        : offline
+        ? '电脑走丢了'
+        : '正在找电脑';
+    final mood = offline
+        ? TerminalPalMood.offline
+        : running || uploadingAttachments
+        ? TerminalPalMood.working
+        : TerminalPalMood.ready;
+    final title = offline
+        ? '小终正在\n等电脑回来'
+        : running
+        ? '小终正在\n处理这件事'
+        : '小终已经\n准备好了';
+    final workspace = session?.workspaceName ?? 'cc-remote';
+    final device = session?.deviceName ?? 'Jayson PC';
+    final compact =
+        MediaQuery.viewInsetsOf(context).bottom > 0 ||
+        MediaQuery.sizeOf(context).height < 720;
+
+    if (compact) {
+      return MediaQuery(
+        data: MediaQuery.of(context).copyWith(
+          textScaler: MediaQuery.textScalerOf(
+            context,
+          ).clamp(minScaleFactor: 1, maxScaleFactor: 1.2),
+        ),
+        child: Container(
+          height: 90,
+          padding: const EdgeInsets.fromLTRB(10, 9, 9, 9),
+          decoration: BoxDecoration(
+            color: offline ? AppColors.porcelainMuted : AppColors.mint,
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: AppColors.ink, width: 1.6),
+            boxShadow: const [
+              BoxShadow(
+                color: AppColors.yellow,
+                blurRadius: 0,
+                offset: Offset(4, 5),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 58,
+                height: 62,
+                child: LivelyTerminalPal(mood: mood),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      statusLabel,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.25,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    if (modelName == null && remainingContext == null)
+                      Text(
+                        '$workspace · $device',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    if (modelName != null)
+                      Text(
+                        formatModelName(modelName!),
+                        maxLines: 1,
+                        style: const TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    if (remainingContext != null)
+                      Text(
+                        contextWindow == null
+                            ? '剩余 ${formatTokens(remainingContext!)}'
+                            : '剩余 ${formatTokens(remainingContext!)} / ${formatTokens(contextWindow!)}',
+                        maxLines: 1,
+                        style: const TextStyle(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w700,
+                          fontFeatures: [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Row(
+                    children: [
+                      _HeroIconButton(
+                        tooltip: '项目与会话',
+                        icon: Icons.dashboard_customize_outlined,
+                        dimension: 31,
+                        onPressed: uploadingAttachments ? null : onOpenSessions,
+                      ),
+                      const SizedBox(width: 5),
+                      _HeroIconButton(
+                        tooltip: '工作区',
+                        icon: Icons.folder_open_rounded,
+                        dimension: 31,
+                        onPressed: onOpenWorkspace,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 2),
+                  Row(
+                    children: [
+                      _HeroIconButton(
+                        tooltip: '新对话',
+                        icon: Icons.add_rounded,
+                        dimension: 31,
+                        onPressed:
+                            connected && !running && !uploadingAttachments
+                            ? onNewConversation
+                            : null,
+                      ),
+                      const SizedBox(width: 5),
+                      _HeroIconButton(
+                        tooltip: '设置',
+                        icon: Icons.auto_awesome_rounded,
+                        color: AppColors.yellow,
+                        dimension: 31,
+                        onPressed: () => showSettingsSheet(
+                          context,
+                          session,
+                          notificationsEnabled,
+                          onReconnect,
+                          onNotificationsChanged,
+                          onLogout,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return MediaQuery(
+      data: MediaQuery.of(context).copyWith(
+        textScaler: MediaQuery.textScalerOf(
+          context,
+        ).clamp(minScaleFactor: 1, maxScaleFactor: 1.35),
+      ),
+      child: Container(
+        constraints: const BoxConstraints(minHeight: 150),
+        decoration: BoxDecoration(
+          color: offline ? AppColors.porcelainMuted : AppColors.mint,
+          borderRadius: BorderRadius.circular(30),
+          border: Border.all(color: AppColors.ink, width: 1.8),
+          boxShadow: const [
+            BoxShadow(
+              color: AppColors.yellow,
+              blurRadius: 0,
+              offset: Offset(6, 7),
+            ),
+          ],
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Stack(
+          children: [
+            Positioned(
+              right: -8,
+              bottom: -27,
+              width: 142,
+              height: 138,
+              child: LivelyTerminalPal(mood: mood),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(17, 12, 13, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      StatusPill(label: statusLabel, color: AppColors.ink),
+                      const Spacer(),
+                      _HeroIconButton(
+                        tooltip: '项目与会话',
+                        icon: Icons.dashboard_customize_outlined,
+                        dimension: 32,
+                        onPressed: uploadingAttachments ? null : onOpenSessions,
+                      ),
+                      const SizedBox(width: 5),
+                      _HeroIconButton(
+                        tooltip: '工作区',
+                        icon: Icons.folder_open_rounded,
+                        dimension: 32,
+                        onPressed: onOpenWorkspace,
+                      ),
+                      const SizedBox(width: 5),
+                      _HeroIconButton(
+                        tooltip: '新对话',
+                        icon: Icons.add_rounded,
+                        dimension: 32,
+                        onPressed:
+                            connected && !running && !uploadingAttachments
+                            ? onNewConversation
+                            : null,
+                      ),
+                      const SizedBox(width: 5),
+                      _HeroIconButton(
+                        tooltip: '设置',
+                        icon: Icons.auto_awesome_rounded,
+                        color: AppColors.yellow,
+                        dimension: 32,
+                        onPressed: () => showSettingsSheet(
+                          context,
+                          session,
+                          notificationsEnabled,
+                          onReconnect,
+                          onNotificationsChanged,
+                          onLogout,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 9),
+                  SizedBox(
+                    width: 205,
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 26,
+                          height: 0.95,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -0.9,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  SizedBox(
+                    width: 210,
+                    child: Text(
+                      '$workspace · $device',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  if (modelName != null || remainingContext != null) ...[
+                    const SizedBox(height: 4),
+                    Wrap(
+                      spacing: 7,
+                      children: [
+                        if (modelName != null)
+                          Text(
+                            formatModelName(modelName!),
+                            style: const TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        if (remainingContext != null)
+                          Text(
+                            contextWindow == null
+                                ? '剩余 ${formatTokens(remainingContext!)}'
+                                : '剩余 ${formatTokens(remainingContext!)} / ${formatTokens(contextWindow!)}',
+                            style: const TextStyle(
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w700,
+                              fontFeatures: [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HeroIconButton extends StatelessWidget {
+  const _HeroIconButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+    this.color = AppColors.porcelain,
+    this.dimension = 34,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback? onPressed;
+  final Color color;
+  final double dimension;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.square(
+      dimension: dimension,
+      child: IconButton(
+        onPressed: onPressed,
+        tooltip: tooltip,
+        padding: EdgeInsets.zero,
+        icon: Icon(icon, size: 17),
+        style: IconButton.styleFrom(
+          backgroundColor: color,
+          disabledBackgroundColor: color.withValues(alpha: 0.5),
+          foregroundColor: AppColors.ink,
+          disabledForegroundColor: AppColors.ink.withValues(alpha: 0.32),
+          side: const BorderSide(color: AppColors.ink, width: 1.4),
+        ),
+      ),
+    );
+  }
+}
+
+class LegacyConnectionHeader extends StatelessWidget {
+  const LegacyConnectionHeader({
+    super.key,
+    required this.session,
+    required this.running,
+    this.stopping = false,
+    required this.uploadingAttachments,
+    required this.connected,
+    required this.offline,
+    required this.modelName,
+    required this.contextWindow,
+    required this.remainingContext,
+    required this.notificationsEnabled,
+    required this.onReconnect,
+    required this.onNotificationsChanged,
+    required this.onNewConversation,
+    required this.onOpenSessions,
+    required this.onOpenWorkspace,
+    required this.onLogout,
+  });
+
+  final SavedSession? session;
+  final bool running;
+  final bool stopping;
+  final bool uploadingAttachments;
+  final bool connected;
+  final bool offline;
+  final String? modelName;
+  final int? contextWindow;
+  final int? remainingContext;
+  final bool notificationsEnabled;
+  final VoidCallback onReconnect;
+  final Future<bool> Function(bool) onNotificationsChanged;
+  final VoidCallback onNewConversation;
+  final VoidCallback onOpenSessions;
+  final VoidCallback onOpenWorkspace;
+  final VoidCallback onLogout;
+
+  @override
+  Widget build(BuildContext context) {
+    final statusLabel = stopping
+        ? '正在停止'
+        : running
         ? '运行中'
         : uploadingAttachments
         ? '上传中'
@@ -1961,17 +2515,19 @@ class ConnectionHeader extends StatelessWidget {
         : offline
         ? '电脑端离线'
         : '正在连接';
-    final statusColor = running || connected
+    final statusColor = stopping
+        ? AppColors.warning
+        : running || connected
         ? AppColors.accent
         : offline
         ? AppColors.stop
-        : AppColors.muted;
+        : AppColors.warning;
     final workspace = session?.workspaceName ?? 'cc-remote';
     final device = session?.deviceName ?? 'Jayson PC';
 
     return GlassPanel(
       radius: AppRadii.panel,
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+      padding: const EdgeInsets.fromLTRB(6, 5, 6, 8),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -1988,8 +2544,13 @@ class ConnectionHeader extends StatelessWidget {
                         height: 44,
                       ),
                       padding: EdgeInsets.zero,
-                      icon: const Icon(Icons.forum_outlined, size: 21),
+                      icon: const Icon(Icons.view_quilt_outlined, size: 20),
                       tooltip: '项目与会话',
+                      style: IconButton.styleFrom(
+                        backgroundColor: AppColors.porcelainMuted,
+                        foregroundColor: AppColors.accent,
+                        side: const BorderSide(color: AppColors.line),
+                      ),
                     ),
                     IconButton(
                       onPressed: onOpenWorkspace,
@@ -1998,14 +2559,20 @@ class ConnectionHeader extends StatelessWidget {
                         height: 44,
                       ),
                       padding: EdgeInsets.zero,
-                      icon: const Icon(Icons.folder_open_rounded, size: 21),
+                      icon: const Icon(Icons.folder_open_outlined, size: 20),
                       tooltip: '工作区',
+                      style: IconButton.styleFrom(
+                        backgroundColor: AppColors.porcelainMuted,
+                        foregroundColor: AppColors.accent,
+                        side: const BorderSide(color: AppColors.line),
+                      ),
                     ),
                   ],
                 ),
               ),
               Expanded(
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
@@ -2013,17 +2580,17 @@ class ConnectionHeader extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.35,
                       ),
                     ),
                     const SizedBox(height: 1),
                     Row(
-                      mainAxisSize: MainAxisSize.min,
                       children: [
                         Container(
-                          width: 6,
-                          height: 6,
+                          width: 7,
+                          height: 7,
                           decoration: BoxDecoration(
                             color: statusColor,
                             shape: BoxShape.circle,
@@ -2037,8 +2604,8 @@ class ConnectionHeader extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               color: AppColors.muted,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
+                              fontSize: 11.5,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ),
@@ -2063,6 +2630,10 @@ class ConnectionHeader extends StatelessWidget {
                       padding: EdgeInsets.zero,
                       icon: const Icon(Icons.add_comment_rounded, size: 20),
                       tooltip: '新对话',
+                      style: IconButton.styleFrom(
+                        backgroundColor: AppColors.porcelainMuted,
+                        side: const BorderSide(color: AppColors.line),
+                      ),
                     ),
                     IconButton(
                       onPressed: () => showSettingsSheet(
@@ -2073,17 +2644,29 @@ class ConnectionHeader extends StatelessWidget {
                         onNotificationsChanged,
                         onLogout,
                       ),
-                      icon: const Icon(Icons.more_horiz_rounded, size: 23),
+                      icon: const Icon(Icons.tune_rounded, size: 21),
                       tooltip: '设置',
+                      style: IconButton.styleFrom(
+                        backgroundColor: AppColors.porcelainMuted,
+                        side: const BorderSide(color: AppColors.line),
+                      ),
                     ),
                   ],
                 ),
               ),
             ],
           ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            child: SignalTrack(
+              color: statusColor,
+              active: (running && !stopping) || uploadingAttachments,
+              broken: offline,
+            ),
+          ),
           if (modelName != null || remainingContext != null)
             Padding(
-              padding: const EdgeInsets.fromLTRB(44, 0, 44, 8),
+              padding: const EdgeInsets.fromLTRB(44, 0, 44, 1),
               child: Wrap(
                 alignment: WrapAlignment.center,
                 spacing: 7,
@@ -2096,12 +2679,31 @@ class ConnectionHeader extends StatelessWidget {
                       label: formatModelName(modelName!),
                     ),
                   if (remainingContext != null)
-                    SessionMetric(
+                    Row(
                       key: const ValueKey('context-metric'),
-                      icon: Icons.donut_large_rounded,
-                      label: contextWindow == null
-                          ? '剩余 ${formatTokens(remainingContext!)}'
-                          : '剩余 ${formatTokens(remainingContext!)} / ${formatTokens(contextWindow!)}',
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        ContextDial(
+                          remaining: remainingContext!,
+                          total: contextWindow,
+                        ),
+                        const SizedBox(width: 7),
+                        Flexible(
+                          child: Text(
+                            contextWindow == null
+                                ? '剩余 ${formatTokens(remainingContext!)}'
+                                : '剩余 ${formatTokens(remainingContext!)} / ${formatTokens(contextWindow!)}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              fontFeatures: [FontFeature.tabularFigures()],
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                 ],
               ),
@@ -2121,23 +2723,23 @@ class SessionMetric extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
       decoration: BoxDecoration(
-        color: AppColors.accent.withValues(alpha: 0.075),
+        color: AppColors.accentSoft.withValues(alpha: 0.62),
         borderRadius: BorderRadius.circular(AppRadii.pill),
-        border: Border.all(color: AppColors.accent.withValues(alpha: 0.10)),
+        border: Border.all(color: AppColors.accent.withValues(alpha: 0.16)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 13, color: AppColors.accent),
+          Icon(icon, size: 14, color: AppColors.accent),
           const SizedBox(width: 5),
           Text(
             label,
             style: const TextStyle(
-              color: AppColors.muted,
+              color: AppColors.ink,
               fontSize: 11,
-              fontWeight: FontWeight.w600,
+              fontWeight: FontWeight.w700,
               fontFeatures: [FontFeature.tabularFigures()],
             ),
           ),
@@ -2468,7 +3070,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
                       color: AppColors.accent.withValues(alpha: 0.22),
                     ),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppRadii.pill),
+                      borderRadius: BorderRadius.circular(AppRadii.control),
                     ),
                   ),
                 ),
@@ -2476,16 +3078,18 @@ class _SettingsSheetState extends State<SettingsSheet> {
               const SizedBox(height: 8),
               SizedBox(
                 width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: () => confirmLogout(context, widget.onLogout),
-                  icon: const Icon(Icons.link_off_rounded),
-                  label: const Text('退出配对'),
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.stop,
-                    foregroundColor: Colors.white,
-                    minimumSize: const Size.fromHeight(48),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppRadii.pill),
+                child: SignalPressEffect(
+                  child: FilledButton.icon(
+                    onPressed: () => confirmLogout(context, widget.onLogout),
+                    icon: const Icon(Icons.link_off_rounded),
+                    label: const Text('退出配对'),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.stop,
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size.fromHeight(48),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppRadii.control),
+                      ),
                     ),
                   ),
                 ),
@@ -2599,6 +3203,7 @@ class TranscriptView extends StatelessWidget {
     required this.respondingPermissionIds,
     required this.connected,
     required this.onFillPrompt,
+    required this.onReconnect,
     required this.onPermissionAllow,
     required this.onPermissionDeny,
   });
@@ -2610,6 +3215,7 @@ class TranscriptView extends StatelessWidget {
   final Set<String> respondingPermissionIds;
   final bool connected;
   final ValueChanged<String> onFillPrompt;
+  final VoidCallback onReconnect;
   final ValueChanged<RemotePermissionRequest> onPermissionAllow;
   final ValueChanged<RemotePermissionRequest> onPermissionDeny;
 
@@ -2623,93 +3229,106 @@ class TranscriptView extends StatelessWidget {
           return SingleChildScrollView(
             child: ConstrainedBox(
               constraints: BoxConstraints(minHeight: constraints.maxHeight),
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 12, 18, 20),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 72,
-                        height: 72,
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(22),
-                          gradient: LinearGradient(
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                            colors: [
-                              Colors.white.withValues(alpha: 0.62),
-                              Colors.white.withValues(alpha: 0.28),
-                            ],
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(2, 1, 2, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const Text(
+                          '下一件事',
+                          style: TextStyle(
+                            fontSize: 21,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.65,
                           ),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.58),
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: AppColors.shadow.withValues(alpha: 0.04),
-                              blurRadius: 16,
-                              offset: const Offset(0, 6),
+                        ),
+                        const Spacer(),
+                        Transform.rotate(
+                          angle: -0.055,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 9,
+                              vertical: 5,
                             ),
-                          ],
-                        ),
-                        child: Icon(
-                          connected
-                              ? Icons.terminal_rounded
-                              : Icons.cloud_off_rounded,
-                          size: 30,
-                          color: connected ? AppColors.accent : AppColors.muted,
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      Text(
-                        title,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          height: 1.35,
-                          letterSpacing: -0.2,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        subtitle,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 13,
-                        ),
-                      ),
-                      if (connected) ...[
-                        const SizedBox(height: 20),
-                        ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 360),
-                          child: Column(
-                            children: [
-                              PromptChip(
-                                icon: Icons.search_rounded,
-                                label: '检查这个项目',
-                                onTap: () => onFillPrompt('检查这个项目'),
+                            decoration: BoxDecoration(
+                              color: connected
+                                  ? AppColors.yellow
+                                  : AppColors.coralSoft,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: AppColors.ink,
+                                width: 1.2,
                               ),
-                              const SizedBox(height: 8),
-                              PromptChip(
-                                icon: Icons.play_arrow_rounded,
-                                label: '运行测试',
-                                onTap: () => onFillPrompt('运行测试并总结结果'),
+                            ),
+                            child: Text(
+                              connected ? '随时开工' : '等电脑回来',
+                              style: const TextStyle(
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w800,
                               ),
-                              const SizedBox(height: 8),
-                              PromptChip(
-                                icon: Icons.folder_outlined,
-                                label: '总结当前目录',
-                                onTap: () => onFillPrompt('总结当前目录结构'),
-                              ),
-                            ],
+                            ),
                           ),
                         ),
                       ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                    if (connected) ...[
+                      const SizedBox(height: 14),
+                      Row(
+                        children: [
+                          Expanded(
+                            flex: 7,
+                            child: PromptChip(
+                              tone: AppColors.yellow,
+                              icon: Icons.arrow_outward_rounded,
+                              label: '检查项目',
+                              caption: '看看哪里需要处理',
+                              onTap: () => onFillPrompt('检查这个项目'),
+                            ),
+                          ),
+                          const SizedBox(width: 9),
+                          Expanded(
+                            flex: 5,
+                            child: PromptChip(
+                              tone: AppColors.coralSoft,
+                              icon: Icons.bolt_rounded,
+                              label: '运行测试',
+                              caption: '跑完告诉我结果',
+                              onTap: () => onFillPrompt('运行测试并总结结果'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ] else ...[
+                      const SizedBox(height: 14),
+                      SizedBox(
+                        height: (constraints.maxHeight - 94).clamp(
+                          176.0,
+                          224.0,
+                        ),
+                        child: _OfflineReconnectCard(onReconnect: onReconnect),
+                      ),
                     ],
-                  ),
+                  ],
                 ),
               ),
             ),
@@ -2745,6 +3364,149 @@ class TranscriptView extends StatelessWidget {
   }
 }
 
+class _OfflineReconnectCard extends StatelessWidget {
+  const _OfflineReconnectCard({required this.onReconnect});
+
+  final VoidCallback onReconnect;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onReconnect,
+        borderRadius: BorderRadius.circular(26),
+        child: Ink(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(17, 16, 15, 15),
+          decoration: BoxDecoration(
+            color: AppColors.coralSoft,
+            borderRadius: BorderRadius.circular(26),
+            border: Border.all(color: AppColors.ink, width: 1.6),
+            boxShadow: const [
+              BoxShadow(
+                color: AppColors.mint,
+                blurRadius: 0,
+                offset: Offset(4, 5),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 46,
+                    height: 46,
+                    decoration: BoxDecoration(
+                      color: AppColors.yellow,
+                      borderRadius: BorderRadius.circular(15),
+                      border: Border.all(color: AppColors.ink, width: 1.4),
+                    ),
+                    alignment: Alignment.center,
+                    child: const Icon(Icons.power_rounded, size: 24),
+                  ),
+                  const Spacer(),
+                  Transform.rotate(
+                    angle: 0.045,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.porcelain,
+                        borderRadius: BorderRadius.circular(9),
+                        border: Border.all(color: AppColors.ink, width: 1.2),
+                      ),
+                      child: const Text(
+                        '连接任务',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              const Text(
+                '让电脑重新上线',
+                style: TextStyle(
+                  fontSize: 22,
+                  height: 1.05,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.7,
+                ),
+              ),
+              const SizedBox(height: 7),
+              const Text(
+                '在电脑端重新运行 CC Remote，手机会自动接回这次会话。',
+                style: TextStyle(
+                  color: AppColors.ink,
+                  fontSize: 12.5,
+                  height: 1.45,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text(
+                      '会话和输入内容都会保留',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.ink,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          '重新连接',
+                          style: TextStyle(
+                            color: AppColors.porcelain,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        SizedBox(width: 5),
+                        Icon(
+                          Icons.arrow_forward_rounded,
+                          size: 16,
+                          color: AppColors.mint,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class PermissionRequestCard extends StatelessWidget {
   const PermissionRequestCard({
     super.key,
@@ -2764,102 +3526,166 @@ class PermissionRequestCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final enabled = connected && !responding;
-    return GlassPanel(
+    final tool = request.toolName.toLowerCase();
+    final riskTone = tool.contains('write') || tool.contains('edit')
+        ? AppColors.stop
+        : tool.contains('bash') || tool.contains('shell')
+        ? AppColors.warning
+        : AppColors.accent;
+    return Container(
       key: ValueKey('permission-request-${request.requestId}'),
-      radius: AppRadii.control,
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 34,
-                height: 34,
-                decoration: BoxDecoration(
-                  color: AppColors.stop.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(11),
+      decoration: BoxDecoration(
+        color: AppColors.coral,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: AppColors.ink, width: 1.8),
+        boxShadow: const [
+          BoxShadow(color: AppColors.ink, blurRadius: 0, offset: Offset(4, 5)),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 15, 16, 16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: AppColors.yellow,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.ink, width: 1.5),
+                  ),
+                  child: const Icon(
+                    Icons.auto_awesome_rounded,
+                    size: 19,
+                    color: AppColors.ink,
+                  ),
                 ),
-                child: const Icon(
-                  Icons.shield_outlined,
-                  size: 19,
-                  color: AppColors.stop,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '等待权限确认',
-                      style: TextStyle(fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      request.displayName ?? request.toolName,
-                      style: const TextStyle(
-                        color: AppColors.muted,
-                        fontSize: 12,
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '需要你的小小确认',
+                        style: TextStyle(
+                          fontSize: 18,
+                          height: 1,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -0.5,
+                        ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          const Text(
+                            '等待权限确认',
+                            style: TextStyle(
+                              color: AppColors.ink,
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const Text(
+                            ' · ',
+                            style: TextStyle(
+                              color: AppColors.ink,
+                              fontSize: 10.5,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          Flexible(
+                            child: Text(
+                              request.displayName ?? request.toolName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: riskTone,
+                                fontSize: 10.5,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              if (responding)
-                const SizedBox.square(
-                  dimension: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
+                if (responding)
+                  const SizedBox.square(
+                    dimension: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
+            ),
+            if (request.description != null) ...[
+              const SizedBox(height: 10),
+              Text(request.description!),
             ],
-          ),
-          if (request.description != null) ...[
-            const SizedBox(height: 10),
-            Text(request.description!),
-          ],
-          if (request.detail != null) ...[
-            const SizedBox(height: 10),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.58),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(
-                  color: AppColors.shadow.withValues(alpha: 0.12),
+            if (request.detail != null) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 9,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.code,
+                  borderRadius: BorderRadius.circular(AppRadii.compact),
+                  border: Border.all(color: const Color(0xFF2B3A3F)),
+                ),
+                child: SelectableText(
+                  request.detail!,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    height: 1.45,
+                  ),
                 ),
               ),
-              child: SelectableText(
-                request.detail!,
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
-              ),
+            ],
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: SignalPressEffect(
+                    enabled: enabled,
+                    child: OutlinedButton(
+                      onPressed: enabled ? onDeny : null,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.ink,
+                        backgroundColor: AppColors.porcelain,
+                        side: const BorderSide(
+                          color: AppColors.ink,
+                          width: 1.4,
+                        ),
+                      ),
+                      child: const Text('拒绝'),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: SignalPressEffect(
+                    enabled: enabled,
+                    child: FilledButton(
+                      onPressed: enabled ? onAllow : null,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.ink,
+                        foregroundColor: AppColors.porcelain,
+                      ),
+                      child: const Text('允许一次'),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: enabled ? onDeny : null,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.stop,
-                  ),
-                  child: const Text('拒绝'),
-                ),
-              ),
-              const SizedBox(width: 9),
-              Expanded(
-                child: FilledButton(
-                  onPressed: enabled ? onAllow : null,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.accent,
-                  ),
-                  child: const Text('允许一次'),
-                ),
-              ),
-            ],
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -2931,11 +3757,9 @@ class MessageBlock extends StatelessWidget {
             listIndent: 22,
             codeblockPadding: const EdgeInsets.all(12),
             codeblockDecoration: BoxDecoration(
-              color: const Color(0xFFEEF3F6),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: AppColors.shadow.withValues(alpha: 0.12),
-              ),
+              color: AppColors.porcelainMuted,
+              borderRadius: BorderRadius.circular(AppRadii.compact),
+              border: Border.all(color: AppColors.line),
             ),
             blockquotePadding: const EdgeInsets.fromLTRB(12, 6, 10, 6),
             blockquoteDecoration: const BoxDecoration(
@@ -2957,14 +3781,14 @@ class MessageBlock extends StatelessWidget {
           key: const ValueKey('user-message'),
           padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
           decoration: BoxDecoration(
-            color: AppColors.accent.withValues(alpha: 0.10),
+            color: AppColors.accentSoft.withValues(alpha: 0.76),
             borderRadius: const BorderRadius.only(
               topLeft: Radius.circular(AppRadii.bubble),
               topRight: Radius.circular(AppRadii.bubble),
               bottomLeft: Radius.circular(AppRadii.bubble),
               bottomRight: Radius.circular(6),
             ),
-            border: Border.all(color: AppColors.accent.withValues(alpha: 0.10)),
+            border: Border.all(color: AppColors.accent.withValues(alpha: 0.14)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -3087,9 +3911,9 @@ class AttachmentFileTile extends StatelessWidget {
       constraints: const BoxConstraints(minHeight: 58),
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.58),
+        color: AppColors.porcelainMuted,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.shadow.withValues(alpha: 0.10)),
+        border: Border.all(color: AppColors.line),
       ),
       child: Row(
         children: [
@@ -3158,23 +3982,27 @@ class AssistantBubbleFrame extends StatelessWidget {
                 key: bubbleKey,
                 padding: compact
                     ? const EdgeInsets.fromLTRB(13, 10, 14, 10)
-                    : const EdgeInsets.fromLTRB(15, 13, 15, 13),
+                    : const EdgeInsets.fromLTRB(2, 4, 6, 8),
                 decoration: BoxDecoration(
-                  color: const Color(0xE6F7FAFC),
+                  color: compact
+                      ? AppColors.porcelainMuted
+                      : Colors.transparent,
                   borderRadius: const BorderRadius.only(
                     topLeft: Radius.circular(7),
                     topRight: Radius.circular(AppRadii.bubble),
                     bottomLeft: Radius.circular(AppRadii.bubble),
                     bottomRight: Radius.circular(AppRadii.bubble),
                   ),
-                  border: Border.all(color: const Color(0x66FFFFFF)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.shadow.withValues(alpha: 0.03),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
+                  border: compact ? Border.all(color: AppColors.line) : null,
+                  boxShadow: compact
+                      ? [
+                          BoxShadow(
+                            color: AppColors.shadow.withValues(alpha: 0.035),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                        ]
+                      : null,
                 ),
                 child: child,
               ),
@@ -3189,8 +4017,6 @@ class AssistantBubbleFrame extends StatelessWidget {
 class AssistantAvatar extends StatelessWidget {
   const AssistantAvatar({super.key});
 
-  static const assetPath = 'assets/assistant_avatar.jpg';
-
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -3199,33 +4025,23 @@ class AssistantAvatar extends StatelessWidget {
       height: 32,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(11),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.92)),
+        border: Border.all(color: AppColors.ink, width: 1.2),
         boxShadow: [
           BoxShadow(
-            color: AppColors.shadow.withValues(alpha: 0.10),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
+            color: AppColors.coral.withValues(alpha: 0.9),
+            blurRadius: 0,
+            offset: const Offset(2, 2),
           ),
         ],
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(10),
-        child: Image.asset(
-          assetPath,
-          fit: BoxFit.cover,
-          // Face sits lower in this portrait; bias crop toward it.
-          alignment: const Alignment(0, 0.35),
-          errorBuilder: (context, error, stackTrace) {
-            return Container(
-              color: Colors.white.withValues(alpha: 0.72),
-              alignment: Alignment.center,
-              child: const Icon(
-                Icons.terminal_rounded,
-                size: 16,
-                color: AppColors.accent,
-              ),
-            );
-          },
+        child: const ColoredBox(
+          color: AppColors.mintSoft,
+          child: Padding(
+            padding: EdgeInsets.all(4),
+            child: LivelyTerminalPal(),
+          ),
         ),
       ),
     );
@@ -3241,40 +4057,58 @@ class ActivityBlock extends StatelessWidget {
   Widget build(BuildContext context) {
     if (message.activityKind == ActivityKind.thinking) {
       if (message.activityState == ActivityState.running) {
-        return const AssistantBubbleFrame(
-          bubbleKey: ValueKey('thinking-bubble'),
+        return const TaskRailFrame(
+          color: AppColors.accent,
+          active: true,
           compact: true,
-          child: ThinkingIndicator(),
+          child: AssistantBubbleFrame(
+            bubbleKey: ValueKey('thinking-bubble'),
+            compact: true,
+            child: ThinkingIndicator(),
+          ),
         );
       }
-      return AssistantBubbleFrame(
-        bubbleKey: const ValueKey('thinking-complete'),
+      final thinkingTone = message.activityState == ActivityState.error
+          ? AppColors.stop
+          : AppColors.success;
+      return TaskRailFrame(
+        color: thinkingTone,
         compact: true,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              message.activityState == ActivityState.error
-                  ? Icons.error_outline_rounded
-                  : Icons.check_rounded,
-              size: 17,
-              color: message.activityState == ActivityState.error
-                  ? AppColors.stop
-                  : AppColors.accent,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              message.text,
-              style: const TextStyle(
-                color: AppColors.muted,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
+        child: AssistantBubbleFrame(
+          bubbleKey: const ValueKey('thinking-complete'),
+          compact: true,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                message.activityState == ActivityState.error
+                    ? Icons.error_outline_rounded
+                    : Icons.check_rounded,
+                size: 17,
+                color: thinkingTone,
               ),
-            ),
-          ],
+              const SizedBox(width: 8),
+              Text(
+                message.text,
+                style: const TextStyle(
+                  color: AppColors.muted,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
         ),
       );
     }
+
+    final railTone = switch (message.activityState) {
+      ActivityState.running => AppColors.accent,
+      ActivityState.done => AppColors.success,
+      ActivityState.error => AppColors.stop,
+      ActivityState.stopped => AppColors.muted,
+      null => AppColors.muted,
+    };
 
     final detail = message.activityDetail;
     final title = Text(
@@ -3314,90 +4148,101 @@ class ActivityBlock extends StatelessWidget {
     };
 
     if (message.activityKind == ActivityKind.summary) {
-      return Container(
-        padding: const EdgeInsets.fromLTRB(12, 10, 13, 10),
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.54),
-          borderRadius: BorderRadius.circular(AppRadii.control),
-          border: Border.all(color: AppColors.shadow.withValues(alpha: 0.08)),
-        ),
-        child: Row(
-          children: [
-            icon,
-            const SizedBox(width: 9),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  title,
-                  if (detail != null && detail.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Text(
-                      detail,
-                      style: const TextStyle(
-                        color: AppColors.muted,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
+      return TaskRailFrame(
+        color: railTone,
+        active: message.activityState == ActivityState.running,
+        child: Material(
+          color: AppColors.porcelain,
+          shape: const SignalCutCornerBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 13, 10),
+            child: Row(
+              children: [
+                icon,
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      title,
+                      if (detail != null && detail.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          detail,
+                          style: const TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       );
     }
 
     if (detail == null || detail.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.fromLTRB(4, 5, 5, 5),
-        child: Row(
-          children: [
-            SizedBox(width: 22, child: Center(child: icon)),
-            const SizedBox(width: 6),
-            Expanded(child: title),
-          ],
+      return TaskRailFrame(
+        color: railTone,
+        active: message.activityState == ActivityState.running,
+        compact: true,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(4, 5, 5, 5),
+          child: Row(
+            children: [
+              SizedBox(width: 22, child: Center(child: icon)),
+              const SizedBox(width: 6),
+              Expanded(child: title),
+            ],
+          ),
         ),
       );
     }
 
-    return Theme(
-      data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Colors.white.withValues(alpha: 0.42),
-          borderRadius: BorderRadius.circular(AppRadii.control),
-          border: Border.all(color: AppColors.shadow.withValues(alpha: 0.07)),
-        ),
-        child: ExpansionTile(
-          dense: true,
-          visualDensity: VisualDensity.compact,
-          tilePadding: const EdgeInsets.symmetric(horizontal: 12),
-          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-          leading: SizedBox(width: 20, child: Center(child: icon)),
-          title: title,
-          subtitle: Text(
-            detail,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: AppColors.muted, fontSize: 12),
-          ),
-          shape: const Border(),
-          collapsedShape: const Border(),
-          children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: SelectableText(
-                detail,
-                style: const TextStyle(
-                  color: AppColors.ink,
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                  height: 1.45,
+    return TaskRailFrame(
+      color: railTone,
+      active: message.activityState == ActivityState.running,
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: Material(
+          color: AppColors.porcelain,
+          shape: const SignalCutCornerBorder(),
+          clipBehavior: Clip.antiAlias,
+          child: ExpansionTile(
+            dense: true,
+            visualDensity: VisualDensity.compact,
+            tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+            childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+            leading: SizedBox(width: 20, child: Center(child: icon)),
+            title: title,
+            subtitle: Text(
+              detail,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+            ),
+            shape: const Border(),
+            collapsedShape: const Border(),
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: SelectableText(
+                  detail,
+                  style: const TextStyle(
+                    color: AppColors.ink,
+                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    height: 1.45,
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -3416,6 +4261,7 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
   late final AnimationController animation;
   Timer? timer;
   var elapsedSeconds = 0;
+  var reduceMotion = false;
 
   @override
   void initState() {
@@ -3423,10 +4269,25 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
     animation = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 850),
-    )..repeat(reverse: true);
+    );
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => elapsedSeconds += 1);
     });
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextReduceMotion = MediaQuery.disableAnimationsOf(context);
+    if (nextReduceMotion == reduceMotion && animation.isAnimating) return;
+    reduceMotion = nextReduceMotion;
+    if (reduceMotion) {
+      animation
+        ..stop()
+        ..value = 0.5;
+    } else if (!animation.isAnimating) {
+      animation.repeat(reverse: true);
+    }
   }
 
   @override
@@ -3498,6 +4359,7 @@ class PromptBar extends StatelessWidget {
     this.attachments = const [],
     required this.commands,
     required this.running,
+    this.stopping = false,
     this.uploading = false,
     required this.connected,
     required this.offline,
@@ -3516,6 +4378,7 @@ class PromptBar extends StatelessWidget {
   final List<AttachmentDraft> attachments;
   final List<String> commands;
   final bool running;
+  final bool stopping;
   final bool uploading;
   final bool connected;
   final bool offline;
@@ -3531,152 +4394,261 @@ class PromptBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ValueListenableBuilder<TextEditingValue>(
-      valueListenable: controller,
-      builder: (context, value, _) {
-        final canSend =
-            (value.text.trim().isNotEmpty || attachments.isNotEmpty) &&
-            !running &&
-            !uploading &&
-            connected;
-        final query = commandQuery(value.text);
-        final matchingCommands = query == null
-            ? const <String>[]
-            : filterCommands(commands, query);
-        final showSuggestions =
-            query != null && !running && !uploading && connected;
+    return MediaQuery(
+      data: MediaQuery.of(context).copyWith(
+        textScaler: MediaQuery.textScalerOf(
+          context,
+        ).clamp(minScaleFactor: 1, maxScaleFactor: 1.3),
+      ),
+      child: ValueListenableBuilder<TextEditingValue>(
+        valueListenable: controller,
+        builder: (context, value, _) {
+          final canSend =
+              (value.text.trim().isNotEmpty || attachments.isNotEmpty) &&
+              !running &&
+              !uploading &&
+              connected;
+          final query = commandQuery(value.text);
+          final matchingCommands = query == null
+              ? const <String>[]
+              : filterCommands(commands, query);
+          final showSuggestions =
+              query != null && !running && !uploading && connected;
 
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (showSuggestions) ...[
-              CommandSuggestions(
-                commands: matchingCommands,
-                loading: commands.isEmpty,
-                maxHeight: suggestionMaxHeight,
-                onSelected: onCommandSelected,
-              ),
-              const SizedBox(height: 8),
-            ],
-            Align(
-              alignment: Alignment.centerLeft,
-              child: PermissionModeChip(
-                mode: permissionMode,
-                enabled: !running && !uploading,
-                onPressed: () => showPermissionModePicker(
-                  context,
-                  selected: permissionMode,
-                  allowBypassPermissions: allowBypassPermissions,
-                  onSelected: onPermissionModeSelected,
+          return Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (showSuggestions) ...[
+                CommandSuggestions(
+                  commands: matchingCommands,
+                  loading: commands.isEmpty,
+                  maxHeight: suggestionMaxHeight,
+                  onSelected: onCommandSelected,
                 ),
-              ),
-            ),
-            const SizedBox(height: 7),
-            if (attachments.isNotEmpty) ...[
-              PendingAttachmentStrip(
-                attachments: attachments,
-                uploading: uploading,
-                onRemove: (attachment) => onRemoveAttachment?.call(attachment),
-              ),
-              const SizedBox(height: 7),
-            ],
-            GlassPanel(
-              padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
-              radius: AppRadii.input,
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  SizedBox(
-                    width: 44,
-                    height: 44,
-                    child: IconButton(
-                      onPressed: running || uploading || !connected
-                          ? null
-                          : onAddAttachment,
-                      icon: const Icon(Icons.attach_file_rounded, size: 21),
-                      tooltip: '添加附件',
-                      color: AppColors.accent,
+                const SizedBox(height: 6),
+              ],
+              Container(
+                padding: const EdgeInsets.fromLTRB(9, 7, 8, 7),
+                decoration: BoxDecoration(
+                  color: AppColors.ink,
+                  borderRadius: BorderRadius.circular(24),
+                  border: Border.all(color: AppColors.ink, width: 1.5),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: AppColors.coral,
+                      blurRadius: 0,
+                      offset: Offset(4, 5),
                     ),
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: controller,
-                      enabled: !running && !uploading,
-                      minLines: 1,
-                      maxLines: 4,
-                      decoration: InputDecoration(
-                        hintText: uploading
-                            ? '正在上传附件…'
-                            : running
-                            ? 'Claude 正在输出…'
-                            : connected
-                            ? '输入要发给 Claude Code 的内容'
-                            : offline
-                            ? '电脑端离线，请先重连'
-                            : '正在连接电脑端',
-                        hintStyle: TextStyle(
-                          color: AppColors.muted.withValues(alpha: 0.9),
-                          fontSize: 14,
-                        ),
-                        border: InputBorder.none,
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 12,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  if (running)
-                    SizedBox(
-                      height: 40,
-                      child: FilledButton.icon(
-                        onPressed: onStop,
-                        icon: const Icon(Icons.stop_rounded, size: 18),
-                        label: const Text('停止'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.stop,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(horizontal: 14),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(AppRadii.pill),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      children: [
+                        PermissionModeChip(
+                          mode: permissionMode,
+                          enabled: !running && !uploading,
+                          inverted: true,
+                          onPressed: () => showPermissionModePicker(
+                            context,
+                            selected: permissionMode,
+                            allowBypassPermissions: allowBypassPermissions,
+                            onSelected: onPermissionModeSelected,
                           ),
                         ),
-                      ),
-                    )
-                  else if (uploading)
-                    const SizedBox(
-                      width: 40,
-                      height: 40,
-                      child: Padding(
-                        padding: EdgeInsets.all(10),
-                        child: CircularProgressIndicator(strokeWidth: 2.2),
-                      ),
-                    )
-                  else
-                    SizedBox(
-                      width: 40,
-                      height: 40,
-                      child: IconButton.filled(
-                        onPressed: canSend ? onSend : null,
-                        icon: const Icon(Icons.send_rounded, size: 18),
-                        tooltip: '发送',
-                        style: IconButton.styleFrom(
-                          backgroundColor: AppColors.accent,
-                          disabledBackgroundColor: const Color(0xFFDCE6EA),
-                          foregroundColor: Colors.white,
-                          fixedSize: const Size.square(40),
-                          shape: const CircleBorder(),
+                        const Spacer(),
+                        Text(
+                          stopping
+                              ? '正在停止任务'
+                              : running
+                              ? '信号传输中'
+                              : uploading
+                              ? '正在上传'
+                              : connected
+                              ? '命令就绪'
+                              : offline
+                              ? '连接已中断'
+                              : '正在握手',
+                          style: TextStyle(
+                            color: stopping
+                                ? AppColors.warning
+                                : running || connected
+                                ? AppColors.accent
+                                : offline
+                                ? AppColors.stop
+                                : AppColors.muted,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
+                        const SizedBox(width: 7),
+                      ],
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 1),
+                      child: SignalTrack(
+                        color: stopping
+                            ? AppColors.warning
+                            : running || connected
+                            ? AppColors.accent
+                            : offline
+                            ? AppColors.stop
+                            : AppColors.warning,
+                        active: (running && !stopping) || uploading,
+                        broken: offline,
                       ),
                     ),
-                ],
+                    if (attachments.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      PendingAttachmentStrip(
+                        attachments: attachments,
+                        uploading: uploading,
+                        onRemove: (attachment) =>
+                            onRemoveAttachment?.call(attachment),
+                      ),
+                      const SizedBox(height: 4),
+                    ],
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        SizedBox(
+                          width: 40,
+                          height: 40,
+                          child: IconButton(
+                            onPressed: running || uploading || !connected
+                                ? null
+                                : onAddAttachment,
+                            icon: const Icon(
+                              Icons.add_circle_outline_rounded,
+                              size: 20,
+                            ),
+                            tooltip: '添加附件',
+                            color: AppColors.accent,
+                          ),
+                        ),
+                        Expanded(
+                          child: TextField(
+                            controller: controller,
+                            enabled: !running && !uploading,
+                            cursorColor: AppColors.mint,
+                            style: const TextStyle(
+                              color: AppColors.porcelain,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            minLines: 1,
+                            maxLines: 3,
+                            decoration: InputDecoration(
+                              filled: false,
+                              hintText: uploading
+                                  ? '正在上传附件…'
+                                  : running
+                                  ? 'Claude 正在输出…'
+                                  : connected
+                                  ? '输入要发给 Claude Code 的内容'
+                                  : offline
+                                  ? '电脑端离线，请先重连'
+                                  : '正在连接电脑端',
+                              hintStyle: TextStyle(
+                                color: AppColors.codeMuted.withValues(
+                                  alpha: 0.92,
+                                ),
+                                fontSize: 14,
+                              ),
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              isDense: true,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                                vertical: 10,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        if (running)
+                          SignalPressEffect(
+                            enabled: !stopping,
+                            child: SizedBox(
+                              height: 40,
+                              child: FilledButton.icon(
+                                onPressed: stopping ? null : onStop,
+                                icon: stopping
+                                    ? const SizedBox.square(
+                                        dimension: 16,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : const Icon(Icons.stop_rounded, size: 18),
+                                label: Text(stopping ? '停止中' : '停止'),
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: stopping
+                                      ? AppColors.warning
+                                      : AppColors.stop,
+                                  disabledBackgroundColor: AppColors.warning,
+                                  disabledForegroundColor: Colors.white,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(
+                                      AppRadii.control,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          )
+                        else if (uploading)
+                          const SizedBox(
+                            width: 40,
+                            height: 40,
+                            child: Padding(
+                              padding: EdgeInsets.all(10),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.2,
+                              ),
+                            ),
+                          )
+                        else
+                          SignalPressEffect(
+                            enabled: canSend,
+                            child: SizedBox(
+                              width: 40,
+                              height: 40,
+                              child: IconButton.filled(
+                                onPressed: canSend ? onSend : null,
+                                icon: const Icon(
+                                  Icons.arrow_upward_rounded,
+                                  size: 19,
+                                ),
+                                tooltip: '发送',
+                                style: IconButton.styleFrom(
+                                  backgroundColor: AppColors.accent,
+                                  disabledBackgroundColor: AppColors.line,
+                                  foregroundColor: AppColors.ink,
+                                  fixedSize: const Size.square(40),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(13),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-          ],
-        );
-      },
+            ],
+          );
+        },
+      ),
     );
   }
 }
@@ -3708,11 +4680,9 @@ class PendingAttachmentStrip extends StatelessWidget {
             width: 174,
             padding: const EdgeInsets.fromLTRB(7, 7, 2, 7),
             decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.60),
+              color: AppColors.porcelainMuted,
               borderRadius: BorderRadius.circular(13),
-              border: Border.all(
-                color: AppColors.shadow.withValues(alpha: 0.10),
-              ),
+              border: Border.all(color: AppColors.line),
             ),
             child: Row(
               children: [
@@ -3834,11 +4804,13 @@ class PermissionModeChip extends StatelessWidget {
     required this.mode,
     required this.enabled,
     required this.onPressed,
+    this.inverted = false,
   });
 
   final PermissionMode mode;
   final bool enabled;
   final VoidCallback onPressed;
+  final bool inverted;
 
   @override
   Widget build(BuildContext context) {
@@ -3853,9 +4825,17 @@ class PermissionModeChip extends StatelessWidget {
         child: Ink(
           padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: enabled ? 0.62 : 0.40),
+            color: enabled
+                ? inverted
+                      ? const Color(0xFF2A2A27)
+                      : AppColors.porcelainMuted
+                : AppColors.line.withValues(alpha: 0.54),
             borderRadius: BorderRadius.circular(AppRadii.pill),
-            border: Border.all(color: tone.withValues(alpha: 0.16)),
+            border: Border.all(
+              color: inverted
+                  ? Colors.white.withValues(alpha: 0.12)
+                  : tone.withValues(alpha: 0.16),
+            ),
           ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
@@ -3865,16 +4845,22 @@ class PermissionModeChip extends StatelessWidget {
               Text(
                 mode.label,
                 style: TextStyle(
-                  color: danger ? AppColors.stop : AppColors.muted,
+                  color: danger
+                      ? AppColors.stop
+                      : inverted
+                      ? AppColors.porcelain
+                      : AppColors.ink,
                   fontSize: 12,
-                  fontWeight: FontWeight.w600,
+                  fontWeight: FontWeight.w700,
                 ),
               ),
               const SizedBox(width: 2),
               Icon(
                 Icons.keyboard_arrow_down_rounded,
                 size: 16,
-                color: AppColors.muted.withValues(alpha: 0.8),
+                color: inverted
+                    ? AppColors.codeMuted
+                    : AppColors.muted.withValues(alpha: 0.8),
               ),
             ],
           ),
@@ -4059,60 +5045,96 @@ class CommandSuggestions extends StatelessWidget {
 }
 
 class ScanFrame extends StatelessWidget {
-  const ScanFrame({super.key, required this.child});
+  const ScanFrame({super.key, required this.child, this.compact = false});
 
   final Widget child;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.46),
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.74)),
+        color: AppColors.porcelain,
+        borderRadius: BorderRadius.circular(compact ? 20 : 30),
+        border: Border.all(color: AppColors.ink, width: 1.8),
         boxShadow: [
           BoxShadow(
-            color: AppColors.shadow.withValues(alpha: 0.14),
-            blurRadius: 34,
-            offset: const Offset(0, 16),
+            color: AppColors.yellow,
+            blurRadius: 0,
+            offset: Offset(compact ? 5 : 7, compact ? 6 : 8),
           ),
         ],
       ),
-      child: Stack(
-        children: [
-          Center(child: child),
-          const Positioned(top: 18, left: 18, child: ScanCorner()),
-          const Positioned(
-            top: 18,
-            right: 18,
-            child: RotatedBox(quarterTurns: 1, child: ScanCorner()),
-          ),
-          const Positioned(
-            bottom: 18,
-            right: 18,
-            child: RotatedBox(quarterTurns: 2, child: ScanCorner()),
-          ),
-          const Positioned(
-            bottom: 18,
-            left: 18,
-            child: RotatedBox(quarterTurns: 3, child: ScanCorner()),
-          ),
-        ],
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(compact ? 18 : 28),
+        child: Stack(
+          children: [
+            Center(child: child),
+            Positioned(
+              top: compact ? 10 : 14,
+              left: compact ? 10 : 14,
+              child: Container(
+                padding: EdgeInsets.symmetric(
+                  horizontal: compact ? 8 : 10,
+                  vertical: compact ? 4 : 6,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.mintSoft,
+                  borderRadius: BorderRadius.circular(AppRadii.pill),
+                  border: Border.all(color: AppColors.ink, width: 1.2),
+                ),
+                child: Text(
+                  '对准二维码',
+                  style: TextStyle(
+                    fontSize: compact ? 10 : 12,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+            Positioned(
+              top: compact ? 12 : 18,
+              right: compact ? 12 : 18,
+              child: RotatedBox(
+                quarterTurns: 1,
+                child: ScanCorner(compact: compact),
+              ),
+            ),
+            Positioned(
+              bottom: compact ? 12 : 18,
+              right: compact ? 12 : 18,
+              child: RotatedBox(
+                quarterTurns: 2,
+                child: ScanCorner(compact: compact),
+              ),
+            ),
+            Positioned(
+              bottom: compact ? 12 : 18,
+              left: compact ? 12 : 18,
+              child: RotatedBox(
+                quarterTurns: 3,
+                child: ScanCorner(compact: compact),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
 class ScanCorner extends StatelessWidget {
-  const ScanCorner({super.key});
+  const ScanCorner({super.key, this.compact = false});
+
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 34,
-      height: 34,
-      child: DecoratedBox(
-        decoration: const BoxDecoration(
+      width: compact ? 22 : 34,
+      height: compact ? 22 : 34,
+      child: const DecoratedBox(
+        decoration: BoxDecoration(
           border: Border(
             top: BorderSide(color: AppColors.accent, width: 3),
             left: BorderSide(color: AppColors.accent, width: 3),
@@ -4132,9 +5154,38 @@ class AppBackground extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       resizeToAvoidBottomInset: true,
-      // Flat cool fog — no vertical hue split, no competing blobs.
       backgroundColor: AppColors.bgMid,
-      body: ColoredBox(color: AppColors.bgMid, child: child),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          const ColoredBox(color: AppColors.bgMid),
+          Positioned(
+            right: -74,
+            top: -86,
+            child: Container(
+              width: 210,
+              height: 210,
+              decoration: const BoxDecoration(
+                color: AppColors.mintSoft,
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+          Positioned(
+            left: -92,
+            bottom: 54,
+            child: Container(
+              width: 190,
+              height: 190,
+              decoration: const BoxDecoration(
+                color: AppColors.yellowSoft,
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+          child,
+        ],
+      ),
     );
   }
 }
@@ -4155,57 +5206,29 @@ class GlassPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
+        color: AppColors.porcelain,
         borderRadius: BorderRadius.circular(radius),
+        border: Border.all(color: AppColors.ink, width: 1.25),
         boxShadow: [
           BoxShadow(
-            color: AppColors.shadow.withValues(alpha: 0.045),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
+            color: AppColors.ink.withValues(alpha: 0.09),
+            blurRadius: 0,
+            offset: const Offset(3, 4),
+          ),
+          BoxShadow(
+            color: AppColors.ink.withValues(alpha: 0.055),
+            blurRadius: 24,
+            offset: const Offset(0, 12),
           ),
         ],
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(radius),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(radius),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.62)),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                Colors.white.withValues(alpha: 0.52),
-                Colors.white.withValues(alpha: 0.34),
-              ],
-            ),
-          ),
-          child: Stack(
-            children: [
-              Padding(
-                padding: padding,
-                child: SizedBox(width: double.infinity, child: child),
-              ),
-              Positioned(
-                left: 12,
-                right: 12,
-                top: 0,
-                height: 1,
-                child: IgnorePointer(
-                  child: DecoratedBox(
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(1),
-                      gradient: LinearGradient(
-                        colors: [
-                          Colors.white.withValues(alpha: 0.0),
-                          Colors.white.withValues(alpha: 0.55),
-                          Colors.white.withValues(alpha: 0.0),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
+        borderRadius: BorderRadius.circular(radius - 1),
+        child: ColoredBox(
+          color: AppColors.porcelain,
+          child: Padding(
+            padding: padding,
+            child: SizedBox(width: double.infinity, child: child),
           ),
         ),
       ),
@@ -4290,16 +5313,19 @@ class ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FilledButton.icon(
-      onPressed: onPressed,
-      icon: Icon(icon),
-      label: Text(label),
-      style: FilledButton.styleFrom(
-        backgroundColor: AppColors.accent,
-        foregroundColor: Colors.white,
-        minimumSize: const Size.fromHeight(48),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppRadii.pill),
+    return SignalPressEffect(
+      enabled: onPressed != null,
+      child: FilledButton.icon(
+        onPressed: onPressed,
+        icon: Icon(icon),
+        label: Text(label),
+        style: FilledButton.styleFrom(
+          backgroundColor: AppColors.accent,
+          foregroundColor: Colors.white,
+          minimumSize: const Size.fromHeight(48),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadii.control),
+          ),
         ),
       ),
     );
@@ -4312,11 +5338,15 @@ class PromptChip extends StatelessWidget {
     required this.label,
     required this.onTap,
     this.icon,
+    this.caption,
+    this.tone = AppColors.porcelain,
   });
 
   final String label;
   final VoidCallback onTap;
   final IconData? icon;
+  final String? caption;
+  final Color tone;
 
   @override
   Widget build(BuildContext context) {
@@ -4324,43 +5354,71 @@ class PromptChip extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(AppRadii.control),
+        borderRadius: BorderRadius.circular(22),
         child: Ink(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+          padding: const EdgeInsets.fromLTRB(14, 13, 12, 13),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.58),
-            borderRadius: BorderRadius.circular(AppRadii.control),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.78)),
+            color: tone,
+            borderRadius: BorderRadius.circular(22),
+            border: Border.all(color: AppColors.ink, width: 1.4),
             boxShadow: [
               BoxShadow(
-                color: AppColors.shadow.withValues(alpha: 0.05),
-                blurRadius: 14,
-                offset: const Offset(0, 6),
+                color: AppColors.ink.withValues(alpha: 0.12),
+                blurRadius: 0,
+                offset: const Offset(3, 4),
               ),
             ],
           ),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              if (icon != null) ...[
-                Icon(icon, size: 18, color: AppColors.accent),
-                const SizedBox(width: 10),
-              ],
-              Expanded(
-                child: Text(
-                  label,
+              Row(
+                children: [
+                  if (icon != null)
+                    Container(
+                      width: 31,
+                      height: 31,
+                      decoration: BoxDecoration(
+                        color: AppColors.porcelain,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: AppColors.ink, width: 1.2),
+                      ),
+                      alignment: Alignment.center,
+                      child: Icon(icon, size: 17, color: AppColors.ink),
+                    ),
+                  const Spacer(),
+                  const Icon(
+                    Icons.north_east_rounded,
+                    size: 17,
+                    color: AppColors.ink,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: AppColors.ink,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.25,
+                ),
+              ),
+              if (caption != null) ...[
+                const SizedBox(height: 3),
+                Text(
+                  caption!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: AppColors.ink,
-                    fontSize: 14,
+                    fontSize: 10,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
-              ),
-              Icon(
-                Icons.chevron_right_rounded,
-                size: 18,
-                color: AppColors.muted.withValues(alpha: 0.8),
-              ),
+              ],
             ],
           ),
         ),
@@ -5170,23 +6228,3 @@ enum MessageRole { user, assistant, system, activity }
 enum ActivityKind { thinking, tool, summary }
 
 enum ActivityState { running, done, error, stopped }
-
-class AppRadii {
-  static const panel = 22.0;
-  static const bubble = 16.0;
-  static const input = 16.0;
-  static const control = 14.0;
-  static const pill = 999.0;
-}
-
-class AppColors {
-  static const ink = Color(0xFF172026);
-  static const muted = Color(0xFF6B7880);
-  static const accent = Color(0xFF168EB0);
-  static const stop = Color(0xFFD96B6B);
-  static const shadow = Color(0xFF7B8B96);
-  // Single cool fog plate. Top/mid/bottom stay identical to kill banding.
-  static const bgTop = Color(0xFFF3F6F8);
-  static const bgMid = Color(0xFFF3F6F8);
-  static const bgBottom = Color(0xFFF3F6F8);
-}

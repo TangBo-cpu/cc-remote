@@ -4,7 +4,7 @@
 
 CC Remote 的手机端按 Flutter App 做。网页只保留为本地调试入口，不再作为产品主路径。现有 daemon 已经进入 App token 协议，二维码是 JSON payload，HTTP 使用 Bearer token，WebSocket 建立后第一条消息鉴权。
 
-这份文档负责约束 App、daemon、协议和实现顺序。视觉和交互以 `docs/mobile-ui-app-design.md` 为准，参考图放在 `docs/mobile-ui-reference/`。
+这份文档负责约束 App、daemon、协议和实现顺序。视觉和交互以 `docs/mobile-ui-app-design.md` 为准。
 
 当前仍只服务一台电脑和一个手机 token，但一个 daemon 可以注册多个项目，每个项目可以保存多条 Claude Code 会话。已跑通扫码配对、恢复连接、发送 prompt、流式输出、Stop、Logout、权限审批、独立 transcript 恢复、项目切换、会话切换、Android 后台本地通知和工作区只读浏览。多电脑、会话全文搜索、文件上传/下载、FCM 远程推送和商店材料仍不进入当前范围。
 
@@ -88,7 +88,6 @@ cc-remote/
     mobile-app-architecture.md
     flutter-app-design.md
     mobile-ui-app-design.md
-    mobile-ui-reference/
 ```
 
 当前 Flutter 实现是单文件主入口 `main.dart` 加 `workspace_drawer.dart`，尚未拆成完整 `screens/services/controllers` 分层。`docs/flutter-app-design.md` 保留更细的目标分层设计，以实际代码结构为准。
@@ -308,17 +307,9 @@ booting
 
 ## UI 对接边界
 
-界面结构以浅色渐变、毛玻璃控制台为准。主屏不是聊天 App，也不是网页 dashboard。启动页只做状态检查。扫码页展示相机区域和配对确认 sheet。主控制台由连接头、会话状态带、transcript、权限模式选择、工具审批卡和底部 prompt bar 组成。左侧工作区抽屉提供只读文件与 Git diff。设置用半屏 sheet，放设备信息、新对话、重新连接和退出配对。
+界面结构以 `Signal Console · Porcelain` 浅色主题为准。矿物灰白背景承载瓷白表面，青蓝信号轨道负责连接与运行状态。主屏不是聊天 App，也不是网页 dashboard。启动页只做状态检查。扫码页展示相机区域和配对确认 sheet。主控制台由连接状态舱、transcript、任务轨道、权限 Gate 和底部 Command Dock 组成。左侧工作区抽屉提供只读文件与窄色带 Git diff。设置用半屏 sheet，放设备信息、新对话、重新连接和退出配对。
 
-实现时优先参考这些图片。
-
-```text
-docs/mobile-ui-reference/01-light-glass-flow-overview.png
-docs/mobile-ui-reference/02-startup-status-check.png
-docs/mobile-ui-reference/03-qr-pairing-confirmation.png
-docs/mobile-ui-reference/04-connected-empty-console.png
-docs/mobile-ui-reference/05-running-transcript.png
-```
+实现时以设计文档、组件规范和真机效果为准，不再维护独立参考图。
 
 ## 安全边界
 
@@ -332,7 +323,7 @@ daemon 的 App token 主协议已经在代码里，Flutter App 也已经完成�
 
 已完成：
 
-1. 创建 `mobile/` Flutter 项目，接入基础依赖和浅色毛玻璃 UI 骨架。
+1. 创建 `mobile/` Flutter 项目，接入基础依赖和浅色 Signal Console UI 骨架。
 2. 实现扫码配对。解析 JSON QR，校验 `type`、`version`、`origin`、`nonce` 和 `expiresAt`，展示配对确认 sheet，确认后调用 `/api/pair`，把 `origin`、`token`、`deviceName` 存进 Secure Storage。
 3. 实现状态恢复。App 重启后读取本地 session，调用 `/api/status`。成功进入主控制台；daemon 离线时保留配对态并显示“电脑端离线”；401 时清 token 并回到配对页。
 4. 实现 WebSocket 聊天。连接 `/ws`，发送 `auth`，处理 `status`、`transcript_snapshot`、`permission_*`、`commands`、`session_info`、`activity`、`text`、`done`、`stopped`、`error`，把文本流追加到当前 assistant message。

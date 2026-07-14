@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:cc_remote/main.dart';
 import 'package:cc_remote/attachments.dart';
 import 'package:cc_remote/notification_service.dart';
+import 'package:cc_remote/signal_console_theme.dart';
 import 'package:cc_remote/workspace_drawer.dart';
 
 void main() {
@@ -919,6 +920,206 @@ void main() {
     expect(find.byType(LinearProgressIndicator), findsNothing);
   });
 
+  testWidgets('stopping state disables the stop action and shows progress', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    var stopCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: PromptBar(
+            controller: controller,
+            commands: const [],
+            running: true,
+            stopping: true,
+            connected: true,
+            offline: false,
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: false,
+            onPermissionModeSelected: (_) {},
+            onCommandSelected: (_) {},
+            onSend: () {},
+            onStop: () => stopCount += 1,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('正在停止任务'), findsOneWidget);
+    expect(find.text('停止中'), findsOneWidget);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+    await tester.tap(find.text('停止中'));
+    expect(stopCount, 0);
+  });
+
+  testWidgets('route motion turns off when reduced motion is requested', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: const MediaQuery(
+          data: MediaQueryData(disableAnimations: true),
+          child: DemoShell(enableCamera: false, demoMode: true),
+        ),
+      ),
+    );
+
+    final switcher = tester.widget<AnimatedSwitcher>(
+      find.byType(AnimatedSwitcher),
+    );
+    expect(switcher.duration, Duration.zero);
+    expect(switcher.reverseDuration, Duration.zero);
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('signal console stays usable with large text on a small phone', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(375, 667);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(2)),
+          child: AppBackground(
+            child: ChatScreen(
+              session: SavedSession(
+                origin: Uri.parse('https://tbhaoshuai.ccwu.cc'),
+                token: 'demo',
+                deviceName: 'Jayson PC',
+                workspaceDir: 'cc-remote',
+              ),
+              running: true,
+              connected: true,
+              offline: false,
+              modelName: 'claude-opus-4-8',
+              contextWindow: 200000,
+              remainingContext: 174919,
+              messages: [TranscriptMessage.user('检查项目状态')],
+              commands: const ['review'],
+              permissionMode: PermissionMode.manual,
+              allowBypassPermissions: false,
+              notificationsEnabled: true,
+              pendingPermissions: const [],
+              respondingPermissionIds: const {},
+              promptController: controller,
+              onFillPrompt: (_) {},
+              onReconnect: () {},
+              onNotificationsChanged: (value) async => value,
+              onNewConversation: () {},
+              onOpenSessions: () {},
+              onOpenWorkspace: () {},
+              onPermissionModeSelected: (_) {},
+              onPermissionAllow: (_) {},
+              onPermissionDeny: (_) {},
+              onSend: () {},
+              onStop: () {},
+              onLogout: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('停止'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('full hero does not overflow with scaled device text', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(393, 852);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: MediaQuery(
+          data: const MediaQueryData(
+            size: Size(393, 852),
+            devicePixelRatio: 1,
+            textScaler: TextScaler.linear(1.35),
+          ),
+          child: Scaffold(
+            body: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: ConnectionHeader(
+                  session: SavedSession(
+                    origin: Uri.parse('https://tbhaoshuai.ccwu.cc'),
+                    token: 'demo',
+                    deviceName: 'tb',
+                    workspaceDir: 'cc-remote',
+                  ),
+                  running: false,
+                  connected: false,
+                  offline: true,
+                  modelName: 'claude-opus-4-8',
+                  contextWindow: 200000,
+                  remainingContext: 174919,
+                  notificationsEnabled: true,
+                  onReconnect: () {},
+                  onNotificationsChanged: (value) async => value,
+                  onNewConversation: () {},
+                  onOpenSessions: () {},
+                  onOpenWorkspace: () {},
+                  onLogout: () {},
+                  uploadingAttachments: false,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      tester.getSize(find.byType(ConnectionHeader)).height,
+      greaterThan(150),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('pairing screen remains scrollable in landscape', (tester) async {
+    tester.view.physicalSize = const Size(812, 375);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: AppBackground(
+          child: PairScreen(
+            enableCamera: false,
+            pairing: false,
+            canResetScan: false,
+            onQr: (_) {},
+            onClearError: () {},
+            onDemoConnect: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(SingleChildScrollView), findsOneWidget);
+    expect(find.text('连接这台电脑'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('attachment upload blocks conversation navigation', (
     tester,
   ) async {
@@ -1052,6 +1253,41 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
 
     expect(find.byType(SelectableText), findsOneWidget);
+  });
+
+  testWidgets('offline empty state keeps reconnect action at the top', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(393, 565);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    var reconnectCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: TranscriptView(
+            messages: const [],
+            pendingPermissions: const [],
+            respondingPermissionIds: const {},
+            connected: false,
+            onFillPrompt: (_) {},
+            onReconnect: () => reconnectCount += 1,
+            onPermissionAllow: (_) {},
+            onPermissionDeny: (_) {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('下一件事'), findsOneWidget);
+    expect(find.text('让电脑重新上线'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.text('让电脑重新上线'));
+    expect(reconnectCount, 1);
   });
 
   testWidgets('empty transcript does not overflow when keyboard is open', (
