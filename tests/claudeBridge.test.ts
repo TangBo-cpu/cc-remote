@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -32,6 +32,79 @@ test('ClaudeBridge reports a missing CLI as a run result instead of throwing', a
   assert.equal(bridge.isRunning(), false);
 });
 
+test('ClaudeBridge resumes the session id returned by the previous run', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-bridge-resume-'));
+  const logPath = join(dir, 'args.jsonl');
+  const fixture = join(process.cwd(), 'tests', 'fixtures', 'fakeClaude.mjs');
+  try {
+    const bridge = new ClaudeBridge({
+      claudeBin: process.execPath,
+      claudeArgs: [fixture, `--fake-log=${logPath}`],
+      workspaceDir: dir,
+    });
+    const callbacks = {
+      prompt: 'test',
+      permissionMode: 'manual' as const,
+      onEvent: () => {},
+      onText: () => {},
+      onSessionId: () => {},
+      onPermissionRequest: () => {},
+      onPermissionClosed: () => {},
+    };
+
+    const first = await bridge.run(callbacks);
+    assert.equal(first.sessionId, 'fake-session-id');
+    const second = await bridge.run({ ...callbacks, sessionId: first.sessionId });
+    assert.equal(second.exitCode, 0);
+
+    const invocations = (await readFile(logPath, 'utf8'))
+      .trim()
+      .split(/\r?\n/)
+      .map(line => JSON.parse(line) as string[]);
+    assert.deepEqual(invocations[1].slice(-2), ['--resume', 'fake-session-id']);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
+test('ClaudeBridge stop removes the full Claude process tree on Windows', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-bridge-stop-'));
+  const pidPath = join(dir, 'descendant.pid');
+  const fixture = join(process.cwd(), 'tests', 'fixtures', 'fakeClaude.mjs');
+  let descendantPid = 0;
+  try {
+    const bridge = new ClaudeBridge({
+      claudeBin: process.execPath,
+      claudeArgs: [fixture, '--fake-mode=hang-tree', `--fake-pid=${pidPath}`],
+      workspaceDir: dir,
+    });
+    const running = bridge.run({
+      prompt: 'test',
+      permissionMode: 'manual',
+      onEvent: () => {},
+      onText: () => {},
+      onSessionId: () => {},
+      onPermissionRequest: () => {},
+      onPermissionClosed: () => {},
+    });
+    descendantPid = Number(await waitForFile(pidPath));
+    assert.equal(isProcessAlive(descendantPid), true);
+
+    assert.equal(bridge.stop(), true);
+    const result = await running;
+    assert.equal(result.stopped, true);
+    await waitFor(() => !isProcessAlive(descendantPid), 3_000);
+    assert.equal(isProcessAlive(descendantPid), false);
+  } finally {
+    if (descendantPid && isProcessAlive(descendantPid)) {
+      try { process.kill(descendantPid); } catch {}
+    }
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
 test('detects stale Claude Code session errors', () => {
   assert.equal(
     isMissingConversationError('Error: No conversation found with session ID: cc8a61d2-6548-4527-b29f-7bc3d2b8aa6b'),
@@ -39,6 +112,38 @@ test('detects stale Claude Code session errors', () => {
   );
   assert.equal(isMissingConversationError('Some other Claude error'), false);
 });
+
+async function waitForFile(path: string): Promise<string> {
+  let lastError: unknown;
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      return await readFile(path, 'utf8');
+    } catch (error) {
+      lastError = error;
+      await new Promise(resolveTimeout => setTimeout(resolveTimeout, 25));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('file_wait_timeout');
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise(resolveTimeout => setTimeout(resolveTimeout, 25));
+  }
+  throw new Error('condition_wait_timeout');
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 test('normalizes safe activity events without exposing thinking text or tool results', () => {
   assert.deepEqual(extractClaudeActivities({
