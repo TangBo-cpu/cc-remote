@@ -1037,7 +1037,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('full hero does not overflow with scaled device text', (
+  testWidgets('two-column hero does not overflow with scaled device text', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(393, 852);
@@ -1088,8 +1088,9 @@ void main() {
 
     expect(
       tester.getSize(find.byType(ConnectionHeader)).height,
-      greaterThan(150),
+      greaterThan(80),
     );
+    expect(tester.getSize(find.byType(ConnectionHeader)).height, lessThan(116));
     expect(tester.takeException(), isNull);
   });
 

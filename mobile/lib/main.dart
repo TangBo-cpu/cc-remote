@@ -2118,26 +2118,21 @@ class ConnectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final statusLabel = stopping
-        ? '正在停下来'
+        ? '正在停止任务'
         : running
-        ? '运行中 · 小终在干活'
+        ? '任务运行中'
         : uploadingAttachments
         ? '正在收附件'
         : connected
-        ? '手机在线'
+        ? '已连接'
         : offline
         ? '电脑走丢了'
         : '正在找电脑';
-    final mood = offline
-        ? TerminalPalMood.offline
-        : running || uploadingAttachments
-        ? TerminalPalMood.working
-        : TerminalPalMood.ready;
     final title = offline
-        ? '小终正在\n等电脑回来'
+        ? '等电脑回来'
         : running
-        ? '小终正在\n处理这件事'
-        : '小终已经\n准备好了';
+        ? '正在处理这件事'
+        : '已经准备好了';
     final workspace = session?.workspaceName ?? 'cc-remote';
     final device = session?.deviceName ?? 'Jayson PC';
     final compact =
@@ -2152,8 +2147,8 @@ class ConnectionHeader extends StatelessWidget {
           ).clamp(minScaleFactor: 1, maxScaleFactor: 1.2),
         ),
         child: Container(
-          height: 90,
-          padding: const EdgeInsets.fromLTRB(10, 9, 9, 9),
+          height: 84,
+          padding: const EdgeInsets.fromLTRB(11, 8, 9, 8),
           decoration: BoxDecoration(
             color: offline ? AppColors.porcelainMuted : AppColors.mint,
             borderRadius: BorderRadius.circular(24),
@@ -2168,12 +2163,6 @@ class ConnectionHeader extends StatelessWidget {
           ),
           child: Row(
             children: [
-              SizedBox(
-                width: 58,
-                height: 62,
-                child: LivelyTerminalPal(mood: mood),
-              ),
-              const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -2184,12 +2173,12 @@ class ConnectionHeader extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 14,
+                        fontSize: 13,
                         fontWeight: FontWeight.w900,
                         letterSpacing: -0.25,
                       ),
                     ),
-                    const SizedBox(height: 2),
+                    const SizedBox(height: 3),
                     if (modelName == null && remainingContext == null)
                       Text(
                         '$workspace · $device',
@@ -2199,27 +2188,43 @@ class ConnectionHeader extends StatelessWidget {
                           fontSize: 10,
                           fontWeight: FontWeight.w700,
                         ),
-                      ),
-                    if (modelName != null)
-                      Text(
-                        formatModelName(modelName!),
-                        maxLines: 1,
-                        style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                    if (remainingContext != null)
-                      Text(
-                        contextWindow == null
-                            ? '剩余 ${formatTokens(remainingContext!)}'
-                            : '剩余 ${formatTokens(remainingContext!)} / ${formatTokens(contextWindow!)}',
-                        maxLines: 1,
-                        style: const TextStyle(
-                          fontSize: 9.5,
-                          fontWeight: FontWeight.w700,
-                          fontFeatures: [FontFeature.tabularFigures()],
-                        ),
+                      )
+                    else
+                      Row(
+                        children: [
+                          if (modelName != null)
+                            Flexible(
+                              child: Text(
+                                formatModelName(modelName!),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                          if (modelName != null && remainingContext != null)
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 4),
+                              child: Text('·'),
+                            ),
+                          if (remainingContext != null)
+                            Flexible(
+                              child: Text(
+                                contextWindow == null
+                                    ? '剩余 ${formatTokens(remainingContext!)}'
+                                    : '剩余 ${formatTokens(remainingContext!)} / ${formatTokens(contextWindow!)}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.w700,
+                                  fontFeatures: [FontFeature.tabularFigures()],
+                                ),
+                              ),
+                            ),
+                        ],
                       ),
                   ],
                 ),
@@ -2289,139 +2294,151 @@ class ConnectionHeader extends StatelessWidget {
         ).clamp(minScaleFactor: 1, maxScaleFactor: 1.35),
       ),
       child: Container(
-        constraints: const BoxConstraints(minHeight: 150),
+        constraints: const BoxConstraints(minHeight: 84),
         decoration: BoxDecoration(
           color: offline ? AppColors.porcelainMuted : AppColors.mint,
-          borderRadius: BorderRadius.circular(30),
+          borderRadius: BorderRadius.circular(24),
           border: Border.all(color: AppColors.ink, width: 1.8),
           boxShadow: const [
             BoxShadow(
               color: AppColors.yellow,
               blurRadius: 0,
-              offset: Offset(6, 7),
+              offset: Offset(5, 6),
             ),
           ],
         ),
-        clipBehavior: Clip.antiAlias,
-        child: Stack(
-          children: [
-            Positioned(
-              right: -8,
-              bottom: -27,
-              width: 142,
-              height: 138,
-              child: LivelyTerminalPal(mood: mood),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(17, 12, 13, 12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      StatusPill(label: statusLabel, color: AppColors.ink),
-                      const Spacer(),
-                      _HeroIconButton(
-                        tooltip: '项目与会话',
-                        icon: Icons.dashboard_customize_outlined,
-                        dimension: 32,
-                        onPressed: uploadingAttachments ? null : onOpenSessions,
-                      ),
-                      const SizedBox(width: 5),
-                      _HeroIconButton(
-                        tooltip: '工作区',
-                        icon: Icons.folder_open_rounded,
-                        dimension: 32,
-                        onPressed: onOpenWorkspace,
-                      ),
-                      const SizedBox(width: 5),
-                      _HeroIconButton(
-                        tooltip: '新对话',
-                        icon: Icons.add_rounded,
-                        dimension: 32,
-                        onPressed:
-                            connected && !running && !uploadingAttachments
-                            ? onNewConversation
-                            : null,
-                      ),
-                      const SizedBox(width: 5),
-                      _HeroIconButton(
-                        tooltip: '设置',
-                        icon: Icons.auto_awesome_rounded,
-                        color: AppColors.yellow,
-                        dimension: 32,
-                        onPressed: () => showSettingsSheet(
-                          context,
-                          session,
-                          notificationsEnabled,
-                          onReconnect,
-                          onNotificationsChanged,
-                          onLogout,
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 9),
-                  SizedBox(
-                    width: 205,
-                    child: FittedBox(
-                      fit: BoxFit.scaleDown,
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        title,
-                        style: const TextStyle(
-                          fontSize: 26,
-                          height: 0.95,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: -0.9,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 5),
-                  SizedBox(
-                    width: 210,
-                    child: Text(
-                      '$workspace · $device',
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(13, 8, 11, 9),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    StatusPill(label: statusLabel, color: AppColors.ink),
+                    const SizedBox(height: 5),
+                    Text(
+                      title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 11,
+                        fontSize: 23,
+                        height: 1,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.7,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 154,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        _HeroIconButton(
+                          tooltip: '项目与会话',
+                          icon: Icons.dashboard_customize_outlined,
+                          dimension: 32,
+                          onPressed: uploadingAttachments
+                              ? null
+                              : onOpenSessions,
+                        ),
+                        const SizedBox(width: 5),
+                        _HeroIconButton(
+                          tooltip: '工作区',
+                          icon: Icons.folder_open_rounded,
+                          dimension: 32,
+                          onPressed: onOpenWorkspace,
+                        ),
+                        const SizedBox(width: 5),
+                        _HeroIconButton(
+                          tooltip: '新对话',
+                          icon: Icons.add_rounded,
+                          dimension: 32,
+                          onPressed:
+                              connected && !running && !uploadingAttachments
+                              ? onNewConversation
+                              : null,
+                        ),
+                        const SizedBox(width: 5),
+                        _HeroIconButton(
+                          tooltip: '设置',
+                          icon: Icons.auto_awesome_rounded,
+                          color: AppColors.yellow,
+                          dimension: 32,
+                          onPressed: () => showSettingsSheet(
+                            context,
+                            session,
+                            notificationsEnabled,
+                            onReconnect,
+                            onNotificationsChanged,
+                            onLogout,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '$workspace · $device',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                      style: const TextStyle(
+                        fontSize: 9.5,
                         fontWeight: FontWeight.w700,
                       ),
                     ),
-                  ),
-                  if (modelName != null || remainingContext != null) ...[
-                    const SizedBox(height: 4),
-                    Wrap(
-                      spacing: 7,
-                      children: [
-                        if (modelName != null)
-                          Text(
-                            formatModelName(modelName!),
-                            style: const TextStyle(
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w800,
-                            ),
+                    if (modelName != null || remainingContext != null) ...[
+                      const SizedBox(height: 1),
+                      SizedBox(
+                        width: 154,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerRight,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (modelName != null)
+                                Text(
+                                  formatModelName(modelName!),
+                                  style: const TextStyle(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              if (modelName != null && remainingContext != null)
+                                const SizedBox(width: 6),
+                              if (remainingContext != null)
+                                Text(
+                                  contextWindow == null
+                                      ? '剩余 ${formatTokens(remainingContext!)}'
+                                      : '剩余 ${formatTokens(remainingContext!)} / ${formatTokens(contextWindow!)}',
+                                  style: const TextStyle(
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.w700,
+                                    fontFeatures: [
+                                      FontFeature.tabularFigures(),
+                                    ],
+                                  ),
+                                ),
+                            ],
                           ),
-                        if (remainingContext != null)
-                          Text(
-                            contextWindow == null
-                                ? '剩余 ${formatTokens(remainingContext!)}'
-                                : '剩余 ${formatTokens(remainingContext!)} / ${formatTokens(contextWindow!)}',
-                            style: const TextStyle(
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w700,
-                              fontFeatures: [FontFeature.tabularFigures()],
-                            ),
-                          ),
-                      ],
-                    ),
+                        ),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
