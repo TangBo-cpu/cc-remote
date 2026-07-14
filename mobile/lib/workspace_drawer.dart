@@ -4,10 +4,12 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 
-const _ink = Color(0xFF172026);
-const _muted = Color(0xFF6B7880);
-const _accent = Color(0xFF168EB0);
-const _line = Color(0xFFDCE7EB);
+import 'signal_console_theme.dart';
+
+const _ink = AppColors.ink;
+const _muted = AppColors.muted;
+const _accent = AppColors.accent;
+const _line = AppColors.line;
 
 Future<void> showWorkspaceDrawer(
   BuildContext context, {
@@ -16,12 +18,13 @@ Future<void> showWorkspaceDrawer(
   required String workspaceName,
   bool demoMode = false,
 }) {
+  final reduceMotion = MediaQuery.disableAnimationsOf(context);
   return showGeneralDialog<void>(
     context: context,
     barrierDismissible: true,
     barrierLabel: '关闭工作区',
-    barrierColor: const Color(0xFF102128).withValues(alpha: 0.24),
-    transitionDuration: const Duration(milliseconds: 220),
+    barrierColor: const Color(0xFF0D1D22).withValues(alpha: 0.34),
+    transitionDuration: reduceMotion ? Duration.zero : AppMotion.standard,
     pageBuilder: (context, animation, secondaryAnimation) => Align(
       alignment: Alignment.centerLeft,
       child: SafeArea(
@@ -38,11 +41,12 @@ Future<void> showWorkspaceDrawer(
       ),
     ),
     transitionBuilder: (context, animation, secondaryAnimation, child) {
+      if (reduceMotion) return child;
       return SlideTransition(
-        position: Tween<Offset>(begin: const Offset(-1, 0), end: Offset.zero)
-            .animate(
-              CurvedAnimation(parent: animation, curve: Curves.easeOutCubic),
-            ),
+        position: Tween<Offset>(
+          begin: const Offset(-1, 0),
+          end: Offset.zero,
+        ).animate(CurvedAnimation(parent: animation, curve: AppMotion.enter)),
         child: FadeTransition(opacity: animation, child: child),
       );
     },
@@ -158,14 +162,14 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
       child: Container(
         margin: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: const Color(0xFFF8FCFD).withValues(alpha: 0.97),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.9)),
-          boxShadow: const [
+          color: AppColors.porcelain,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: AppColors.line),
+          boxShadow: [
             BoxShadow(
-              color: Color(0x260E343F),
-              blurRadius: 34,
-              offset: Offset(10, 8),
+              color: AppColors.shadow.withValues(alpha: 0.12),
+              blurRadius: 36,
+              offset: const Offset(12, 8),
             ),
           ],
         ),
@@ -250,8 +254,9 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
           child: Container(
             padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
-              color: const Color(0xFFEAF2F4),
+              color: AppColors.porcelainMuted,
               borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.line),
             ),
             child: Row(
               children: [
@@ -277,13 +282,20 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
         borderRadius: BorderRadius.circular(10),
         onTap: () => setState(() => tab = value),
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
+          duration: MediaQuery.disableAnimationsOf(context)
+              ? Duration.zero
+              : AppMotion.fast,
           padding: const EdgeInsets.symmetric(vertical: 9),
           decoration: BoxDecoration(
-            color: selected ? Colors.white : Colors.transparent,
+            color: selected ? AppColors.porcelain : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
             boxShadow: selected
-                ? const [BoxShadow(color: Color(0x140E343F), blurRadius: 8)]
+                ? [
+                    BoxShadow(
+                      color: AppColors.shadow.withValues(alpha: 0.06),
+                      blurRadius: 8,
+                    ),
+                  ]
                 : null,
           ),
           child: Row(
@@ -795,24 +807,49 @@ class _DiffView extends StatelessWidget {
         final hunk = line.startsWith('@@');
         return Container(
           color: added
-              ? const Color(0xFFE3F4EC)
+              ? AppColors.success.withValues(alpha: 0.045)
               : removed
-              ? const Color(0xFFFBE7E5)
+              ? AppColors.stop.withValues(alpha: 0.045)
               : hunk
-              ? const Color(0xFFE8F2F7)
+              ? AppColors.accent.withValues(alpha: 0.05)
               : Colors.transparent,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2.5),
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: SelectableText(
-              line.isEmpty ? ' ' : line,
-              style: TextStyle(
-                color: hunk ? _accent : _ink,
-                fontFamily: 'monospace',
-                fontSize: 12,
-                height: 1.45,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 3,
+                height: 23,
+                child: ColoredBox(
+                  color: added
+                      ? AppColors.success
+                      : removed
+                      ? AppColors.stop
+                      : hunk
+                      ? AppColors.accent
+                      : Colors.transparent,
+                ),
               ),
-            ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 11,
+                    vertical: 2.5,
+                  ),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: SelectableText(
+                      line.isEmpty ? ' ' : line,
+                      style: TextStyle(
+                        color: hunk ? _accent : _ink,
+                        fontFamily: 'monospace',
+                        fontSize: 12,
+                        height: 1.45,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         );
       },
