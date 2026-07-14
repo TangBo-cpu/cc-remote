@@ -9,6 +9,7 @@ import { StringDecoder } from 'node:string_decoder';
 
 export type ClaudeBridgeOptions = {
   claudeBin: string;
+  claudeArgs?: string[];
   workspaceDir: string;
   allowBypassPermissions?: boolean;
 };
@@ -107,6 +108,7 @@ export class ClaudeBridge {
     if (this.current) throw new Error('Claude is already running');
 
     const args = [
+      ...(this.options.claudeArgs ?? []),
       '-p',
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
@@ -513,6 +515,7 @@ function contextWindowForModel(model: string): number {
 
 export async function discoverClaudeCommands(options: ClaudeBridgeOptions): Promise<string[]> {
   const child = spawn(options.claudeBin, [
+    ...(options.claudeArgs ?? []),
     '-p',
     '/help',
     '--output-format', 'stream-json',

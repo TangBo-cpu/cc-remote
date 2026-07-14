@@ -3999,18 +3999,16 @@ class AssistantBubbleFrame extends StatelessWidget {
                 key: bubbleKey,
                 padding: compact
                     ? const EdgeInsets.fromLTRB(13, 10, 14, 10)
-                    : const EdgeInsets.fromLTRB(2, 4, 6, 8),
+                    : const EdgeInsets.fromLTRB(15, 12, 16, 13),
                 decoration: BoxDecoration(
-                  color: compact
-                      ? AppColors.porcelainMuted
-                      : Colors.transparent,
+                  color: AppColors.porcelainMuted,
                   borderRadius: const BorderRadius.only(
                     topLeft: Radius.circular(7),
                     topRight: Radius.circular(AppRadii.bubble),
                     bottomLeft: Radius.circular(AppRadii.bubble),
                     bottomRight: Radius.circular(AppRadii.bubble),
                   ),
-                  border: compact ? Border.all(color: AppColors.line) : null,
+                  border: Border.all(color: AppColors.line),
                   boxShadow: compact
                       ? [
                           BoxShadow(

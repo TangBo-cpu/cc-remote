@@ -1193,6 +1193,14 @@ void main() {
 
     final assistant = find.byKey(const ValueKey('assistant-message'));
     expect(assistant, findsOneWidget);
+    final bubble = tester.widget<Container>(assistant);
+    final decoration = bubble.decoration! as BoxDecoration;
+    expect(decoration.color, AppColors.porcelainMuted);
+    expect(decoration.border, isNotNull);
+    expect(
+      bubble.padding,
+      const EdgeInsets.fromLTRB(15, 12, 16, 13),
+    );
     expect(
       find.descendant(of: assistant, matching: find.byType(MarkdownBody)),
       findsOneWidget,

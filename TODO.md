@@ -76,6 +76,17 @@
 - [x] 移动端活动与会话上下文功能已合并回 `master`：`3cad17f merge: mobile activity and session context UI`
 - [x] 文档同步代码现状：权限审批、transcript 恢复、工作区只读、bypass 默认策略
 
+### 可靠性自动化与实链路
+
+- [x] daemon HTTP / WebSocket 黑盒测试覆盖 Host、Origin、静态私有文件和鉴权撤销
+- [x] Claude bridge fixture 验证第二轮携带 `--resume <claudeSessionId>`
+- [x] Claude bridge fixture 验证 Windows Stop 清理完整进程树
+- [x] 实际 daemon、WebSocket 和本机 Claude CLI 连续两轮对话，第二轮恢复上轮记忆词
+- [x] 实际 daemon Stop 中断长回复并恢复非运行态
+- [x] 公网域名 `/api/health` 返回 200，公网访问 `.data/state.json` 返回 404
+- [x] Android 真机 App 连续发送两轮消息，第二轮正确恢复上轮验证码
+- [ ] Android 真机 Stop 手势仍需复验
+
 ## 真机 UI 验证
 
 本地脚本和真机 App 已完成 WebSocket auth、流式输出、`done`、指令列表与会话上下文展示验证。连续会话和 Stop 中断仍需单独验证：
@@ -94,7 +105,7 @@
 - [x] 真机 App 收到 `done`
 - [x] 真机 App 获取真实斜杠指令并支持筛选和滚动
 - [x] 真机 App 显示思考计时、工具调用、模型和剩余上下文
-- [ ] 第二条 prompt 验证 `--resume <claudeSessionId>` 生效
+- [x] 第二条 prompt 验证 `--resume <claudeSessionId>` 生效
 - [ ] Stop 可中断长任务
 - [ ] Stop 后无残留 Claude 进程
 
@@ -107,7 +118,7 @@
 - [x] 旧 daemon 占用 `127.0.0.1:8787` 时可定位并杀掉
 - [ ] 无 token 访问 `/api/status` 返回 401
 - [x] Bearer token 访问 `/api/status` 返回已授权状态
-- [ ] logout 后旧 Bearer token 失效
+- [x] logout 后旧 Bearer token 失效，旧 WebSocket 同时关闭
 - [ ] stale `claudeSessionId` 自动清理并重试新会话
 
 ### Cloudflare Tunnel
@@ -118,8 +129,8 @@
 - [ ] 手机浏览器访问 `https://tbhaoshuai.ccwu.cc/api/health` 成功
 - [x] 手机 App 经域名配对成功
 - [x] 手机 App 经 `wss://tbhaoshuai.ccwu.cc/ws` 连接成功并 auth
-- [ ] 验证错误 Origin 无法调用 mutating API
-- [ ] 验证错误 Host 被拒绝
+- [x] 验证错误 Origin 无法调用 mutating API 和 WebSocket upgrade
+- [x] 验证错误 Host 被拒绝
 
 ### App 端到端
 
@@ -147,10 +158,10 @@
 
 ## 后续可加
 
-- [ ] daemon API / WebSocket 自动化测试覆盖 token 协议
+- [x] daemon API / WebSocket 自动化测试覆盖 token 协议
 - [ ] 设备列表和撤销单个设备
 - [ ] 多会话历史列表和搜索
-- [ ] Claude CLI 真实 stream-json fixture 测试
+- [x] Claude CLI stream-json fixture 测试
 - [ ] Cloudflare Access 可选保护
 - [x] 文件上传到固定临时目录，再让 Claude Code 读取
 - [ ] 一键重置配对接口
@@ -159,11 +170,11 @@
 ## 发布前检查
 
 - [x] `npm run typecheck`
-- [ ] `npm run build`
+- [x] `npm run build`
 - [x] `npm test`
 - [x] `cd mobile; flutter analyze`
 - [x] `cd mobile; flutter test`
-- [ ] 确认 `.data/` 不会被静态服务暴露
+- [x] 确认 `.data/` 不会被本地或公网静态服务暴露
 - [x] 确认 `.run/` 不会被提交
 - [x] 确认 daemon 仍只监听 `127.0.0.1`
 - [x] 确认没有加入 `--dangerously-skip-permissions`
