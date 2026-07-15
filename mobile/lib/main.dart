@@ -2135,9 +2135,7 @@ class ConnectionHeader extends StatelessWidget {
         : '已经准备好了';
     final workspace = session?.workspaceName ?? 'cc-remote';
     final device = session?.deviceName ?? 'Jayson PC';
-    final compact =
-        MediaQuery.viewInsetsOf(context).bottom > 0 ||
-        MediaQuery.sizeOf(context).height < 720;
+    final compact = MediaQuery.sizeOf(context).height < 720;
 
     if (compact) {
       return MediaQuery(
@@ -5168,7 +5166,7 @@ class AppBackground extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      resizeToAvoidBottomInset: true,
+      resizeToAvoidBottomInset: false,
       backgroundColor: AppColors.bgMid,
       body: Stack(
         fit: StackFit.expand,
@@ -5198,8 +5196,27 @@ class AppBackground extends StatelessWidget {
               ),
             ),
           ),
-          child,
+          _KeyboardResizeBody(child: child),
         ],
+      ),
+    );
+  }
+}
+
+class _KeyboardResizeBody extends StatelessWidget {
+  const _KeyboardResizeBody({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    return Padding(
+      padding: EdgeInsets.only(bottom: bottomInset),
+      child: MediaQuery.removeViewInsets(
+        context: context,
+        removeBottom: true,
+        child: child,
       ),
     );
   }

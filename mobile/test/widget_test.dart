@@ -475,6 +475,46 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('keyboard resize keeps the decorative background stationary', (
+    tester,
+  ) async {
+    Widget buildScreen(double keyboardInset) {
+      return MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            size: const Size(393, 800),
+            viewInsets: EdgeInsets.only(bottom: keyboardInset),
+          ),
+          child: child!,
+        ),
+        home: const AppBackground(
+          child: SizedBox.expand(key: ValueKey('keyboard-content')),
+        ),
+      );
+    }
+
+    final bottomAccent = find.byWidgetPredicate(
+      (widget) =>
+          widget is Container &&
+          widget.constraints ==
+              const BoxConstraints.tightFor(width: 190, height: 190),
+    );
+
+    await tester.pumpWidget(buildScreen(0));
+    final accentTopBefore = tester.getTopLeft(bottomAccent).dy;
+    final contentHeightBefore = tester
+        .getSize(find.byKey(const ValueKey('keyboard-content')))
+        .height;
+
+    await tester.pumpWidget(buildScreen(300));
+
+    expect(tester.getTopLeft(bottomAccent).dy, accentTopBefore);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('keyboard-content'))).height,
+      contentHeightBefore - 300,
+    );
+  });
+
   testWidgets('glass panels avoid realtime backdrop blur', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
