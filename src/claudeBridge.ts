@@ -36,6 +36,7 @@ export type ClaudePermissionRequest = {
 export type ClaudeRunOptions = {
   prompt: string;
   sessionId?: string;
+  model?: string;
   additionalDirectories?: string[];
   permissionMode: ClaudePermissionMode;
   onEvent: (event: unknown) => void;
@@ -44,6 +45,16 @@ export type ClaudeRunOptions = {
   onPermissionRequest: (request: ClaudePermissionRequest) => void;
   onPermissionClosed: (requestId: string) => void;
 };
+
+export function normalizeClaudeModel(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string') throw new Error('invalid_model');
+  const model = value.trim();
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model)) {
+    throw new Error('invalid_model');
+  }
+  return model;
+}
 
 export type ClaudeRunResult = {
   exitCode: number | null;
@@ -106,6 +117,7 @@ export class ClaudeBridge {
 
   async run(options: ClaudeRunOptions): Promise<ClaudeRunResult> {
     if (this.current) throw new Error('Claude is already running');
+    const model = normalizeClaudeModel(options.model);
 
     const args = [
       ...(this.options.claudeArgs ?? []),
@@ -121,6 +133,7 @@ export class ClaudeBridge {
       if (!this.options.allowBypassPermissions) throw new Error('bypass_permissions_disabled');
       args.push('--allow-dangerously-skip-permissions');
     }
+    if (model) args.push('--model', model);
     const additionalDirectories = [...new Set(options.additionalDirectories ?? [])]
       .filter(directory => directory.trim().length > 0);
     if (additionalDirectories.length) args.push('--add-dir', ...additionalDirectories);

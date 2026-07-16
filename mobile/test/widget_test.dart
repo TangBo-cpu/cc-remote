@@ -8,7 +8,9 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:cc_remote/main.dart';
 import 'package:cc_remote/attachments.dart';
+import 'package:cc_remote/chat_background.dart';
 import 'package:cc_remote/notification_service.dart';
+import 'package:cc_remote/model_preference.dart';
 import 'package:cc_remote/signal_console_theme.dart';
 import 'package:cc_remote/workspace_drawer.dart';
 
@@ -66,6 +68,53 @@ void main() {
     expect(await store.load(), isTrue);
     await store.save(false);
     expect(await store.load(), isFalse);
+  });
+
+  test('chat background preference persists presets', () async {
+    final store = ChatBackgroundPreferenceStore();
+    const preference = ChatBackgroundPreference.preset(
+      ChatBackgroundPreset.mint,
+    );
+
+    await store.save(preference);
+
+    expect(await store.load(), preference);
+  });
+
+  test('missing custom background image falls back to default', () async {
+    final store = ChatBackgroundPreferenceStore(fileExists: (_) async => false);
+    await store.save(
+      const ChatBackgroundPreference.localImage('missing-background.jpg'),
+    );
+
+    expect(await store.load(), ChatBackgroundPreference.defaultValue);
+    expect(
+      await const FlutterSecureStorage().read(
+        key: ChatBackgroundPreferenceStore.key,
+      ),
+      isNull,
+    );
+  });
+
+  test('prompt messages only include an explicit model override', () {
+    final following = buildPromptMessage(
+      text: 'hello',
+      attachmentIds: const [],
+      permissionMode: PermissionMode.manual,
+      sessionId: 'session-1',
+      model: ClaudeModelPreference.followComputer,
+    );
+    final opus = buildPromptMessage(
+      text: 'hello',
+      attachmentIds: const ['attachment-1'],
+      permissionMode: PermissionMode.plan,
+      sessionId: 'session-1',
+      model: ClaudeModelPreference.opus,
+    );
+
+    expect(following, isNot(contains('model')));
+    expect(opus['model'], 'opus');
+    expect(opus['attachmentIds'], ['attachment-1']);
   });
 
   test(
@@ -393,6 +442,271 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('扫描电脑终端里的二维码'), findsOneWidget);
     expect(await TranscriptStore().load(), isNull);
+  });
+
+  testWidgets('model selection persists and applies to future messages', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('设置'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('当前：Opus 4.8'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('model-setting')));
+    await tester.pumpAndSettle();
+    expect(find.text('选择模型'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('model-option-sonnet')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('后续消息使用 Sonnet'), findsOneWidget);
+    expect(
+      await ClaudeModelPreferenceStore().load(),
+      ClaudeModelPreference.sonnet,
+    );
+  });
+
+  testWidgets('the first prompt waits for the stored model preference', (
+    tester,
+  ) async {
+    final store = DelayedClaudeModelPreferenceStore();
+    await tester.pumpWidget(
+      CcRemoteApp(
+        enableCamera: false,
+        demoMode: true,
+        modelPreferenceStore: store,
+      ),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'ping');
+    await tester.pump();
+    await tester.tap(find.byTooltip('发送'));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('user-message')), findsNothing);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller?.text,
+      'ping',
+    );
+
+    store.completeLoad(ClaudeModelPreference.sonnet);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('user-message')), findsOneWidget);
+    expect(
+      tester.widget<TextField>(find.byType(TextField)).controller?.text,
+      isEmpty,
+    );
+
+    await tester.tap(find.byTooltip('设置'));
+    await tester.pumpAndSettle();
+    expect(find.text('后续消息使用 Sonnet'), findsOneWidget);
+  });
+
+  testWidgets('chat background can use a preset, local image and reset', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(393, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    const imagePath = r'C:\app\chat_background\wall.png';
+    final imageService = FakeChatBackgroundImageService(imagePath);
+    final store = ChatBackgroundPreferenceStore(fileExists: (_) async => true);
+
+    await tester.pumpWidget(
+      CcRemoteApp(
+        enableCamera: false,
+        demoMode: true,
+        chatBackgroundPreferenceStore: store,
+        chatBackgroundImageService: imageService,
+      ),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('设置'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('聊天背景'), findsOneWidget);
+    expect(find.text('默认纸感'), findsOneWidget);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('chat-background-setting')),
+    );
+    await tester.tap(find.byKey(const ValueKey('chat-background-setting')));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('薄荷'));
+    await tester.pumpAndSettle();
+    expect(
+      tester.widget<AppBackground>(find.byType(AppBackground)).chatBackground,
+      const ChatBackgroundPreference.preset(ChatBackgroundPreset.mint),
+    );
+    expect((await store.load()).preset, ChatBackgroundPreset.mint);
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('pick-chat-background-image')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('pick-chat-background-image')));
+    await tester.pumpAndSettle();
+    expect(imageService.pickCount, 1);
+    expect((await store.load()).imagePath, imagePath);
+    expect(
+      find.byKey(const ValueKey('custom-chat-background-image')),
+      findsWidgets,
+    );
+
+    final opacityBefore = (await store.load()).overlayOpacity;
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('chat-background-opacity-slider')),
+    );
+    await tester.pumpAndSettle();
+    await tester.drag(
+      find.byKey(const ValueKey('chat-background-opacity-slider')),
+      const Offset(80, 0),
+    );
+    await tester.pumpAndSettle();
+    expect((await store.load()).overlayOpacity, isNot(opacityBefore));
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('reset-chat-background')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reset-chat-background')));
+    await tester.pumpAndSettle();
+    expect(await store.load(), ChatBackgroundPreference.defaultValue);
+    expect(imageService.deletedPaths, contains(imagePath));
+    expect(
+      tester.widget<AppBackground>(find.byType(AppBackground)).chatBackground,
+      ChatBackgroundPreference.defaultValue,
+    );
+  });
+
+  testWidgets('saved chat background is only applied to the chat route', (
+    tester,
+  ) async {
+    final store = ChatBackgroundPreferenceStore();
+    const preference = ChatBackgroundPreference.preset(
+      ChatBackgroundPreset.sunrise,
+    );
+    await store.save(preference);
+
+    await tester.pumpWidget(
+      CcRemoteApp(
+        enableCamera: false,
+        demoMode: true,
+        chatBackgroundPreferenceStore: store,
+      ),
+    );
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(find.text('扫描电脑终端里的二维码'), findsOneWidget);
+    expect(
+      tester.widget<AppBackground>(find.byType(AppBackground)).chatBackground,
+      ChatBackgroundPreference.defaultValue,
+    );
+
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<AppBackground>(find.byType(AppBackground)).chatBackground,
+      preference,
+    );
+  });
+
+  testWidgets('a late background load cannot overwrite a user selection', (
+    tester,
+  ) async {
+    final store = DelayedChatBackgroundPreferenceStore();
+
+    await tester.pumpWidget(
+      CcRemoteApp(
+        enableCamera: false,
+        demoMode: true,
+        chatBackgroundPreferenceStore: store,
+      ),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('设置'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('chat-background-setting')),
+    );
+    await tester.tap(find.byKey(const ValueKey('chat-background-setting')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('薄荷'));
+    await tester.pumpAndSettle();
+
+    store.completeLoad(
+      const ChatBackgroundPreference.preset(ChatBackgroundPreset.sunrise),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<AppBackground>(find.byType(AppBackground)).chatBackground,
+      const ChatBackgroundPreference.preset(ChatBackgroundPreset.mint),
+    );
+    expect(
+      store.savedPreference,
+      const ChatBackgroundPreference.preset(ChatBackgroundPreset.mint),
+    );
+  });
+
+  testWidgets('settings remain scrollable on a short screen with large text', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(640, 360);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: const TextScaler.linear(1.5)),
+          child: child!,
+        ),
+        home: Scaffold(
+          body: SettingsSheet(
+            session: SavedSession(
+              origin: Uri.parse('https://example.test'),
+              token: 'demo',
+              deviceName: 'Jayson PC',
+              workspaceDir: 'cc-remote',
+            ),
+            notificationsEnabled: true,
+            chatBackground: ChatBackgroundPreference.defaultValue,
+            currentModel: 'claude-opus-4-8',
+            selectedModel: ClaudeModelPreference.followComputer,
+            onReconnect: () {},
+            onNotificationsChanged: (value) async => value,
+            onModelChanged: (_) async {},
+            onChatBackgroundChanged: (preference) async => preference,
+            onPickChatBackgroundImage: (_) async => null,
+            onLogout: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(tester.takeException(), isNull);
+    await tester.ensureVisible(find.text('退出配对'));
+    await tester.pumpAndSettle();
+    expect(find.text('退出配对').hitTestable(), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('demo chat no longer uses the old fake project scan reply', (
@@ -932,13 +1246,12 @@ void main() {
             commands: const ['review'],
             permissionMode: PermissionMode.manual,
             allowBypassPermissions: false,
-            notificationsEnabled: true,
             pendingPermissions: const [],
             respondingPermissionIds: const {},
             promptController: controller,
             onFillPrompt: (_) {},
             onReconnect: () {},
-            onNotificationsChanged: (value) async => value,
+            onOpenSettings: () {},
             onNewConversation: () {},
             onOpenSessions: () {},
             onOpenWorkspace: () {},
@@ -947,7 +1260,6 @@ void main() {
             onPermissionDeny: (_) {},
             onSend: () {},
             onStop: () {},
-            onLogout: () {},
           ),
         ),
       ),
@@ -1051,13 +1363,12 @@ void main() {
               commands: const ['review'],
               permissionMode: PermissionMode.manual,
               allowBypassPermissions: false,
-              notificationsEnabled: true,
               pendingPermissions: const [],
               respondingPermissionIds: const {},
               promptController: controller,
               onFillPrompt: (_) {},
               onReconnect: () {},
-              onNotificationsChanged: (value) async => value,
+              onOpenSettings: () {},
               onNewConversation: () {},
               onOpenSessions: () {},
               onOpenWorkspace: () {},
@@ -1066,7 +1377,6 @@ void main() {
               onPermissionDeny: (_) {},
               onSend: () {},
               onStop: () {},
-              onLogout: () {},
             ),
           ),
         ),
@@ -1110,13 +1420,11 @@ void main() {
                   modelName: 'claude-opus-4-8',
                   contextWindow: 200000,
                   remainingContext: 174919,
-                  notificationsEnabled: true,
                   onReconnect: () {},
-                  onNotificationsChanged: (value) async => value,
+                  onOpenSettings: () {},
                   onNewConversation: () {},
                   onOpenSessions: () {},
                   onOpenWorkspace: () {},
-                  onLogout: () {},
                   uploadingAttachments: false,
                 ),
               ),
@@ -1190,13 +1498,12 @@ void main() {
             commands: const [],
             permissionMode: PermissionMode.manual,
             allowBypassPermissions: false,
-            notificationsEnabled: true,
             pendingPermissions: const [],
             respondingPermissionIds: const {},
             promptController: controller,
             onFillPrompt: (_) {},
             onReconnect: () {},
-            onNotificationsChanged: (value) async => value,
+            onOpenSettings: () {},
             onNewConversation: () => createdConversation = true,
             onOpenSessions: () => openedSessions = true,
             onOpenWorkspace: () {},
@@ -1205,7 +1512,6 @@ void main() {
             onPermissionDeny: (_) {},
             onSend: () {},
             onStop: () {},
-            onLogout: () {},
           ),
         ),
       ),
@@ -1237,15 +1543,23 @@ void main() {
     final decoration = bubble.decoration! as BoxDecoration;
     expect(decoration.color, AppColors.porcelainMuted);
     expect(decoration.border, isNotNull);
-    expect(
-      bubble.padding,
-      const EdgeInsets.fromLTRB(15, 12, 16, 13),
-    );
+    expect(bubble.padding, const EdgeInsets.fromLTRB(15, 12, 16, 13));
     expect(
       find.descendant(of: assistant, matching: find.byType(MarkdownBody)),
       findsOneWidget,
     );
     expect(find.byKey(const ValueKey('assistant-avatar')), findsOneWidget);
+    final avatarImage = tester.widget<Image>(
+      find.descendant(
+        of: find.byKey(const ValueKey('assistant-avatar')),
+        matching: find.byType(Image),
+      ),
+    );
+    expect(
+      (avatarImage.image as AssetImage).assetName,
+      'assets/claude_mascot.png',
+    );
+    expect(avatarImage.filterQuality, FilterQuality.none);
     expect(find.byKey(const ValueKey('user-message')), findsNothing);
   });
 
@@ -1489,5 +1803,53 @@ class FakeBackgroundNotificationService
   @override
   Future<void> cancelAll() async {
     cancelCount += 1;
+  }
+}
+
+class FakeChatBackgroundImageService implements ChatBackgroundImageService {
+  FakeChatBackgroundImageService(this.path);
+
+  final String path;
+  final List<String?> deletedPaths = [];
+  int pickCount = 0;
+
+  @override
+  Future<String?> pickAndStore() async {
+    pickCount += 1;
+    return path;
+  }
+
+  @override
+  Future<void> deleteStoredImage(String? path) async {
+    deletedPaths.add(path);
+  }
+}
+
+class DelayedChatBackgroundPreferenceStore
+    extends ChatBackgroundPreferenceStore {
+  final Completer<ChatBackgroundPreference> loadCompleter = Completer();
+  ChatBackgroundPreference? savedPreference;
+
+  @override
+  Future<ChatBackgroundPreference> load() => loadCompleter.future;
+
+  @override
+  Future<void> save(ChatBackgroundPreference preference) async {
+    savedPreference = preference;
+  }
+
+  void completeLoad(ChatBackgroundPreference preference) {
+    loadCompleter.complete(preference);
+  }
+}
+
+class DelayedClaudeModelPreferenceStore extends ClaudeModelPreferenceStore {
+  final Completer<ClaudeModelPreference> loadCompleter = Completer();
+
+  @override
+  Future<ClaudeModelPreference> load() => loadCompleter.future;
+
+  void completeLoad(ClaudeModelPreference preference) {
+    loadCompleter.complete(preference);
   }
 }

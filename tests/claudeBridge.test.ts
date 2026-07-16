@@ -10,6 +10,7 @@ import {
   extractClaudePermissionRequest,
   extractClaudeSessionInfo,
   isMissingConversationError,
+  normalizeClaudeModel,
   permissionControlResponse,
   restoreClaudeSessionInfo,
 } from '../src/claudeBridge.js';
@@ -54,17 +55,33 @@ test('ClaudeBridge resumes the session id returned by the previous run', async (
 
     const first = await bridge.run(callbacks);
     assert.equal(first.sessionId, 'fake-session-id');
-    const second = await bridge.run({ ...callbacks, sessionId: first.sessionId });
+    const second = await bridge.run({
+      ...callbacks,
+      sessionId: first.sessionId,
+      model: 'opus',
+    });
     assert.equal(second.exitCode, 0);
 
     const invocations = (await readFile(logPath, 'utf8'))
       .trim()
       .split(/\r?\n/)
       .map(line => JSON.parse(line) as string[]);
-    assert.deepEqual(invocations[1].slice(-2), ['--resume', 'fake-session-id']);
+    assert.deepEqual(invocations[1].slice(-4), [
+      '--model',
+      'opus',
+      '--resume',
+      'fake-session-id',
+    ]);
   } finally {
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   }
+});
+
+test('Claude model overrides reject unsafe CLI values', () => {
+  assert.equal(normalizeClaudeModel(' claude-opus-4-8 '), 'claude-opus-4-8');
+  assert.equal(normalizeClaudeModel(undefined), undefined);
+  assert.throws(() => normalizeClaudeModel('--dangerously-skip-permissions'));
+  assert.throws(() => normalizeClaudeModel('opus sonnet'));
 });
 
 test('ClaudeBridge stop removes the full Claude process tree on Windows', {

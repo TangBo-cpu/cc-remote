@@ -9,8 +9,10 @@ import 'package:http/http.dart' as http;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-import 'notification_service.dart';
 import 'attachments.dart';
+import 'chat_background.dart';
+import 'model_preference.dart';
+import 'notification_service.dart';
 import 'signal_console_theme.dart';
 import 'workspace_drawer.dart';
 
@@ -25,12 +27,18 @@ class CcRemoteApp extends StatelessWidget {
     this.demoMode = false,
     this.notificationService,
     this.notificationPreferenceStore,
+    this.modelPreferenceStore,
+    this.chatBackgroundPreferenceStore,
+    this.chatBackgroundImageService,
   });
 
   final bool enableCamera;
   final bool demoMode;
   final BackgroundNotificationService? notificationService;
   final NotificationPreferenceStore? notificationPreferenceStore;
+  final ClaudeModelPreferenceStore? modelPreferenceStore;
+  final ChatBackgroundPreferenceStore? chatBackgroundPreferenceStore;
+  final ChatBackgroundImageService? chatBackgroundImageService;
 
   @override
   Widget build(BuildContext context) {
@@ -43,6 +51,9 @@ class CcRemoteApp extends StatelessWidget {
         demoMode: demoMode,
         notificationService: notificationService,
         notificationPreferenceStore: notificationPreferenceStore,
+        modelPreferenceStore: modelPreferenceStore,
+        chatBackgroundPreferenceStore: chatBackgroundPreferenceStore,
+        chatBackgroundImageService: chatBackgroundImageService,
       ),
     );
   }
@@ -55,12 +66,18 @@ class DemoShell extends StatefulWidget {
     required this.demoMode,
     this.notificationService,
     this.notificationPreferenceStore,
+    this.modelPreferenceStore,
+    this.chatBackgroundPreferenceStore,
+    this.chatBackgroundImageService,
   });
 
   final bool enableCamera;
   final bool demoMode;
   final BackgroundNotificationService? notificationService;
   final NotificationPreferenceStore? notificationPreferenceStore;
+  final ClaudeModelPreferenceStore? modelPreferenceStore;
+  final ChatBackgroundPreferenceStore? chatBackgroundPreferenceStore;
+  final ChatBackgroundImageService? chatBackgroundImageService;
 
   @override
   State<DemoShell> createState() => _DemoShellState();
@@ -90,6 +107,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   bool notificationsReady = false;
   bool currentRunFailed = false;
   bool uploadingAttachments = false;
+  ClaudeModelPreference selectedModel = ClaudeModelPreference.followComputer;
+  ChatBackgroundPreference chatBackground =
+      ChatBackgroundPreference.defaultValue;
   PermissionMode selectedPermissionMode = PermissionMode.manual;
   PermissionMode activePermissionMode = PermissionMode.manual;
   SavedSession? session;
@@ -108,9 +128,15 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final List<RemotePermissionRequest> pendingPermissions = [];
   final Set<String> respondingPermissionIds = {};
   Future<void> lastTranscriptWrite = Future<void>.value();
+  late final Future<void> modelPreferenceInitialization;
+  int modelPreferenceRevision = 0;
+  int chatBackgroundRevision = 0;
   late final BackgroundNotificationService notificationService;
   late final NotificationPreferenceStore notificationPreferenceStore;
   late final BackgroundNotificationController notificationController;
+  late final ClaudeModelPreferenceStore modelPreferenceStore;
+  late final ChatBackgroundPreferenceStore chatBackgroundPreferenceStore;
+  late final ChatBackgroundImageService chatBackgroundImageService;
   String? pendingNotificationSessionId;
 
   @override
@@ -120,11 +146,20 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         widget.notificationService ?? LocalBackgroundNotificationService();
     notificationPreferenceStore =
         widget.notificationPreferenceStore ?? NotificationPreferenceStore();
+    modelPreferenceStore =
+        widget.modelPreferenceStore ?? ClaudeModelPreferenceStore();
+    chatBackgroundPreferenceStore =
+        widget.chatBackgroundPreferenceStore ?? ChatBackgroundPreferenceStore();
+    chatBackgroundImageService =
+        widget.chatBackgroundImageService ?? LocalChatBackgroundImageService();
     notificationController = BackgroundNotificationController(
       service: notificationService,
     );
     WidgetsBinding.instance.addObserver(this);
     unawaited(initializeNotifications());
+    modelPreferenceInitialization = initializeModelPreference();
+    unawaited(modelPreferenceInitialization);
+    unawaited(initializeChatBackground());
     bootstrap();
   }
 
@@ -195,6 +230,63 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     }
     if (mounted) setState(() => notificationsEnabled = next);
     return next;
+  }
+
+  Future<void> initializeModelPreference() async {
+    final revision = modelPreferenceRevision;
+    final preference = await modelPreferenceStore.load();
+    if (!mounted || revision != modelPreferenceRevision) return;
+    setState(() => selectedModel = preference);
+  }
+
+  Future<void> setModelPreference(ClaudeModelPreference preference) async {
+    modelPreferenceRevision += 1;
+    await modelPreferenceStore.save(preference);
+    if (mounted) setState(() => selectedModel = preference);
+  }
+
+  Future<void> initializeChatBackground() async {
+    final revision = chatBackgroundRevision;
+    final preference = await chatBackgroundPreferenceStore.load();
+    if (!mounted || revision != chatBackgroundRevision) return;
+    setState(() => chatBackground = preference);
+  }
+
+  Future<ChatBackgroundPreference> setChatBackground(
+    ChatBackgroundPreference preference,
+  ) async {
+    chatBackgroundRevision += 1;
+    final previous = chatBackground;
+    await chatBackgroundPreferenceStore.save(preference);
+    if (mounted) setState(() => chatBackground = preference);
+    if (previous.imagePath != null &&
+        previous.imagePath != preference.imagePath) {
+      await deleteChatBackgroundImage(previous.imagePath);
+    }
+    return preference;
+  }
+
+  Future<void> deleteChatBackgroundImage(String? path) async {
+    try {
+      await chatBackgroundImageService.deleteStoredImage(path);
+    } catch (_) {}
+  }
+
+  Future<ChatBackgroundPreference?> pickChatBackgroundImage(
+    double overlayOpacity,
+  ) async {
+    final path = await chatBackgroundImageService.pickAndStore();
+    if (path == null) return null;
+    final preference = ChatBackgroundPreference.localImage(
+      path,
+      overlayOpacity: overlayOpacity,
+    );
+    try {
+      return await setChatBackground(preference);
+    } catch (_) {
+      await deleteChatBackgroundImage(path);
+      rethrow;
+    }
   }
 
   void handleNotificationTap(String? payload) {
@@ -802,11 +894,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   Future<void> sendPrompt() async {
     final text = promptController.text.trim();
-    if ((text.isEmpty && pendingAttachments.isEmpty) ||
-        running ||
-        uploadingAttachments) {
+    if (text.isEmpty && pendingAttachments.isEmpty) {
       return;
     }
+    await modelPreferenceInitialization;
+    if (!mounted || running || uploadingAttachments) return;
 
     if (widget.demoMode) {
       setState(() {
@@ -891,14 +983,15 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     });
     persistTranscriptSnapshotLater();
     channel.sink.add(
-      jsonEncode({
-        'type': 'prompt',
-        'text': text,
-        if (uploaded.isNotEmpty)
-          'attachmentIds': uploaded.map((attachment) => attachment.id).toList(),
-        'permissionMode': activePermissionMode.wireName,
-        'sessionId': currentSessionId,
-      }),
+      jsonEncode(
+        buildPromptMessage(
+          text: text,
+          attachmentIds: uploaded.map((attachment) => attachment.id),
+          permissionMode: activePermissionMode,
+          sessionId: currentSessionId,
+          model: selectedModel,
+        ),
+      ),
     );
   }
 
@@ -1339,14 +1432,26 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         commands: commands,
         permissionMode: running ? activePermissionMode : selectedPermissionMode,
         allowBypassPermissions: allowBypassPermissions,
-        notificationsEnabled: notificationsEnabled,
         pendingPermissions: pendingPermissions,
         respondingPermissionIds: respondingPermissionIds,
         promptController: promptController,
         pendingAttachments: pendingAttachments,
         onFillPrompt: fillPrompt,
         onReconnect: refreshConnection,
-        onNotificationsChanged: setNotificationsEnabled,
+        onOpenSettings: () => showSettingsSheet(
+          context,
+          session,
+          notificationsEnabled,
+          chatBackground,
+          modelName,
+          selectedModel,
+          refreshConnection,
+          setNotificationsEnabled,
+          setModelPreference,
+          setChatBackground,
+          pickChatBackgroundImage,
+          logoutPairedDevice,
+        ),
         onNewConversation: beginNewConversation,
         onOpenSessions: openSessions,
         onOpenWorkspace: openWorkspace,
@@ -1357,10 +1462,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         onRemoveAttachment: removePendingAttachment,
         onSend: sendPrompt,
         onStop: stopRun,
-        onLogout: logoutPairedDevice,
       ),
     };
     return AppBackground(
+      chatBackground: route == ShellRoute.chat
+          ? chatBackground
+          : ChatBackgroundPreference.defaultValue,
       child: AnimatedSwitcher(
         duration: reduceMotion ? Duration.zero : AppMotion.standard,
         reverseDuration: reduceMotion ? Duration.zero : AppMotion.fast,
@@ -1941,14 +2048,13 @@ class ChatScreen extends StatelessWidget {
     required this.commands,
     required this.permissionMode,
     required this.allowBypassPermissions,
-    required this.notificationsEnabled,
     required this.pendingPermissions,
     required this.respondingPermissionIds,
     required this.promptController,
     this.pendingAttachments = const [],
     required this.onFillPrompt,
     required this.onReconnect,
-    required this.onNotificationsChanged,
+    required this.onOpenSettings,
     required this.onNewConversation,
     required this.onOpenSessions,
     required this.onOpenWorkspace,
@@ -1959,7 +2065,6 @@ class ChatScreen extends StatelessWidget {
     this.onRemoveAttachment,
     required this.onSend,
     required this.onStop,
-    required this.onLogout,
   });
 
   final SavedSession? session;
@@ -1976,14 +2081,13 @@ class ChatScreen extends StatelessWidget {
   final List<String> commands;
   final PermissionMode permissionMode;
   final bool allowBypassPermissions;
-  final bool notificationsEnabled;
   final List<RemotePermissionRequest> pendingPermissions;
   final Set<String> respondingPermissionIds;
   final TextEditingController promptController;
   final List<AttachmentDraft> pendingAttachments;
   final ValueChanged<String> onFillPrompt;
   final VoidCallback onReconnect;
-  final Future<bool> Function(bool) onNotificationsChanged;
+  final VoidCallback onOpenSettings;
   final VoidCallback onNewConversation;
   final VoidCallback onOpenSessions;
   final VoidCallback onOpenWorkspace;
@@ -1994,7 +2098,6 @@ class ChatScreen extends StatelessWidget {
   final ValueChanged<AttachmentDraft>? onRemoveAttachment;
   final VoidCallback onSend;
   final VoidCallback onStop;
-  final VoidCallback onLogout;
 
   @override
   Widget build(BuildContext context) {
@@ -2009,13 +2112,11 @@ class ChatScreen extends StatelessWidget {
         modelName: modelName,
         contextWindow: contextWindow,
         remainingContext: remainingContext,
-        notificationsEnabled: notificationsEnabled,
         onReconnect: onReconnect,
-        onNotificationsChanged: onNotificationsChanged,
+        onOpenSettings: onOpenSettings,
         onNewConversation: onNewConversation,
         onOpenSessions: onOpenSessions,
         onOpenWorkspace: onOpenWorkspace,
-        onLogout: onLogout,
       ),
     );
     final transcript = RepaintBoundary(
@@ -2089,13 +2190,11 @@ class ConnectionHeader extends StatelessWidget {
     required this.modelName,
     required this.contextWindow,
     required this.remainingContext,
-    required this.notificationsEnabled,
     required this.onReconnect,
-    required this.onNotificationsChanged,
+    required this.onOpenSettings,
     required this.onNewConversation,
     required this.onOpenSessions,
     required this.onOpenWorkspace,
-    required this.onLogout,
   });
 
   final SavedSession? session;
@@ -2107,13 +2206,11 @@ class ConnectionHeader extends StatelessWidget {
   final String? modelName;
   final int? contextWindow;
   final int? remainingContext;
-  final bool notificationsEnabled;
   final VoidCallback onReconnect;
-  final Future<bool> Function(bool) onNotificationsChanged;
+  final VoidCallback onOpenSettings;
   final VoidCallback onNewConversation;
   final VoidCallback onOpenSessions;
   final VoidCallback onOpenWorkspace;
-  final VoidCallback onLogout;
 
   @override
   Widget build(BuildContext context) {
@@ -2266,14 +2363,7 @@ class ConnectionHeader extends StatelessWidget {
                         icon: Icons.auto_awesome_rounded,
                         color: AppColors.yellow,
                         dimension: 31,
-                        onPressed: () => showSettingsSheet(
-                          context,
-                          session,
-                          notificationsEnabled,
-                          onReconnect,
-                          onNotificationsChanged,
-                          onLogout,
-                        ),
+                        onPressed: onOpenSettings,
                       ),
                     ],
                   ),
@@ -2372,14 +2462,7 @@ class ConnectionHeader extends StatelessWidget {
                           icon: Icons.auto_awesome_rounded,
                           color: AppColors.yellow,
                           dimension: 32,
-                          onPressed: () => showSettingsSheet(
-                            context,
-                            session,
-                            notificationsEnabled,
-                            onReconnect,
-                            onNotificationsChanged,
-                            onLogout,
-                          ),
+                          onPressed: onOpenSettings,
                         ),
                       ],
                     ),
@@ -2491,13 +2574,11 @@ class LegacyConnectionHeader extends StatelessWidget {
     required this.modelName,
     required this.contextWindow,
     required this.remainingContext,
-    required this.notificationsEnabled,
     required this.onReconnect,
-    required this.onNotificationsChanged,
+    required this.onOpenSettings,
     required this.onNewConversation,
     required this.onOpenSessions,
     required this.onOpenWorkspace,
-    required this.onLogout,
   });
 
   final SavedSession? session;
@@ -2509,13 +2590,11 @@ class LegacyConnectionHeader extends StatelessWidget {
   final String? modelName;
   final int? contextWindow;
   final int? remainingContext;
-  final bool notificationsEnabled;
   final VoidCallback onReconnect;
-  final Future<bool> Function(bool) onNotificationsChanged;
+  final VoidCallback onOpenSettings;
   final VoidCallback onNewConversation;
   final VoidCallback onOpenSessions;
   final VoidCallback onOpenWorkspace;
-  final VoidCallback onLogout;
 
   @override
   Widget build(BuildContext context) {
@@ -2651,14 +2730,7 @@ class LegacyConnectionHeader extends StatelessWidget {
                       ),
                     ),
                     IconButton(
-                      onPressed: () => showSettingsSheet(
-                        context,
-                        session,
-                        notificationsEnabled,
-                        onReconnect,
-                        onNotificationsChanged,
-                        onLogout,
-                      ),
+                      onPressed: onOpenSettings,
                       icon: const Icon(Icons.tune_rounded, size: 21),
                       tooltip: '设置',
                       style: IconButton.styleFrom(
@@ -2784,8 +2856,15 @@ Future<void> showSettingsSheet(
   BuildContext context,
   SavedSession? session,
   bool notificationsEnabled,
+  ChatBackgroundPreference chatBackground,
+  String? currentModel,
+  ClaudeModelPreference selectedModel,
   VoidCallback onReconnect,
   Future<bool> Function(bool) onNotificationsChanged,
+  Future<void> Function(ClaudeModelPreference) onModelChanged,
+  Future<ChatBackgroundPreference> Function(ChatBackgroundPreference)
+  onChatBackgroundChanged,
+  Future<ChatBackgroundPreference?> Function(double) onPickChatBackgroundImage,
   VoidCallback onLogout,
 ) {
   return showModalBottomSheet<void>(
@@ -2795,8 +2874,14 @@ Future<void> showSettingsSheet(
     builder: (context) => SettingsSheet(
       session: session,
       notificationsEnabled: notificationsEnabled,
+      chatBackground: chatBackground,
+      currentModel: currentModel,
+      selectedModel: selectedModel,
       onReconnect: onReconnect,
       onNotificationsChanged: onNotificationsChanged,
+      onModelChanged: onModelChanged,
+      onChatBackgroundChanged: onChatBackgroundChanged,
+      onPickChatBackgroundImage: onPickChatBackgroundImage,
       onLogout: onLogout,
     ),
   );
@@ -2982,15 +3067,29 @@ class SettingsSheet extends StatefulWidget {
     super.key,
     required this.session,
     required this.notificationsEnabled,
+    required this.chatBackground,
+    required this.currentModel,
+    required this.selectedModel,
     required this.onReconnect,
     required this.onNotificationsChanged,
+    required this.onModelChanged,
+    required this.onChatBackgroundChanged,
+    required this.onPickChatBackgroundImage,
     required this.onLogout,
   });
 
   final SavedSession? session;
   final bool notificationsEnabled;
+  final ChatBackgroundPreference chatBackground;
+  final String? currentModel;
+  final ClaudeModelPreference selectedModel;
   final VoidCallback onReconnect;
   final Future<bool> Function(bool) onNotificationsChanged;
+  final Future<void> Function(ClaudeModelPreference) onModelChanged;
+  final Future<ChatBackgroundPreference> Function(ChatBackgroundPreference)
+  onChatBackgroundChanged;
+  final Future<ChatBackgroundPreference?> Function(double)
+  onPickChatBackgroundImage;
   final VoidCallback onLogout;
 
   @override
@@ -2999,7 +3098,10 @@ class SettingsSheet extends StatefulWidget {
 
 class _SettingsSheetState extends State<SettingsSheet> {
   late bool notificationsEnabled = widget.notificationsEnabled;
+  late ChatBackgroundPreference chatBackground = widget.chatBackground;
+  late ClaudeModelPreference selectedModel = widget.selectedModel;
   bool changingNotifications = false;
+  bool changingModel = false;
 
   Future<void> changeNotifications(bool value) async {
     if (changingNotifications) return;
@@ -3015,6 +3117,40 @@ class _SettingsSheetState extends State<SettingsSheet> {
     });
   }
 
+  Future<ChatBackgroundPreference> changeChatBackground(
+    ChatBackgroundPreference preference,
+  ) async {
+    final updated = await widget.onChatBackgroundChanged(preference);
+    if (mounted) setState(() => chatBackground = updated);
+    return updated;
+  }
+
+  Future<ChatBackgroundPreference?> pickChatBackgroundImage(
+    double overlayOpacity,
+  ) async {
+    final updated = await widget.onPickChatBackgroundImage(overlayOpacity);
+    if (updated != null && mounted) setState(() => chatBackground = updated);
+    return updated;
+  }
+
+  Future<void> chooseModel() async {
+    if (changingModel) return;
+    final next = await showClaudeModelPicker(context, selected: selectedModel);
+    if (next == null || next == selectedModel || !mounted) return;
+    setState(() => changingModel = true);
+    try {
+      await widget.onModelChanged(next);
+      if (mounted) setState(() => selectedModel = next);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('模型设置保存失败，请重试')));
+    } finally {
+      if (mounted) setState(() => changingModel = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
@@ -3022,99 +3158,657 @@ class _SettingsSheetState extends State<SettingsSheet> {
         padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
         child: GlassPanel(
           padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height * 0.82,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Expanded(
-                    child: Text(
-                      '设置',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w800,
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text(
+                          '设置',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close_rounded),
+                        tooltip: '关闭',
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  InfoRow(
+                    label: '电脑',
+                    value: widget.session?.deviceName ?? 'Jayson PC',
+                  ),
+                  InfoRow(
+                    label: '服务',
+                    value:
+                        widget.session?.origin.toString() ??
+                        'https://tbhaoshuai.ccwu.cc',
+                  ),
+                  InfoRow(
+                    label: '目录',
+                    value: widget.session?.workspaceName ?? 'cc-remote',
+                  ),
+                  ListTile(
+                    key: const ValueKey('model-setting'),
+                    contentPadding: EdgeInsets.zero,
+                    minVerticalPadding: 8,
+                    leading: const Icon(Icons.auto_awesome_rounded),
+                    title: const Text('模型'),
+                    subtitle: Text(
+                      modelPreferenceDescription(
+                        selectedModel,
+                        widget.currentModel == null
+                            ? null
+                            : formatModelName(widget.currentModel!),
+                      ),
+                    ),
+                    trailing: changingModel
+                        ? const SizedBox.square(
+                            dimension: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.chevron_right_rounded),
+                    onTap: changingModel ? null : chooseModel,
+                  ),
+                  ListTile(
+                    key: const ValueKey('chat-background-setting'),
+                    contentPadding: EdgeInsets.zero,
+                    minVerticalPadding: 8,
+                    leading: ChatBackgroundThumbnail(
+                      preference: chatBackground,
+                    ),
+                    title: const Text('聊天背景'),
+                    subtitle: Text(chatBackgroundLabel(chatBackground)),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: () => showChatBackgroundSheet(
+                      context,
+                      preference: chatBackground,
+                      onChanged: changeChatBackground,
+                      onPickImage: pickChatBackgroundImage,
+                    ),
+                  ),
+                  SwitchListTile(
+                    key: const ValueKey('background-notifications-toggle'),
+                    contentPadding: EdgeInsets.zero,
+                    value: notificationsEnabled,
+                    onChanged: changingNotifications
+                        ? null
+                        : changeNotifications,
+                    secondary: const Icon(Icons.notifications_active_outlined),
+                    title: const Text('后台通知'),
+                    subtitle: const Text('任务完成、失败或等待权限时提醒'),
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        widget.onReconnect();
+                      },
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('重新连接'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.accent,
+                        minimumSize: const Size.fromHeight(46),
+                        side: BorderSide(
+                          color: AppColors.accent.withValues(alpha: 0.22),
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(AppRadii.control),
+                        ),
                       ),
                     ),
                   ),
-                  IconButton(
-                    onPressed: () => Navigator.pop(context),
-                    icon: const Icon(Icons.close_rounded),
-                    tooltip: '关闭',
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: SignalPressEffect(
+                      child: FilledButton.icon(
+                        onPressed: () =>
+                            confirmLogout(context, widget.onLogout),
+                        icon: const Icon(Icons.link_off_rounded),
+                        label: const Text('退出配对'),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: AppColors.stop,
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size.fromHeight(48),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(
+                              AppRadii.control,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 8),
-              InfoRow(
-                label: '电脑',
-                value: widget.session?.deviceName ?? 'Jayson PC',
-              ),
-              InfoRow(
-                label: '服务',
-                value:
-                    widget.session?.origin.toString() ??
-                    'https://tbhaoshuai.ccwu.cc',
-              ),
-              InfoRow(
-                label: '目录',
-                value: widget.session?.workspaceName ?? 'cc-remote',
-              ),
-              SwitchListTile(
-                key: const ValueKey('background-notifications-toggle'),
-                contentPadding: EdgeInsets.zero,
-                value: notificationsEnabled,
-                onChanged: changingNotifications ? null : changeNotifications,
-                secondary: const Icon(Icons.notifications_active_outlined),
-                title: const Text('后台通知'),
-                subtitle: const Text('任务完成、失败或等待权限时提醒'),
-              ),
-              const SizedBox(height: 14),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    widget.onReconnect();
-                  },
-                  icon: const Icon(Icons.refresh_rounded),
-                  label: const Text('重新连接'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.accent,
-                    minimumSize: const Size.fromHeight(46),
-                    side: BorderSide(
-                      color: AppColors.accent.withValues(alpha: 0.22),
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppRadii.control),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: SignalPressEffect(
-                  child: FilledButton.icon(
-                    onPressed: () => confirmLogout(context, widget.onLogout),
-                    icon: const Icon(Icons.link_off_rounded),
-                    label: const Text('退出配对'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.stop,
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size.fromHeight(48),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(AppRadii.control),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
+}
+
+Future<ClaudeModelPreference?> showClaudeModelPicker(
+  BuildContext context, {
+  required ClaudeModelPreference selected,
+}) {
+  return showModalBottomSheet<ClaudeModelPreference>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (context) => SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(4, 0, 4, 8),
+              child: Text(
+                '选择模型',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+              ),
+            ),
+            for (final preference in ClaudeModelPreference.values)
+              ListTile(
+                key: ValueKey(
+                  'model-option-${preference.wireName ?? 'follow'}',
+                ),
+                minTileHeight: 52,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+                leading: Icon(
+                  preference == ClaudeModelPreference.followComputer
+                      ? Icons.computer_rounded
+                      : Icons.psychology_alt_rounded,
+                ),
+                title: Text(preference.label),
+                subtitle: Text(
+                  preference == ClaudeModelPreference.followComputer
+                      ? '使用电脑端或 Claude Code 的默认配置'
+                      : '用于后续消息',
+                ),
+                selected: preference == selected,
+                trailing: preference == selected
+                    ? const Icon(
+                        Icons.check_circle_rounded,
+                        color: AppColors.accent,
+                      )
+                    : null,
+                onTap: () => Navigator.pop(context, preference),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+Future<void> showChatBackgroundSheet(
+  BuildContext context, {
+  required ChatBackgroundPreference preference,
+  required Future<ChatBackgroundPreference> Function(ChatBackgroundPreference)
+  onChanged,
+  required Future<ChatBackgroundPreference?> Function(double) onPickImage,
+}) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (context) => ChatBackgroundSheet(
+      preference: preference,
+      onChanged: onChanged,
+      onPickImage: onPickImage,
+    ),
+  );
+}
+
+class ChatBackgroundSheet extends StatefulWidget {
+  const ChatBackgroundSheet({
+    super.key,
+    required this.preference,
+    required this.onChanged,
+    required this.onPickImage,
+  });
+
+  final ChatBackgroundPreference preference;
+  final Future<ChatBackgroundPreference> Function(ChatBackgroundPreference)
+  onChanged;
+  final Future<ChatBackgroundPreference?> Function(double) onPickImage;
+
+  @override
+  State<ChatBackgroundSheet> createState() => _ChatBackgroundSheetState();
+}
+
+class _ChatBackgroundSheetState extends State<ChatBackgroundSheet> {
+  late ChatBackgroundPreference preference = widget.preference;
+  late ChatBackgroundPreference savedPreference = widget.preference;
+  bool changing = false;
+
+  Future<void> apply(ChatBackgroundPreference next) async {
+    if (changing || next == savedPreference) {
+      setState(() => preference = next);
+      return;
+    }
+    setState(() {
+      changing = true;
+      preference = next;
+    });
+    try {
+      final updated = await widget.onChanged(next);
+      if (!mounted) return;
+      setState(() {
+        preference = updated;
+        savedPreference = updated;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => preference = savedPreference);
+      showBackgroundError('背景保存失败，请重试');
+    } finally {
+      if (mounted) setState(() => changing = false);
+    }
+  }
+
+  Future<void> pickImage() async {
+    if (changing) return;
+    setState(() => changing = true);
+    try {
+      final updated = await widget.onPickImage(preference.overlayOpacity);
+      if (updated == null || !mounted) return;
+      setState(() {
+        preference = updated;
+        savedPreference = updated;
+      });
+    } catch (_) {
+      if (mounted) showBackgroundError('无法读取这张图片，请换一张重试');
+    } finally {
+      if (mounted) setState(() => changing = false);
+    }
+  }
+
+  void showBackgroundError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final options = <(String, ChatBackgroundPreference)>[
+      ('默认', ChatBackgroundPreference.defaultValue),
+      ('薄荷', const ChatBackgroundPreference.preset(ChatBackgroundPreset.mint)),
+      (
+        '晨光',
+        const ChatBackgroundPreference.preset(ChatBackgroundPreset.sunrise),
+      ),
+      ('陶粉', const ChatBackgroundPreference.preset(ChatBackgroundPreset.rose)),
+    ];
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 24, 14, 14),
+        child: GlassPanel(
+          padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
+          child: SizedBox(
+            height: MediaQuery.sizeOf(context).height * 0.72,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '聊天背景',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(Icons.close_rounded),
+                      tooltip: '关闭',
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        ChatBackgroundPreview(preference: preference),
+                        const SizedBox(height: 18),
+                        const Text(
+                          '内置背景',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 10),
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            final width = (constraints.maxWidth - 24) / 4;
+                            return Row(
+                              children: [
+                                for (
+                                  var index = 0;
+                                  index < options.length;
+                                  index++
+                                ) ...[
+                                  ChatBackgroundChoice(
+                                    width: width,
+                                    label: options[index].$1,
+                                    preference: options[index].$2,
+                                    selected:
+                                        preference.kind ==
+                                            options[index].$2.kind &&
+                                        preference.preset ==
+                                            options[index].$2.preset,
+                                    onPressed: changing
+                                        ? null
+                                        : () => apply(options[index].$2),
+                                  ),
+                                  if (index != options.length - 1)
+                                    const SizedBox(width: 8),
+                                ],
+                              ],
+                            );
+                          },
+                        ),
+                        const SizedBox(height: 18),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            key: const ValueKey('pick-chat-background-image'),
+                            onPressed: changing ? null : pickImage,
+                            icon: changing
+                                ? const SizedBox.square(
+                                    dimension: 18,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.photo_library_outlined),
+                            label: const Text('从相册选择'),
+                            style: OutlinedButton.styleFrom(
+                              minimumSize: const Size.fromHeight(48),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(
+                                  AppRadii.control,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (preference.kind ==
+                            ChatBackgroundKind.localImage) ...[
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              const Expanded(
+                                child: Text(
+                                  '图片淡化',
+                                  style: TextStyle(fontWeight: FontWeight.w800),
+                                ),
+                              ),
+                              Text(
+                                '${(preference.overlayOpacity * 100).round()}%',
+                                style: const TextStyle(
+                                  color: AppColors.muted,
+                                  fontFeatures: [FontFeature.tabularFigures()],
+                                ),
+                              ),
+                            ],
+                          ),
+                          Slider(
+                            key: const ValueKey(
+                              'chat-background-opacity-slider',
+                            ),
+                            value: preference.overlayOpacity,
+                            min: 0.16,
+                            max: 0.64,
+                            divisions: 12,
+                            label:
+                                '${(preference.overlayOpacity * 100).round()}%',
+                            onChanged: changing
+                                ? null
+                                : (value) => setState(
+                                    () => preference = preference.copyWith(
+                                      overlayOpacity: value,
+                                    ),
+                                  ),
+                            onChangeEnd: changing
+                                ? null
+                                : (value) => apply(
+                                    preference.copyWith(overlayOpacity: value),
+                                  ),
+                          ),
+                        ],
+                        const SizedBox(height: 6),
+                        Center(
+                          child: TextButton.icon(
+                            key: const ValueKey('reset-chat-background'),
+                            onPressed:
+                                changing ||
+                                    savedPreference.kind ==
+                                        ChatBackgroundKind.defaultStyle
+                                ? null
+                                : () => apply(
+                                    ChatBackgroundPreference.defaultValue,
+                                  ),
+                            icon: const Icon(Icons.restart_alt_rounded),
+                            label: const Text('恢复默认背景'),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        const Center(
+                          child: Text(
+                            '图片只保存在这台手机，不会上传到电脑端',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class ChatBackgroundChoice extends StatelessWidget {
+  const ChatBackgroundChoice({
+    super.key,
+    required this.width,
+    required this.label,
+    required this.preference,
+    required this.selected,
+    required this.onPressed,
+  });
+
+  final double width;
+  final String label;
+  final ChatBackgroundPreference preference;
+  final bool selected;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: '背景：$label',
+      child: SizedBox(
+        width: width,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(14),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Column(
+              children: [
+                AnimatedContainer(
+                  duration: MediaQuery.disableAnimationsOf(context)
+                      ? Duration.zero
+                      : AppMotion.fast,
+                  width: width,
+                  height: 64,
+                  clipBehavior: Clip.antiAlias,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: selected ? AppColors.accent : AppColors.line,
+                      width: selected ? 2.5 : 1.25,
+                    ),
+                  ),
+                  child: _ChatBackgroundLayer(
+                    preference: preference,
+                    cacheWidth: 240,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class ChatBackgroundPreview extends StatelessWidget {
+  const ChatBackgroundPreview({super.key, required this.preference});
+
+  final ChatBackgroundPreference preference;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      label: '当前聊天背景预览',
+      image: true,
+      child: Container(
+        height: 164,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: AppColors.ink, width: 1.25),
+        ),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            _ChatBackgroundLayer(preference: preference, cacheWidth: 900),
+            const Padding(
+              padding: EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: _PreviewBubble(
+                      color: AppColors.yellowSoft,
+                      width: 138,
+                    ),
+                  ),
+                  SizedBox(height: 12),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: _PreviewBubble(
+                      color: AppColors.porcelain,
+                      width: 188,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PreviewBubble extends StatelessWidget {
+  const _PreviewBubble({required this.color, required this.width});
+
+  final Color color;
+  final double width;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: width,
+      height: 46,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.ink, width: 1.1),
+      ),
+    );
+  }
+}
+
+class ChatBackgroundThumbnail extends StatelessWidget {
+  const ChatBackgroundThumbnail({super.key, required this.preference});
+
+  final ChatBackgroundPreference preference;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 44,
+      height: 44,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.ink, width: 1.2),
+      ),
+      child: _ChatBackgroundLayer(preference: preference, cacheWidth: 160),
+    );
+  }
+}
+
+String chatBackgroundLabel(ChatBackgroundPreference preference) {
+  return switch (preference.kind) {
+    ChatBackgroundKind.defaultStyle => '默认纸感',
+    ChatBackgroundKind.localImage => '自定义图片',
+    ChatBackgroundKind.preset => switch (preference.preset) {
+      ChatBackgroundPreset.mint => '薄荷纸感',
+      ChatBackgroundPreset.sunrise => '晨光纸感',
+      ChatBackgroundPreset.rose => '陶粉纸感',
+      null => '内置背景',
+    },
+  };
 }
 
 class InfoRow extends StatelessWidget {
@@ -4049,16 +4743,33 @@ class AssistantAvatar extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(10),
-        child: const ColoredBox(
-          color: AppColors.mintSoft,
-          child: Padding(
-            padding: EdgeInsets.all(4),
-            child: LivelyTerminalPal(),
-          ),
+        child: Image.asset(
+          'assets/claude_mascot.png',
+          fit: BoxFit.cover,
+          filterQuality: FilterQuality.none,
+          semanticLabel: 'Claude 吉祥物',
         ),
       ),
     );
   }
+}
+
+Map<String, Object> buildPromptMessage({
+  required String text,
+  required Iterable<String> attachmentIds,
+  required PermissionMode permissionMode,
+  required String sessionId,
+  required ClaudeModelPreference model,
+}) {
+  final attachments = attachmentIds.toList(growable: false);
+  return {
+    'type': 'prompt',
+    'text': text,
+    if (attachments.isNotEmpty) 'attachmentIds': attachments,
+    'permissionMode': permissionMode.wireName,
+    'sessionId': sessionId,
+    'model': ?model.wireName,
+  };
 }
 
 class ActivityBlock extends StatelessWidget {
@@ -5159,9 +5870,14 @@ class ScanCorner extends StatelessWidget {
 }
 
 class AppBackground extends StatelessWidget {
-  const AppBackground({super.key, required this.child});
+  const AppBackground({
+    super.key,
+    required this.child,
+    this.chatBackground = ChatBackgroundPreference.defaultValue,
+  });
 
   final Widget child;
+  final ChatBackgroundPreference chatBackground;
 
   @override
   Widget build(BuildContext context) {
@@ -5171,34 +5887,133 @@ class AppBackground extends StatelessWidget {
       body: Stack(
         fit: StackFit.expand,
         children: [
-          const ColoredBox(color: AppColors.bgMid),
-          Positioned(
-            right: -74,
-            top: -86,
-            child: Container(
-              width: 210,
-              height: 210,
-              decoration: const BoxDecoration(
-                color: AppColors.mintSoft,
-                shape: BoxShape.circle,
-              ),
-            ),
-          ),
-          Positioned(
-            left: -92,
-            bottom: 54,
-            child: Container(
-              width: 190,
-              height: 190,
-              decoration: const BoxDecoration(
-                color: AppColors.yellowSoft,
-                shape: BoxShape.circle,
-              ),
-            ),
+          RepaintBoundary(
+            key: const ValueKey('chat-background-layer'),
+            child: _ChatBackgroundLayer(preference: chatBackground),
           ),
           _KeyboardResizeBody(child: child),
         ],
       ),
+    );
+  }
+}
+
+class _ChatBackgroundLayer extends StatelessWidget {
+  const _ChatBackgroundLayer({required this.preference, this.cacheWidth});
+
+  final ChatBackgroundPreference preference;
+  final int? cacheWidth;
+
+  @override
+  Widget build(BuildContext context) {
+    if (preference.kind == ChatBackgroundKind.localImage &&
+        preference.imagePath != null) {
+      final width =
+          cacheWidth ??
+          (MediaQuery.sizeOf(context).width *
+                  MediaQuery.devicePixelRatioOf(context))
+              .round()
+              .clamp(720, 2160)
+              .toInt();
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          const _DecorativeBackground(
+            backgroundColor: AppColors.bgMid,
+            topColor: AppColors.mintSoft,
+            bottomColor: AppColors.yellowSoft,
+          ),
+          Semantics(
+            excludeSemantics: true,
+            child: Image.file(
+              File(preference.imagePath!),
+              key: const ValueKey('custom-chat-background-image'),
+              fit: BoxFit.cover,
+              cacheWidth: width,
+              filterQuality: FilterQuality.low,
+              gaplessPlayback: true,
+              errorBuilder: (_, _, _) => const _DecorativeBackground(
+                backgroundColor: AppColors.bgMid,
+                topColor: AppColors.mintSoft,
+                bottomColor: AppColors.yellowSoft,
+              ),
+            ),
+          ),
+          ColoredBox(
+            color: Colors.white.withValues(alpha: preference.overlayOpacity),
+          ),
+        ],
+      );
+    }
+    final colors = switch (preference.preset) {
+      ChatBackgroundPreset.mint => const (
+        background: Color(0xFFE8F7EF),
+        top: Color(0xFFC8F3DF),
+        bottom: Color(0xFFFFF0B8),
+      ),
+      ChatBackgroundPreset.sunrise => const (
+        background: Color(0xFFFFF4DE),
+        top: Color(0xFFFFD8C8),
+        bottom: Color(0xFFFFE99A),
+      ),
+      ChatBackgroundPreset.rose => const (
+        background: Color(0xFFF7E9E4),
+        top: Color(0xFFFFD2C4),
+        bottom: Color(0xFFD9F1E6),
+      ),
+      null => const (
+        background: AppColors.bgMid,
+        top: AppColors.mintSoft,
+        bottom: AppColors.yellowSoft,
+      ),
+    };
+    return _DecorativeBackground(
+      backgroundColor: colors.background,
+      topColor: colors.top,
+      bottomColor: colors.bottom,
+    );
+  }
+}
+
+class _DecorativeBackground extends StatelessWidget {
+  const _DecorativeBackground({
+    required this.backgroundColor,
+    required this.topColor,
+    required this.bottomColor,
+  });
+
+  final Color backgroundColor;
+  final Color topColor;
+  final Color bottomColor;
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        ColoredBox(color: backgroundColor),
+        Positioned(
+          right: -74,
+          top: -86,
+          child: Container(
+            width: 210,
+            height: 210,
+            decoration: BoxDecoration(color: topColor, shape: BoxShape.circle),
+          ),
+        ),
+        Positioned(
+          left: -92,
+          bottom: 54,
+          child: Container(
+            width: 190,
+            height: 190,
+            decoration: BoxDecoration(
+              color: bottomColor,
+              shape: BoxShape.circle,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

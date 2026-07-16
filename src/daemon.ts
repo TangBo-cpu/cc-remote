@@ -25,6 +25,7 @@ import {
   extractClaudeCommands,
   extractClaudeSessionInfo,
   isMissingConversationError,
+  normalizeClaudeModel,
   restoreClaudeSessionInfo,
   type ClaudeActivity,
   type ClaudePermissionMode,
@@ -365,6 +366,7 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     requestId?: string;
     decision?: string;
     sessionId?: string;
+    model?: unknown;
     attachmentIds?: unknown;
   };
 
@@ -413,14 +415,15 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
   if (!prompt && attachmentIds.length === 0) return;
   if (prompt.length > MAX_BODY_BYTES) throw new Error('prompt_too_large');
   if (bridge.isRunning()) throw new Error('claude_is_busy');
+  const permissionMode = parsePermissionMode(msg.permissionMode);
+  const model = normalizeClaudeModel(msg.model);
+  if (permissionMode === 'bypassPermissions' && !ALLOW_BYPASS_PERMISSIONS) {
+    throw new Error('bypass_permissions_disabled');
+  }
   if (msg.sessionId && msg.sessionId !== activeContext.session.id) {
     const context = await projectSessions.selectSession(msg.sessionId);
     await selectActiveSession(context);
     broadcastActiveSession();
-  }
-  const permissionMode = parsePermissionMode(msg.permissionMode);
-  if (permissionMode === 'bypassPermissions' && !ALLOW_BYPASS_PERMISSIONS) {
-    throw new Error('bypass_permissions_disabled');
   }
 
   const runContext = activeContext;
@@ -457,6 +460,7 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     sessionId,
     additionalDirectories: [uploadDirectory],
     permissionMode,
+    model,
     onEvent: event => {
       const commands = extractClaudeCommands(event);
       const cachedCommands = commandCaches.get(runContext.project.id) || [];
