@@ -2947,11 +2947,19 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
   late String selectedProjectId =
       widget.activeProjectId ?? widget.projects.first.id;
 
+  RemoteProjectSummary? get selectedProject {
+    for (final project in widget.projects) {
+      if (project.id == selectedProjectId) return project;
+    }
+    return widget.projects.isEmpty ? null : widget.projects.first;
+  }
+
   @override
   Widget build(BuildContext context) {
     final projectSessions = widget.sessions
         .where((session) => session.projectId == selectedProjectId)
         .toList();
+    final selectedProject = this.selectedProject;
     return SafeArea(
       child: SizedBox(
         height: MediaQuery.sizeOf(context).height * 0.72,
@@ -3007,6 +3015,21 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
                   ],
                 ),
               ),
+              if (selectedProject != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  selectedProject.path,
+                  key: const ValueKey('selected-project-path'),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    height: 1.3,
+                    color: AppColors.muted,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               Expanded(
                 child: projectSessions.isEmpty
@@ -3198,7 +3221,9 @@ class _SettingsSheetState extends State<SettingsSheet> {
                   ),
                   InfoRow(
                     label: '目录',
-                    value: widget.session?.workspaceName ?? 'cc-remote',
+                    value: widget.session?.workspaceDir ??
+                        widget.session?.workspaceName ??
+                        'cc-remote',
                   ),
                   ListTile(
                     key: const ValueKey('model-setting'),

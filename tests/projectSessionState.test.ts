@@ -49,6 +49,31 @@ test('registers projects and keeps independent sessions', async () => {
   }
 });
 
+test('registering the launch workspace reactivates it after reload', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-boot-workspace-'));
+  const first = join(dir, 'first');
+  const second = join(dir, 'second');
+  await mkdir(first);
+  await mkdir(second);
+  try {
+    const state = await createProjectSessionState({ dataDir: join(dir, 'data'), initialWorkspace: first });
+    await state.registerProject(second);
+    assert.equal(state.active().project.path, second);
+    await state.flush();
+
+    // Cold start reloads last active project; daemon must register launch cwd again.
+    const reloaded = await createProjectSessionState({
+      dataDir: join(dir, 'data'),
+      initialWorkspace: first,
+    });
+    assert.equal(reloaded.active().project.path, second);
+    await reloaded.registerProject(first);
+    assert.equal(reloaded.active().project.path, first);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('migrates the legacy transcript into the initial session', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-remote-project-migration-'));
   const dataDir = join(dir, 'data');

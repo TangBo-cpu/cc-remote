@@ -288,9 +288,12 @@ void main() {
     );
 
     expect(find.text('first task'), findsOneWidget);
+    expect(find.byKey(const ValueKey('selected-project-path')), findsOneWidget);
+    expect(find.text(r'E:\first'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('project-project-2')));
     await tester.pump();
     expect(find.text('second task'), findsOneWidget);
+    expect(find.text(r'E:\second'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('create-session')));
     expect(createdProjectId, 'project-2');
   });

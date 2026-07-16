@@ -46,6 +46,8 @@ const publicUrl = new URL(PUBLIC_ORIGIN);
 const auth = await createAuthState();
 const localControl = await createLocalControlState();
 const projectSessions = await createProjectSessionState({ initialWorkspace: WORKSPACE_DIR });
+// Align cold start with "cc-remote already running" register path: activate WORKSPACE_DIR.
+await projectSessions.registerProject(WORKSPACE_DIR);
 const attachments = new AttachmentStore();
 let activeContext = projectSessions.active();
 let workspace = new WorkspaceService(activeContext.project.path);
