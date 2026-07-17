@@ -487,8 +487,7 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
       }
     },
     onText: text => {
-      runContext.transcript.appendText(text);
-      broadcast(sessionMessage({ type: 'text', text }, runContext));
+      enqueueTextDelta(runContext, text);
     },
     onSessionId: sessionId => {
       runContext.transcript.setClaudeSessionId(sessionId);
@@ -511,6 +510,9 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     runContext.transcript.setClaudeSessionId(undefined);
     result = await runClaude(undefined);
   }
+
+  // Flush coalesced stream text before terminal events so clients never miss a tail.
+  flushTextDeltaBatch();
 
   if (result.sessionId) {
     runContext.transcript.setClaudeSessionId(result.sessionId);
@@ -704,6 +706,46 @@ function sessionMessage(
     projectId: context.project.id,
     sessionId: context.session.id,
   };
+}
+
+// ponytail: 30ms text coalesce is enough for mobile/tunnel; drop if first-byte latency matters more
+const TEXT_BATCH_MS = 30;
+let textBatch = '';
+let textBatchContext: SessionContext | undefined;
+let textBatchTimer: NodeJS.Timeout | undefined;
+
+function enqueueTextDelta(context: SessionContext, text: string): void {
+  if (!text) return;
+  context.transcript.appendText(text);
+  if (textBatchContext && textBatchContext.session.id !== context.session.id) {
+    flushTextDeltaBatch();
+  }
+  textBatchContext = context;
+  textBatch += text;
+  if (!textBatchTimer) {
+    textBatchTimer = setTimeout(() => {
+      textBatchTimer = undefined;
+      flushTextDeltaBatch();
+    }, TEXT_BATCH_MS);
+    textBatchTimer.unref();
+  }
+}
+
+function flushTextDeltaBatch(): void {
+  if (textBatchTimer) {
+    clearTimeout(textBatchTimer);
+    textBatchTimer = undefined;
+  }
+  if (!textBatch || !textBatchContext) {
+    textBatch = '';
+    textBatchContext = undefined;
+    return;
+  }
+  const text = textBatch;
+  const context = textBatchContext;
+  textBatch = '';
+  textBatchContext = undefined;
+  broadcast(sessionMessage({ type: 'text', text }, context));
 }
 
 function broadcast(data: unknown): void {

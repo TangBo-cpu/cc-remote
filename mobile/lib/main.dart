@@ -128,6 +128,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final List<RemotePermissionRequest> pendingPermissions = [];
   final Set<String> respondingPermissionIds = {};
   Future<void> lastTranscriptWrite = Future<void>.value();
+  // ponytail: batch stream paint/persist; tighten if first glyph feels late
+  static const streamTextBatchInterval = Duration(milliseconds: 40);
+  static const streamPersistInterval = Duration(milliseconds: 1500);
+  String pendingAssistantText = '';
+  Timer? streamTextFlushTimer;
+  Timer? streamPersistTimer;
+  DateTime? lastStreamPersistAt;
   late final Future<void> modelPreferenceInitialization;
   int modelPreferenceRevision = 0;
   int chatBackgroundRevision = 0;
@@ -166,6 +173,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    streamTextFlushTimer?.cancel();
+    streamPersistTimer?.cancel();
     closeWs();
     httpClient.close();
     promptController.dispose();
@@ -633,6 +642,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             stopping = false;
             pendingAttachments.clear();
             remoteTranscriptRevision = 0;
+            clearStreamTextBatch(apply: false);
             messages.clear();
             pendingPermissions.clear();
             respondingPermissionIds.clear();
@@ -674,6 +684,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             )) {
           return;
         }
+        clearStreamTextBatch(apply: false);
         setState(() {
           remoteTranscriptRevision = snapshot.revision;
           running = snapshot.running;
@@ -746,7 +757,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         });
         persistTranscriptSnapshotLater();
       case 'text':
-        appendAssistantText(decoded['text'] as String? ?? '');
+        queueAssistantText(decoded['text'] as String? ?? '');
       case 'commands':
         final items = decoded['commands'];
         if (items is! List) return;
@@ -769,6 +780,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         persistTranscriptSnapshotLater();
       case 'done':
         final failed = currentRunFailed;
+        flushStreamTextBatch();
         setState(() {
           running = false;
           stopping = false;
@@ -788,8 +800,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             detail: lastAssistantSnippet(),
           );
         }
-        persistTranscriptSnapshotLater();
+        persistTranscriptSnapshotNow();
       case 'stopped':
+        flushStreamTextBatch();
         setState(() {
           running = false;
           stopping = false;
@@ -804,9 +817,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           key: 'stopped-${activeSessionId ?? 'current'}',
           title: '任务已停止',
         );
-        persistTranscriptSnapshotLater();
+        persistTranscriptSnapshotNow();
       case 'error':
         final errorMessage = decoded['message']?.toString() ?? '未知错误';
+        flushStreamTextBatch();
         setState(() {
           running = false;
           stopping = false;
@@ -822,7 +836,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           title: '任务执行失败',
           detail: errorMessage,
         );
-        persistTranscriptSnapshotLater();
+        persistTranscriptSnapshotNow();
     }
   }
 
@@ -838,6 +852,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remoteOffline = false;
       running = false;
       stopping = false;
+      clearStreamTextBatch(apply: false);
       messages.clear();
       commands.clear();
       projects.clear();
@@ -855,6 +870,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   void handleWsClosed(String message) {
     if (!mounted || route != ShellRoute.chat) return;
+    flushStreamTextBatch();
     setState(() {
       wsReady = false;
       remoteOffline = true;
@@ -865,10 +881,58 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         messages.add(TranscriptMessage.system(message));
       }
     });
+    persistTranscriptSnapshotNow();
+  }
+
+  void queueAssistantText(String text) {
+    if (text.isEmpty) return;
+    pendingAssistantText += text;
+    streamTextFlushTimer ??= Timer(streamTextBatchInterval, flushStreamTextBatch);
+  }
+
+  void flushStreamTextBatch() {
+    streamTextFlushTimer?.cancel();
+    streamTextFlushTimer = null;
+    final text = pendingAssistantText;
+    pendingAssistantText = '';
+    if (text.isEmpty) return;
+    appendAssistantText(text, persist: false);
+    scheduleStreamPersist();
+  }
+
+  void clearStreamTextBatch({required bool apply}) {
+    streamTextFlushTimer?.cancel();
+    streamTextFlushTimer = null;
+    if (apply && pendingAssistantText.isNotEmpty) {
+      final text = pendingAssistantText;
+      pendingAssistantText = '';
+      appendAssistantText(text, persist: false);
+      return;
+    }
+    pendingAssistantText = '';
+  }
+
+  void scheduleStreamPersist() {
+    final last = lastStreamPersistAt;
+    final now = DateTime.now();
+    if (last == null || now.difference(last) >= streamPersistInterval) {
+      persistTranscriptSnapshotNow();
+      return;
+    }
+    streamPersistTimer ??= Timer(streamPersistInterval, () {
+      streamPersistTimer = null;
+      persistTranscriptSnapshotNow();
+    });
+  }
+
+  void persistTranscriptSnapshotNow() {
+    streamPersistTimer?.cancel();
+    streamPersistTimer = null;
+    lastStreamPersistAt = DateTime.now();
     persistTranscriptSnapshotLater();
   }
 
-  void appendAssistantText(String text) {
+  void appendAssistantText(String text, {bool persist = true}) {
     if (text.isEmpty) return;
     setState(() {
       final start =
@@ -889,7 +953,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         messages.add(TranscriptMessage.assistant(text));
       }
     });
-    persistTranscriptSnapshotLater();
+    if (persist) persistTranscriptSnapshotLater();
   }
 
   Future<void> sendPrompt() async {
@@ -1136,6 +1200,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         modelName = null;
         contextWindow = null;
         remainingContext = null;
+        clearStreamTextBatch(apply: false);
         messages
           ..clear()
           ..add(TranscriptMessage.system('已开启新对话'));
@@ -1175,6 +1240,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         modelName = null;
         contextWindow = null;
         remainingContext = null;
+        clearStreamTextBatch(apply: false);
         messages.clear();
         pendingAttachments.clear();
         uploadingAttachments = false;
@@ -1211,6 +1277,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       modelName = null;
       contextWindow = null;
       remainingContext = null;
+      clearStreamTextBatch(apply: false);
       messages.clear();
       commands.clear();
       projects.clear();
@@ -2124,6 +2191,7 @@ class ChatScreen extends StatelessWidget {
         messages: messages,
         session: session,
         activeSessionId: activeSessionId,
+        running: running,
         pendingPermissions: pendingPermissions,
         respondingPermissionIds: respondingPermissionIds,
         connected: connected,
@@ -3933,6 +4001,7 @@ class TranscriptView extends StatelessWidget {
     required this.messages,
     this.session,
     this.activeSessionId,
+    this.running = false,
     required this.pendingPermissions,
     required this.respondingPermissionIds,
     required this.connected,
@@ -3945,6 +4014,7 @@ class TranscriptView extends StatelessWidget {
   final List<TranscriptMessage> messages;
   final SavedSession? session;
   final String? activeSessionId;
+  final bool running;
   final List<RemotePermissionRequest> pendingPermissions;
   final Set<String> respondingPermissionIds;
   final bool connected;
@@ -4083,6 +4153,10 @@ class TranscriptView extends StatelessWidget {
             message: item,
             session: session,
             activeSessionId: activeSessionId,
+            streaming:
+                running &&
+                item.role == MessageRole.assistant &&
+                identical(item, messages.isNotEmpty ? messages.last : null),
           );
         }
         final request = item as RemotePermissionRequest;
@@ -4431,11 +4505,13 @@ class MessageBlock extends StatelessWidget {
     required this.message,
     this.session,
     this.activeSessionId,
+    this.streaming = false,
   });
 
   final TranscriptMessage message;
   final SavedSession? session;
   final String? activeSessionId;
+  final bool streaming;
 
   @override
   Widget build(BuildContext context) {
@@ -4454,55 +4530,67 @@ class MessageBlock extends StatelessWidget {
 
     final isUser = message.role == MessageRole.user;
     if (!isUser) {
+      // ponytail: plain text while streaming; markdown only after done
+      final assistantBody = streaming
+          ? SelectableText(
+              message.text,
+              style: const TextStyle(
+                height: 1.55,
+                fontSize: 15,
+                color: AppColors.ink,
+              ),
+            )
+          : MarkdownBody(
+              data: message.text,
+              selectable: true,
+              softLineBreak: true,
+              styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
+                  .copyWith(
+                    p: const TextStyle(
+                      height: 1.55,
+                      fontSize: 15,
+                      color: AppColors.ink,
+                    ),
+                    a: const TextStyle(color: AppColors.accent),
+                    code: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      color: AppColors.ink,
+                    ),
+                    h1: const TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.ink,
+                    ),
+                    h2: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.ink,
+                    ),
+                    h3: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.ink,
+                    ),
+                    blockSpacing: 10,
+                    listIndent: 22,
+                    codeblockPadding: const EdgeInsets.all(12),
+                    codeblockDecoration: BoxDecoration(
+                      color: AppColors.porcelainMuted,
+                      borderRadius: BorderRadius.circular(AppRadii.compact),
+                      border: Border.all(color: AppColors.line),
+                    ),
+                    blockquotePadding: const EdgeInsets.fromLTRB(12, 6, 10, 6),
+                    blockquoteDecoration: const BoxDecoration(
+                      border: Border(
+                        left: BorderSide(color: AppColors.accent, width: 2),
+                      ),
+                    ),
+                  ),
+            );
       return AssistantBubbleFrame(
         bubbleKey: const ValueKey('assistant-message'),
-        child: MarkdownBody(
-          data: message.text,
-          selectable: true,
-          softLineBreak: true,
-          styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
-            p: const TextStyle(
-              height: 1.55,
-              fontSize: 15,
-              color: AppColors.ink,
-            ),
-            a: const TextStyle(color: AppColors.accent),
-            code: const TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 13,
-              color: AppColors.ink,
-            ),
-            h1: const TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w700,
-              color: AppColors.ink,
-            ),
-            h2: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: AppColors.ink,
-            ),
-            h3: const TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: AppColors.ink,
-            ),
-            blockSpacing: 10,
-            listIndent: 22,
-            codeblockPadding: const EdgeInsets.all(12),
-            codeblockDecoration: BoxDecoration(
-              color: AppColors.porcelainMuted,
-              borderRadius: BorderRadius.circular(AppRadii.compact),
-              border: Border.all(color: AppColors.line),
-            ),
-            blockquotePadding: const EdgeInsets.fromLTRB(12, 6, 10, 6),
-            blockquoteDecoration: const BoxDecoration(
-              border: Border(
-                left: BorderSide(color: AppColors.accent, width: 2),
-              ),
-            ),
-          ),
-        ),
+        child: assistantBody,
       );
     }
 
