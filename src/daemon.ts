@@ -32,12 +32,17 @@ import {
   type ClaudePermissionRequest,
   type ClaudeSessionInfo,
 } from './claudeBridge.js';
+import { createRunFlight } from './runFlight.js';
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 8787);
 const PUBLIC_ORIGIN = (process.env.PUBLIC_ORIGIN || `http://${HOST}:${PORT}`).replace(/\/+$/, '');
 const WORKSPACE_DIR = process.env.WORKSPACE_DIR || process.cwd();
 const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
+// ponytail: test/fixture only — pipe-separated argv before Claude flags
+const CLAUDE_ARGS = process.env.CLAUDE_ARGS
+  ? process.env.CLAUDE_ARGS.split('|').filter(Boolean)
+  : undefined;
 const DEVICE_NAME = process.env.DEVICE_NAME || hostname();
 const ALLOW_BYPASS_PERMISSIONS = process.env.ALLOW_BYPASS_PERMISSIONS !== '0';
 const MAX_BODY_BYTES = 64 * 1024;
@@ -52,6 +57,8 @@ const attachments = new AttachmentStore();
 let activeContext = projectSessions.active();
 let workspace = new WorkspaceService(activeContext.project.path);
 let bridge = createBridge(activeContext.project.path);
+// Serializes prompt/select/register across awaits; bridge.isRunning alone races.
+const runFlight = createRunFlight(() => bridge.isRunning());
 const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_BODY_BYTES });
 const authedSockets = new Set<WebSocket>();
 const commandCaches = new Map<string, string[]>();
@@ -168,16 +175,20 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       sendJson(res, 401, { error: 'invalid_local_control_token' });
       return;
     }
-    if (bridge.isRunning()) {
+    if (!runFlight.tryBegin('mutate')) {
       sendJson(res, 409, { error: 'claude_is_busy' });
       return;
     }
-    const body = await readJson<{ path?: string; name?: string }>(req);
-    if (!body.path) return sendJson(res, 400, { error: 'workspace_required' });
-    await projectSessions.registerProject(body.path, body.name);
-    await selectActiveSession(projectSessions.active());
-    broadcastCatalog();
-    sendJson(res, 200, { ok: true, ...projectSessions.catalog() });
+    try {
+      const body = await readJson<{ path?: string; name?: string }>(req);
+      if (!body.path) return sendJson(res, 400, { error: 'workspace_required' });
+      await projectSessions.registerProject(body.path, body.name);
+      await selectActiveSession(projectSessions.active());
+      broadcastCatalog();
+      sendJson(res, 200, { ok: true, ...projectSessions.catalog() });
+    } finally {
+      runFlight.end();
+    }
     return;
   }
 
@@ -204,7 +215,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   if (req.method === 'GET' && url.pathname === '/api/status') {
     sendJson(res, 200, {
       authorized: true,
-      running: bridge.isRunning(),
+      running: runFlight.isBusy(),
       deviceName: DEVICE_NAME,
       workspaceDir: activeContext.project.path,
       activeProjectId: activeContext.project.id,
@@ -226,16 +237,20 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     ? url.pathname.match(/^\/api\/projects\/([^/]+)\/sessions$/)
     : null;
   if (createSessionMatch) {
-    if (bridge.isRunning()) return sendJson(res, 409, { error: 'claude_is_busy' });
-    const context = await projectSessions.createSession(decodeURIComponent(createSessionMatch[1]));
-    await selectActiveSession(context);
-    broadcastCatalog();
-    sendJson(res, 201, {
-      ok: true,
-      projectId: context.project.id,
-      sessionId: context.session.id,
-      catalog: projectSessions.catalog(),
-    });
+    if (!runFlight.tryBegin('mutate')) return sendJson(res, 409, { error: 'claude_is_busy' });
+    try {
+      const context = await projectSessions.createSession(decodeURIComponent(createSessionMatch[1]));
+      await selectActiveSession(context);
+      broadcastCatalog();
+      sendJson(res, 201, {
+        ok: true,
+        projectId: context.project.id,
+        sessionId: context.session.id,
+        catalog: projectSessions.catalog(),
+      });
+    } finally {
+      runFlight.end();
+    }
     return;
   }
 
@@ -243,11 +258,15 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     ? url.pathname.match(/^\/api\/sessions\/([^/]+)\/select$/)
     : null;
   if (selectSessionMatch) {
-    if (bridge.isRunning()) return sendJson(res, 409, { error: 'claude_is_busy' });
-    const context = await projectSessions.selectSession(decodeURIComponent(selectSessionMatch[1]));
-    await selectActiveSession(context);
-    broadcastActiveSession();
-    sendJson(res, 200, { ok: true, ...projectSessions.catalog() });
+    if (!runFlight.tryBegin('mutate')) return sendJson(res, 409, { error: 'claude_is_busy' });
+    try {
+      const context = await projectSessions.selectSession(decodeURIComponent(selectSessionMatch[1]));
+      await selectActiveSession(context);
+      broadcastActiveSession();
+      sendJson(res, 200, { ok: true, ...projectSessions.catalog() });
+    } finally {
+      runFlight.end();
+    }
     return;
   }
 
@@ -328,16 +347,21 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   }
 
   if (req.method === 'POST' && url.pathname === '/api/new-conversation') {
-    if (bridge.isRunning()) return sendJson(res, 409, { error: 'claude_is_busy' });
-    const context = await projectSessions.createSession(activeContext.project.id);
-    await auth.setClaudeSessionId(undefined);
-    await selectActiveSession(context);
-    broadcastActiveSession();
-    sendJson(res, 200, { ok: true, sessionId: context.session.id });
+    if (!runFlight.tryBegin('mutate')) return sendJson(res, 409, { error: 'claude_is_busy' });
+    try {
+      const context = await projectSessions.createSession(activeContext.project.id);
+      await auth.setClaudeSessionId(undefined);
+      await selectActiveSession(context);
+      broadcastActiveSession();
+      sendJson(res, 200, { ok: true, sessionId: context.session.id });
+    } finally {
+      runFlight.end();
+    }
     return;
   }
 
   if (req.method === 'POST' && url.pathname === '/api/stop') {
+    runFlight.requestStop();
     const stopped = bridge.stop();
     if (stopped) await activeContext.transcript.finishStopped();
     broadcast(sessionMessage({
@@ -382,6 +406,7 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
   }
 
   if (msg.type === 'stop') {
+    runFlight.requestStop();
     const stopped = bridge.stop();
     if (!stopped) sendStatus(ws, true);
     return;
@@ -389,10 +414,14 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
 
   if (msg.type === 'select_session') {
     if (!msg.sessionId) throw new Error('session_required');
-    if (bridge.isRunning()) throw new Error('claude_is_busy');
-    const context = await projectSessions.selectSession(msg.sessionId);
-    await selectActiveSession(context);
-    broadcastActiveSession();
+    if (!runFlight.tryBegin('mutate')) throw new Error('claude_is_busy');
+    try {
+      const context = await projectSessions.selectSession(msg.sessionId);
+      await selectActiveSession(context);
+      broadcastActiveSession();
+    } finally {
+      runFlight.end();
+    }
     return;
   }
 
@@ -416,7 +445,23 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
   const attachmentIds = (msg.attachmentIds ?? []) as string[];
   if (!prompt && attachmentIds.length === 0) return;
   if (prompt.length > MAX_BODY_BYTES) throw new Error('prompt_too_large');
-  if (bridge.isRunning()) throw new Error('claude_is_busy');
+  if (!runFlight.tryBegin('prompt')) throw new Error('claude_is_busy');
+  try {
+    await runPromptFlight(msg, prompt, attachmentIds);
+  } finally {
+    runFlight.end();
+  }
+}
+
+async function runPromptFlight(
+  msg: {
+    sessionId?: string;
+    permissionMode?: string;
+    model?: unknown;
+  },
+  prompt: string,
+  attachmentIds: string[],
+): Promise<void> {
   const permissionMode = parsePermissionMode(msg.permissionMode);
   const model = normalizeClaudeModel(msg.model);
   if (permissionMode === 'bypassPermissions' && !ALLOW_BYPASS_PERMISSIONS) {
@@ -424,6 +469,8 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
   }
   if (msg.sessionId && msg.sessionId !== activeContext.session.id) {
     const context = await projectSessions.selectSession(msg.sessionId);
+    // Abort if stop arrived while we were switching sessions.
+    if (runFlight.isStopRequested()) return;
     await selectActiveSession(context);
     broadcastActiveSession();
   }
@@ -438,8 +485,12 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     runContext.project.id,
     runContext.session.id,
   );
+  if (runFlight.isStopRequested()) return;
+
   const displayPrompt = prompt;
   const claudePrompt = promptWithAttachments(prompt, promptAttachments);
+  if (runFlight.isStopRequested()) return;
+
   runContext.transcript.beginPrompt(
     displayPrompt,
     permissionMode,
@@ -449,6 +500,18 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     runContext.session.id,
     prompt || promptAttachments[0]?.name || '附件会话',
   );
+  if (runFlight.isStopRequested()) {
+    await runContext.transcript.finishStopped();
+    broadcast(sessionMessage({ type: 'stopped' }, runContext));
+    broadcast(sessionMessage({
+      type: 'status',
+      authenticated: true,
+      running: false,
+      hasClaudeSessionId: Boolean(runContext.transcript.snapshot().claudeSessionId),
+    }, runContext));
+    broadcastCatalog();
+    return;
+  }
   broadcastCatalog();
   broadcast(sessionMessage({
     type: 'status',
@@ -621,7 +684,7 @@ function sendStatus(ws: WebSocket, authenticated: boolean): void {
   send(ws, sessionMessage({
     type: 'status',
     authenticated,
-    running: bridge.isRunning(),
+    running: runFlight.isBusy(),
     hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
     workspaceDir: activeContext.project.path,
   }));
@@ -652,6 +715,7 @@ function refreshCommands(): Promise<string[]> {
 function createBridge(workspaceDir: string): ClaudeBridge {
   return new ClaudeBridge({
     claudeBin: CLAUDE_BIN,
+    claudeArgs: CLAUDE_ARGS,
     workspaceDir,
     allowBypassPermissions: ALLOW_BYPASS_PERMISSIONS,
   });
@@ -684,7 +748,7 @@ function broadcastActiveSession(): void {
   broadcast(sessionMessage({
     type: 'status',
     authenticated: true,
-    running: bridge.isRunning(),
+    running: runFlight.isBusy(),
     hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
     workspaceDir: activeContext.project.path,
   }));
