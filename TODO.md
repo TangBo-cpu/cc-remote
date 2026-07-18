@@ -1,6 +1,6 @@
 # TODO
 
-本文同步到 `master` 当前版本。Signal Console 手机端重设计、可靠性自动化和回复气泡修复已经完成，并通过电脑端与 Flutter 回归测试。
+本文同步到 `master` 当前版本。Signal Console 手机端主链路、工作区冷启动对齐、流式性能合批和可靠性自动化已经完成，并通过电脑端与 Flutter 回归测试。
 
 ## 已完成
 
@@ -15,9 +15,11 @@
 - [x] 权限请求双向控制和六种权限模式
 - [x] transcript、审批状态、模型和上下文持久化
 - [x] 多项目注册、多会话创建与切换
+- [x] 冷启动按 `WORKSPACE_DIR` / 启动目录注册并激活项目
 - [x] 只读工作区、文件内容和 Git diff API
 - [x] 会话附件上传、隔离保存和路径脱敏
 - [x] `cc-remote` 一键启动与重复运行时注册项目
+- [x] 流式 `text` 短时合批推送，任务结束前 flush 尾包
 - [x] daemon HTTP、WebSocket、鉴权和静态暴露黑盒测试
 - [x] Claude CLI fixture 覆盖 session resume 和 Windows Stop 进程树清理
 - [x] 实际 daemon、WebSocket 和 Claude CLI 完成两轮 resume 与 Stop 验证
@@ -29,8 +31,11 @@
 - [x] prompt、流式输出、停止和错误状态
 - [x] Claude Code 斜杠指令搜索与滚动选择
 - [x] 思考计时、安全化工具活动和 Markdown 输出
+- [x] 流式期间轻量文本渲染，结束后再 Markdown
+- [x] 流式 `setState` 合批与本地 transcript 落盘节流
 - [x] 权限模式选择和一次性工具审批
 - [x] 项目与会话面板、新会话和 transcript 恢复
+- [x] 项目完整路径显示（会话面板与设置页）
 - [x] 工作区文件与 Git diff 抽屉
 - [x] 拍照、图片和文件附件
 - [x] Android 后台本地通知与通知开关
@@ -54,6 +59,8 @@
 - [x] 错误 Origin 和 Host 被 daemon 拒绝，WebSocket upgrade 同样受限
 - [ ] 手机浏览器通过公网域名访问 `/api/health`
 - [x] 确认 `.data/` 不会被本地或公网静态服务暴露
+- [ ] 冷启动切换到另一项目目录后，手机 catalog 与 Claude cwd 同步
+- [ ] 公网隧道下首字延迟与流式顺滑度对照本机
 
 ## 后续功能
 
@@ -64,6 +71,8 @@
 - [ ] 一键重置配对接口
 - [ ] 桌面托盘二维码窗口
 - [ ] 应用签名、版本发布和商店材料
+- [ ] Claude 进程预热 / 长驻 bridge，继续压首包延迟
+- [ ] 可选局域网直连调试入口（默认仍走 tunnel）
 
 ## 保持不做
 

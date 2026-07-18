@@ -17,7 +17,9 @@ Flutter App
 
 已经支持扫码配对、Bearer token、WebSocket 首包鉴权、流式输出、停止任务、六种权限模式、手机端一次性工具审批、斜杠指令、多项目与多会话、transcript 恢复、模型与上下文显示、只读工作区、Git diff、图片与文件附件、Android 后台本地通知和离线重连。
 
-当前限制是单设备授权。工作区不提供远程编辑、暂存和提交。会话全文搜索、归档、删除与 FCM 远程推送尚未实现。
+最近补齐了工作区冷启动对齐：daemon 启动时会按 `WORKSPACE_DIR` / 启动目录注册并激活项目，和“daemon 已在跑时再执行 `cc-remote`”语义一致。手机「项目与会话」面板与设置页会显示完整项目路径。流式回复做了文本合批、流式轻渲染和本地落盘节流，减轻手机经隧道时的卡顿体感。
+
+当前限制是单设备授权。工作区不提供远程编辑、暂存和提交。手机不能注册任意电脑目录，只能切换电脑端已注册项目。会话全文搜索、归档、删除与 FCM 远程推送尚未实现。
 
 ## 启动电脑端
 
@@ -29,7 +31,7 @@ cc-remote
 
 命令会启动 daemon 和 Cloudflare Tunnel，并在终端显示手机配对二维码。按 `Ctrl+C` 会停止本次启动的 daemon 和 tunnel。
 
-如果 daemon 已经运行，在另一个项目目录再次执行 `cc-remote`，命令会把该目录注册到现有 daemon，并切换到该项目，不会重复启动服务。手机端随后可以在项目与会话面板中切换。
+如果 daemon 已经运行，在另一个项目目录再次执行 `cc-remote`，命令会把该目录注册到现有 daemon，并切换到该项目，不会重复启动服务。如果 daemon 重新冷启动，也会按本次启动目录激活对应项目，不会一直停在上次活动项目。手机端随后可以在「项目与会话」面板中切换已注册项目，并看到完整路径。
 
 项目内也可以使用：
 
@@ -178,7 +180,7 @@ POST /api/logout
 
 服务端消息包括 `status`、`catalog`、`transcript_snapshot`、`permission_capabilities`、`permission_request`、`permission_resolved`、`permission_expired`、`commands`、`session_info`、`activity`、`text`、`done`、`stopped` 和 `error`。
 
-`activity` 只发送安全化后的思考状态、工具名和摘要，不发送私有思考文本或完整工具结果。会话消息带 `projectId` 和 `sessionId`，App 重连后以 daemon 的 `transcript_snapshot` 为准恢复内容。
+`activity` 只发送安全化后的思考状态、工具名和摘要，不发送私有思考文本或完整工具结果。`text` 在 daemon 侧会短时合批后再推送，任务结束前会 flush 尾包。会话消息带 `projectId` 和 `sessionId`，App 重连后以 daemon 的 `transcript_snapshot` 为准恢复内容。
 
 ## 配置
 
@@ -187,7 +189,7 @@ POST /api/logout
 | `HOST` | `127.0.0.1` | daemon 监听地址 |
 | `PORT` | `8787` | daemon 监听端口 |
 | `PUBLIC_ORIGIN` | `http://127.0.0.1:8787` | 手机访问的源站 |
-| `WORKSPACE_DIR` | 当前目录 | 初始项目目录 |
+| `WORKSPACE_DIR` | 当前目录 | 启动时注册并激活的项目目录 |
 | `CLAUDE_BIN` | `claude` | Claude Code CLI 路径 |
 | `DEVICE_NAME` | 当前主机名 | 配对时显示的电脑名 |
 | `ALLOW_BYPASS_PERMISSIONS` | `1` | 是否允许手机为单次任务选择跳过权限 |
