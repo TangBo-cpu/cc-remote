@@ -46,6 +46,9 @@ const CLAUDE_ARGS = process.env.CLAUDE_ARGS
 const DEVICE_NAME = process.env.DEVICE_NAME || hostname();
 const ALLOW_BYPASS_PERMISSIONS = process.env.ALLOW_BYPASS_PERMISSIONS !== '0';
 const MAX_BODY_BYTES = 64 * 1024;
+// ponytail: single-device product; raise only if multi-device lands
+const MAX_WS_CONNECTIONS = Number(process.env.MAX_WS_CONNECTIONS || 16);
+const WS_AUTH_TIMEOUT_MS = Number(process.env.WS_AUTH_TIMEOUT_MS || 10_000);
 
 const publicUrl = new URL(PUBLIC_ORIGIN);
 const auth = await createAuthState();
@@ -60,6 +63,7 @@ let bridge = createBridge(activeContext.project.path);
 // Serializes prompt/select/register across awaits; bridge.isRunning alone races.
 const runFlight = createRunFlight(() => bridge.isRunning());
 const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_BODY_BYTES });
+const openSockets = new Set<WebSocket>();
 const authedSockets = new Set<WebSocket>();
 const commandCaches = new Map<string, string[]>();
 const commandDiscoveries = new Map<string, Promise<string[]>>();
@@ -99,6 +103,11 @@ server.on('upgrade', (req, socket, head) => {
     socket.destroy();
     return;
   }
+  if (openSockets.size >= MAX_WS_CONNECTIONS) {
+    socket.write('HTTP/1.1 503 Service Unavailable\r\n\r\n');
+    socket.destroy();
+    return;
+  }
 
   wss.handleUpgrade(req, socket, head, ws => {
     wss.emit('connection', ws, req);
@@ -108,8 +117,21 @@ server.on('upgrade', (req, socket, head) => {
 wss.on('connection', ws => {
   let authenticated = false;
   let authGeneration = -1;
+  openSockets.add(ws);
+  const authTimer = setTimeout(() => {
+    if (!authenticated && ws.readyState === WebSocket.OPEN) {
+      ws.close(1008, 'auth_timeout');
+    }
+  }, WS_AUTH_TIMEOUT_MS);
+  authTimer.unref?.();
+
+  const clearAuthTimer = () => {
+    clearTimeout(authTimer);
+  };
 
   ws.on('close', () => {
+    clearAuthTimer();
+    openSockets.delete(ws);
     authedSockets.delete(ws);
   });
 
@@ -123,6 +145,7 @@ wss.on('connection', ws => {
       authenticate: token => {
         if (!auth.verifyToken(token)) return false;
         authenticated = true;
+        clearAuthTimer();
         authGeneration = auth.getAuthGeneration();
         authedSockets.add(ws);
         sendStatus(ws, true);
@@ -144,7 +167,13 @@ wss.on('connection', ws => {
         return true;
       },
     }).catch(err => {
-      send(ws, { type: 'error', message: err instanceof Error ? err.message : String(err) });
+      const message = err instanceof Error ? err.message : String(err);
+      send(ws, { type: 'error', message });
+      // Unauthenticated peers must not keep the socket after a bad first frame.
+      if (!authenticated) {
+        clearAuthTimer();
+        ws.close(1008, message.slice(0, 64));
+      }
     });
   });
 });
@@ -818,6 +847,7 @@ function broadcast(data: unknown): void {
 
 function closeAllSockets(): void {
   for (const client of wss.clients) client.close(1008, 'authorization_changed');
+  openSockets.clear();
   authedSockets.clear();
 }
 
