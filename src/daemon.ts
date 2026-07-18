@@ -200,6 +200,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   }
 
   if (req.method === 'POST' && url.pathname === '/api/local/projects/register') {
+    // Token alone is not enough: tunnel traffic also arrives from 127.0.0.1.
+    if (!isLocalControlRequest(req)) {
+      sendJson(res, 403, { error: 'local_only' });
+      return;
+    }
     if (!localControl.verify(headerValue(req, 'x-cc-remote-local-token'))) {
       sendJson(res, 401, { error: 'invalid_local_control_token' });
       return;
@@ -906,4 +911,18 @@ function isLoopbackHost(host: string): boolean {
   if (lower === '[::1]' || lower.startsWith('[::1]:')) return true;
   const name = lower.split(':')[0];
   return name === '127.0.0.1' || name === 'localhost';
+}
+
+function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false;
+  const value = address.toLowerCase();
+  return value === '127.0.0.1'
+    || value === '::1'
+    || value === '::ffff:127.0.0.1';
+}
+
+/** Local control APIs require both loopback peer and loopback Host (not public tunnel Host). */
+function isLocalControlRequest(req: IncomingMessage): boolean {
+  const remote = req.socket.remoteAddress;
+  return isLoopbackAddress(remote) && isLoopbackHost(req.headers.host || '');
 }
