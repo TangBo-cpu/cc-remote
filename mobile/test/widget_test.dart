@@ -9,6 +9,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:cc_remote/main.dart';
 import 'package:cc_remote/attachments.dart';
 import 'package:cc_remote/chat_background.dart';
+import 'package:cc_remote/data/permission_mode.dart';
+import 'package:cc_remote/data/remote_models.dart';
 import 'package:cc_remote/notification_service.dart';
 import 'package:cc_remote/model_preference.dart';
 import 'package:cc_remote/signal_console_theme.dart';
