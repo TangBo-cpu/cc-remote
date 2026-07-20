@@ -50,4 +50,22 @@ void main() {
     expect(request.headers['content-type'], 'application/json');
     client.close();
   });
+
+  test('preserves an origin base path when resolving api routes', () async {
+    late http.BaseRequest request;
+    final client = RemoteApiClient(
+      client: MockClient((incoming) async {
+        request = incoming;
+        return http.Response('{}', 200);
+      }),
+    );
+
+    await client.get(
+      Uri.parse('https://example.test/tunnel'),
+      '/api/status',
+    );
+
+    expect(request.url.toString(), 'https://example.test/tunnel/api/status');
+    client.close();
+  });
 }

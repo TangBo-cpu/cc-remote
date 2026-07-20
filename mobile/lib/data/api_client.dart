@@ -1,5 +1,7 @@
 import 'package:http/http.dart' as http;
 
+import 'remote_origin.dart';
+
 class RemoteApiClient {
   RemoteApiClient({http.Client? client}) : client = client ?? http.Client();
 
@@ -12,7 +14,7 @@ class RemoteApiClient {
     Duration timeout = const Duration(seconds: 12),
   }) {
     return client
-        .get(origin.resolve(path), headers: _headers(token))
+        .get(resolveRemotePath(origin, path), headers: _headers(token))
         .timeout(timeout);
   }
 
@@ -26,7 +28,7 @@ class RemoteApiClient {
   }) {
     return client
         .post(
-          origin.resolve(path),
+          resolveRemotePath(origin, path),
           headers: _headers(token, jsonBody: jsonBody),
           body: body,
         )
@@ -40,7 +42,7 @@ class RemoteApiClient {
     Duration timeout = const Duration(seconds: 12),
   }) {
     return client
-        .delete(origin.resolve(path), headers: _headers(token))
+        .delete(resolveRemotePath(origin, path), headers: _headers(token))
         .timeout(timeout);
   }
 

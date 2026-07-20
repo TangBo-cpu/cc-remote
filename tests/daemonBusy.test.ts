@@ -39,7 +39,8 @@ test('second concurrent prompt is rejected as claude_is_busy', async () => {
       text: 'hang please',
       permissionMode: 'manual',
     }));
-    await inbox.next(message => message.type === 'status' && message.running === true);
+    const started = await inbox.next(message => message.type === 'status' && message.running === true);
+    assert.equal(typeof started.runId, 'string');
 
     socket.send(JSON.stringify({
       type: 'prompt',
@@ -65,9 +66,10 @@ test('second concurrent prompt is rejected as claude_is_busy', async () => {
     assert.deepEqual(await createResponse.json(), { error: 'claude_is_busy' });
 
     socket.send(JSON.stringify({ type: 'stop' }));
-    await inbox.next(message =>
+    const stopped = await inbox.next(message =>
       message.type === 'stopped'
       || (message.type === 'status' && message.running === false));
+    assert.equal(stopped.runId, started.runId);
   } finally {
     socket.close();
   }

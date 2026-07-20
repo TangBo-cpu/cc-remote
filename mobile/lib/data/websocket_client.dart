@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'remote_origin.dart';
+
 typedef WebSocketMessageHandler = void Function(dynamic data);
 typedef WebSocketErrorHandler = void Function(Object error);
 
@@ -13,6 +15,7 @@ class RemoteWebSocketClient {
   final WebSocketChannel Function(Uri) _connect;
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _subscription;
+  int _generation = 0;
 
   WebSocketChannel? get channel => _channel;
 
@@ -25,11 +28,21 @@ class RemoteWebSocketClient {
   }) {
     close();
     final channel = _connect(webSocketUri(origin));
+    final generation = ++_generation;
     _channel = channel;
     _subscription = channel.stream.listen(
-      onMessage,
-      onError: onError,
-      onDone: onDone,
+      (data) {
+        if (!_isCurrent(channel, generation)) return;
+        onMessage(data);
+      },
+      onError: (Object error, StackTrace stackTrace) {
+        if (!_isCurrent(channel, generation)) return;
+        onError(error);
+      },
+      onDone: () {
+        if (!_isCurrent(channel, generation)) return;
+        onDone();
+      },
     );
     channel.sink.add(jsonEncode({'type': 'auth', 'token': token}));
   }
@@ -45,6 +58,7 @@ class RemoteWebSocketClient {
   }
 
   void close() {
+    _generation += 1;
     final subscription = _subscription;
     if (subscription != null) unawaited(subscription.cancel());
     _subscription = null;
@@ -53,7 +67,10 @@ class RemoteWebSocketClient {
   }
 
   static Uri webSocketUri(Uri origin) {
-    final scheme = origin.scheme == 'https' ? 'wss' : 'ws';
-    return Uri.parse('$scheme://${origin.authority}/ws');
+    return remoteWebSocketUri(origin);
+  }
+
+  bool _isCurrent(WebSocketChannel channel, int generation) {
+    return generation == _generation && identical(channel, _channel);
   }
 }

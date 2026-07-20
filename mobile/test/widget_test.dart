@@ -306,8 +306,9 @@ void main() {
   test('remote transcript snapshot restores messages and session context', () {
     final snapshot = RemoteTranscriptSnapshot.tryParse({
       'version': 1,
-      'revision': 8,
-      'running': true,
+       'revision': 8,
+       'running': true,
+       'runId': 'run-8',
       'permissionMode': 'manual',
       'pendingPermissions': [
         {
@@ -340,6 +341,7 @@ void main() {
     expect(snapshot, isNotNull);
     expect(snapshot!.revision, 8);
     expect(snapshot.running, isTrue);
+    expect(snapshot.runId, 'run-8');
     expect(snapshot.messages, hasLength(3));
     expect(snapshot.messages.last.activityTool, 'Read');
     expect(snapshot.modelName, 'claude-opus-4-8');
@@ -387,6 +389,21 @@ void main() {
           snapshot: persistedRemote,
           currentRevision: 4,
           hasLocalMessages: false,
+        ),
+        isFalse,
+      );
+      expect(
+        shouldApplyRemoteTranscriptSnapshot(
+          snapshot: const RemoteTranscriptSnapshot(
+            revision: 4,
+            running: true,
+            messages: [],
+            permissionMode: PermissionMode.manual,
+            pendingPermissions: [],
+          ),
+          currentRevision: 4,
+          hasLocalMessages: false,
+          hasUnappliedLiveChanges: true,
         ),
         isFalse,
       );
@@ -1183,6 +1200,17 @@ void main() {
     expect(messages, hasLength(3));
   });
 
+  test('parses stopped remote activities', () {
+    final activity = RemoteActivity.tryParse({
+      'id': 'tool-1',
+      'kind': 'tool',
+      'state': 'stopped',
+    });
+
+    expect(activity, isNotNull);
+    expect(activity!.state, ActivityState.stopped);
+  });
+
   test(
     'completed replies remove current tool activity from the transcript',
     () {
@@ -1746,6 +1774,29 @@ void main() {
     expect(payload.origin.toString(), 'https://tbhaoshuai.ccwu.cc');
     expect(payload.nonce, 'abc123');
     expect(payload.deviceName, 'Jayson PC');
+  });
+
+  test('rejects expired daemon QR pairing payloads', () {
+    expect(
+      () => PairingPayload.parse(
+        jsonEncode({
+          'type': 'cc-remote-pair',
+          'version': 1,
+          'origin': 'https://tbhaoshuai.ccwu.cc',
+          'nonce': 'abc123',
+          'expiresAt': DateTime.now()
+              .subtract(const Duration(minutes: 1))
+              .millisecondsSinceEpoch,
+        }),
+      ),
+      throwsA(
+        isA<FormatException>().having(
+          (error) => error.message,
+          'message',
+          'expired_pairing_payload',
+        ),
+      ),
+    );
   });
 
   test('network timeout gets a useful pairing error', () {

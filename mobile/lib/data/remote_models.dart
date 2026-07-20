@@ -37,6 +37,9 @@ class PairingPayload {
         expiresAt is! int) {
       throw const FormatException('bad_pairing_payload');
     }
+    if (expiresAt <= DateTime.now().millisecondsSinceEpoch) {
+      throw const FormatException('expired_pairing_payload');
+    }
 
     return PairingPayload(
       origin: origin,
@@ -310,6 +313,7 @@ class RemoteActivity {
       'running' => ActivityState.running,
       'done' => ActivityState.done,
       'error' => ActivityState.error,
+      'stopped' => ActivityState.stopped,
       _ => null,
     };
     if (id is! String || kind == null || state == null) return null;
@@ -368,6 +372,7 @@ class RemoteTranscriptSnapshot {
     required this.messages,
     required this.permissionMode,
     required this.pendingPermissions,
+    this.runId,
     this.modelName,
     this.contextWindow,
     this.remainingContext,
@@ -378,6 +383,7 @@ class RemoteTranscriptSnapshot {
   final List<TranscriptMessage> messages;
   final PermissionMode permissionMode;
   final List<RemotePermissionRequest> pendingPermissions;
+  final String? runId;
   final String? modelName;
   final int? contextWindow;
   final int? remainingContext;
@@ -402,6 +408,7 @@ class RemoteTranscriptSnapshot {
             )
             .toList(),
         permissionMode: PermissionMode.fromWire(json['permissionMode']),
+        runId: json['runId'] as String?,
         pendingPermissions: (json['pendingPermissions'] as List? ?? const [])
             .map(
               (item) => RemotePermissionRequest.tryParse(
@@ -424,8 +431,12 @@ bool shouldApplyRemoteTranscriptSnapshot({
   required RemoteTranscriptSnapshot snapshot,
   required int currentRevision,
   required bool hasLocalMessages,
+  bool hasUnappliedLiveChanges = false,
 }) {
   if (snapshot.revision < currentRevision) return false;
+  if (snapshot.revision == currentRevision && hasUnappliedLiveChanges) {
+    return false;
+  }
   return snapshot.revision != 0 || !hasLocalMessages;
 }
 

@@ -88,6 +88,31 @@ class DemoShell extends StatefulWidget {
 class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   static const networkTimeout = Duration(seconds: 12);
   static const interruptedRunMessage = '上次任务可能仍在电脑端运行，请重连确认';
+  static const disconnectedRunMessage = '连接已断开，正在等待电脑端状态';
+  static const sessionScopedMessageTypes = <String>{
+    'status',
+    'transcript_snapshot',
+    'permission_request',
+    'permission_resolved',
+    'permission_expired',
+    'text',
+    'commands',
+    'session_info',
+    'activity',
+    'done',
+    'stopped',
+    'error',
+  };
+  static const runScopedMessageTypes = <String>{
+    'text',
+    'activity',
+    'permission_request',
+    'permission_resolved',
+    'permission_expired',
+    'done',
+    'stopped',
+    'error',
+  };
 
   ShellRoute route = ShellRoute.boot;
   bool running = false;
@@ -103,7 +128,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   int? remainingContext;
   String? activeProjectId;
   String? activeSessionId;
+  String? activeRunId;
   int remoteTranscriptRevision = 0;
+  bool hasUnappliedLiveTranscriptChanges = false;
   bool allowBypassPermissions = false;
   bool notificationsEnabled = true;
   bool notificationsReady = false;
@@ -425,6 +452,36 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     );
   }
 
+  void removeDisconnectedRunNotice() {
+    messages.removeWhere(
+      (message) =>
+          message.role == MessageRole.system &&
+          message.text == disconnectedRunMessage,
+    );
+  }
+
+  bool acceptWsMessage(Map<String, dynamic> decoded) {
+    final type = decoded['type'];
+    if (type is! String) return false;
+
+    if (sessionScopedMessageTypes.contains(type)) {
+      final messageSessionId = decoded['sessionId'];
+      if (messageSessionId is! String) return false;
+      if (activeSessionId != null && messageSessionId != activeSessionId) {
+        return false;
+      }
+    }
+
+    if (!runScopedMessageTypes.contains(type)) return true;
+    final messageRunId = decoded['runId'];
+    if (messageRunId is! String) {
+      return activeRunId == null;
+    }
+    if (activeRunId != null && messageRunId != activeRunId) return false;
+    activeRunId ??= messageRunId;
+    return true;
+  }
+
   Future<void> refreshConnection() async {
     final current = session;
     if (widget.demoMode || route != ShellRoute.chat || current == null) return;
@@ -474,7 +531,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       }
       setState(() {
         remoteOffline = true;
-        running = false;
         stopping = false;
       });
       persistTranscriptSnapshotLater();
@@ -545,7 +601,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         route = ShellRoute.chat;
         wsReady = false;
         remoteOffline = true;
-        running = false;
         stopping = false;
       });
       persistTranscriptSnapshotLater();
@@ -589,6 +644,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     }
 
     closeWs();
+    activeRunId = null;
     setState(() => wsReady = false);
 
     try {
@@ -613,12 +669,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       return;
     }
 
-    final messageSessionId = decoded['sessionId'];
-    if (messageSessionId is String &&
-        activeSessionId != null &&
-        messageSessionId != activeSessionId) {
-      return;
-    }
+    if (!acceptWsMessage(decoded)) return;
 
     switch (decoded['type']) {
       case 'catalog':
@@ -635,6 +686,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             stopping = false;
             pendingAttachments.clear();
             remoteTranscriptRevision = 0;
+            activeRunId = null;
+            hasUnappliedLiveTranscriptChanges = false;
             clearStreamTextBatch(apply: false);
             messages.clear();
             pendingPermissions.clear();
@@ -661,6 +714,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           wsReady = decoded['authenticated'] == true;
           remoteOffline = false;
           running = decoded['running'] == true;
+          final nextRunId = decoded['runId'];
+          activeRunId = running && nextRunId is String ? nextRunId : null;
+          removeDisconnectedRunNotice();
           if (!running) stopping = false;
           if (running) currentRunFailed = false;
           if (!running) removeInterruptedRunNotice();
@@ -674,6 +730,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
               snapshot: snapshot,
               currentRevision: remoteTranscriptRevision,
               hasLocalMessages: messages.isNotEmpty,
+              hasUnappliedLiveChanges: hasUnappliedLiveTranscriptChanges,
             )) {
           return;
         }
@@ -681,6 +738,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         setState(() {
           remoteTranscriptRevision = snapshot.revision;
           running = snapshot.running;
+          activeRunId = snapshot.running ? snapshot.runId ?? activeRunId : null;
+          hasUnappliedLiveTranscriptChanges = false;
+          removeDisconnectedRunNotice();
           if (!running) stopping = false;
           messages
             ..clear()
@@ -719,6 +779,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           } else {
             pendingPermissions.add(request);
           }
+          hasUnappliedLiveTranscriptChanges = true;
         });
         showBackgroundNotification(
           key: 'permission-${request.requestId}',
@@ -737,6 +798,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             (request) => request.requestId == requestId,
           );
           respondingPermissionIds.remove(requestId);
+          hasUnappliedLiveTranscriptChanges = true;
         });
       case 'permission_expired':
         final requestId = decoded['requestId'];
@@ -747,6 +809,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           );
           respondingPermissionIds.remove(requestId);
           messages.add(TranscriptMessage.system('这个审批请求已失效'));
+          hasUnappliedLiveTranscriptChanges = true;
         });
         persistTranscriptSnapshotLater();
       case 'text':
@@ -769,7 +832,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       case 'activity':
         final activity = RemoteActivity.tryParse(decoded);
         if (activity == null) return;
-        setState(() => mergeRemoteActivity(messages, activity));
+        setState(() {
+          hasUnappliedLiveTranscriptChanges = true;
+          mergeRemoteActivity(messages, activity);
+        });
         persistTranscriptSnapshotLater();
       case 'done':
         final failed = currentRunFailed;
@@ -778,6 +844,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           running = false;
           stopping = false;
           currentRunFailed = false;
+          activeRunId = null;
+          hasUnappliedLiveTranscriptChanges = true;
+          removeDisconnectedRunNotice();
           activePermissionMode = PermissionMode.manual;
           pendingPermissions.clear();
           respondingPermissionIds.clear();
@@ -800,6 +869,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           running = false;
           stopping = false;
           currentRunFailed = false;
+          activeRunId = null;
+          hasUnappliedLiveTranscriptChanges = true;
+          removeDisconnectedRunNotice();
           activePermissionMode = PermissionMode.manual;
           pendingPermissions.clear();
           respondingPermissionIds.clear();
@@ -818,6 +890,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           running = false;
           stopping = false;
           currentRunFailed = true;
+          activeRunId = null;
+          hasUnappliedLiveTranscriptChanges = true;
+          removeDisconnectedRunNotice();
           activePermissionMode = PermissionMode.manual;
           pendingPermissions.clear();
           respondingPermissionIds.clear();
@@ -852,7 +927,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remoteSessions.clear();
       activeProjectId = null;
       activeSessionId = null;
+      activeRunId = null;
       remoteTranscriptRevision = 0;
+      hasUnappliedLiveTranscriptChanges = false;
       allowBypassPermissions = false;
       selectedPermissionMode = PermissionMode.manual;
       activePermissionMode = PermissionMode.manual;
@@ -861,7 +938,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     });
   }
 
-  void handleWsClosed(String message) {
+  void handleWsClosed(String _) {
     if (!mounted || route != ShellRoute.chat) return;
     flushStreamTextBatch();
     setState(() {
@@ -869,9 +946,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remoteOffline = true;
       stopping = false;
       if (running) {
-        running = false;
-        finishRunningActivities(messages, ActivityState.stopped);
-        messages.add(TranscriptMessage.system(message));
+        hasUnappliedLiveTranscriptChanges = true;
+        if (!messages.any(
+          (item) =>
+              item.role == MessageRole.system &&
+              item.text == disconnectedRunMessage,
+        )) {
+          messages.add(TranscriptMessage.system(disconnectedRunMessage));
+        }
       }
     });
     persistTranscriptSnapshotNow();
@@ -879,6 +961,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   void queueAssistantText(String text) {
     if (text.isEmpty) return;
+    hasUnappliedLiveTranscriptChanges = true;
     pendingAssistantText += text;
     streamTextFlushTimer ??= Timer(streamTextBatchInterval, flushStreamTextBatch);
   }
@@ -1033,6 +1116,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       stopping = false;
       currentRunFailed = false;
       activePermissionMode = selectedPermissionMode;
+      hasUnappliedLiveTranscriptChanges = true;
       beginPrompt(messages, text, attachments: uploaded);
       if (selectedPermissionMode == PermissionMode.bypassPermissions) {
         selectedPermissionMode = PermissionMode.manual;
@@ -1163,8 +1247,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     final channel = ws;
     if (channel == null || !wsReady) {
       setState(() {
-        running = false;
         stopping = false;
+        hasUnappliedLiveTranscriptChanges = true;
         messages.add(TranscriptMessage.system('未连接，无法发送停止指令'));
       });
       persistTranscriptSnapshotLater();
@@ -1227,6 +1311,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           activeSessionId = body['sessionId'] as String;
         }
         remoteTranscriptRevision = 0;
+        activeRunId = null;
+        hasUnappliedLiveTranscriptChanges = false;
         modelName = null;
         contextWindow = null;
         remainingContext = null;

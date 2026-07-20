@@ -67,6 +67,8 @@ const openSockets = new Set<WebSocket>();
 const authedSockets = new Set<WebSocket>();
 const commandCaches = new Map<string, string[]>();
 const commandDiscoveries = new Map<string, Promise<string[]>>();
+let nextRunId = 0;
+let activeRunId: string | undefined;
 let sessionInfo: ClaudeSessionInfo = activeContext.transcript.snapshot().sessionInfo;
 if (!Object.keys(sessionInfo).length) {
   const restoredSessionInfo = await restoreClaudeSessionInfo({
@@ -162,7 +164,7 @@ wss.on('connection', ws => {
         send(ws, sessionMessage({
           type: 'transcript_snapshot',
           ...activeContext.transcript.snapshot(),
-        }));
+        }, activeContext, activeRunId));
         send(ws, { type: 'permission_capabilities', allowBypassPermissions: ALLOW_BYPASS_PERMISSIONS });
         return true;
       },
@@ -488,7 +490,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       authenticated: true,
       running: false,
       hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
-    }));
+    }, activeContext, activeRunId));
     sendJson(res, 200, { stopped });
     return;
   }
@@ -565,9 +567,12 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
   if (!prompt && attachmentIds.length === 0) return;
   if (prompt.length > MAX_BODY_BYTES) throw new Error('prompt_too_large');
   if (!runFlight.tryBegin('prompt')) throw new Error('claude_is_busy');
+  const runId = `run-${++nextRunId}`;
+  activeRunId = runId;
   try {
-    await runPromptFlight(msg, prompt, attachmentIds);
+    await runPromptFlight(msg, prompt, attachmentIds, runId);
   } finally {
+    if (activeRunId === runId) activeRunId = undefined;
     runFlight.end();
   }
 }
@@ -580,6 +585,7 @@ async function runPromptFlight(
   },
   prompt: string,
   attachmentIds: string[],
+  runId: string,
 ): Promise<void> {
   const permissionMode = parsePermissionMode(msg.permissionMode);
   const model = normalizeClaudeModel(msg.model);
@@ -621,13 +627,13 @@ async function runPromptFlight(
   );
   if (runFlight.isStopRequested()) {
     await runContext.transcript.finishStopped();
-    broadcast(sessionMessage({ type: 'stopped' }, runContext));
+    broadcast(sessionMessage({ type: 'stopped' }, runContext, runId));
     broadcast(sessionMessage({
       type: 'status',
       authenticated: true,
       running: false,
       hasClaudeSessionId: Boolean(runContext.transcript.snapshot().claudeSessionId),
-    }, runContext));
+    }, runContext, runId));
     broadcastCatalog();
     return;
   }
@@ -637,7 +643,7 @@ async function runPromptFlight(
     authenticated: true,
     running: true,
     hasClaudeSessionId: Boolean(runContext.transcript.snapshot().claudeSessionId),
-  }, runContext));
+  }, runContext, runId));
 
   const runClaude = (sessionId: string | undefined) => bridge.run({
     prompt: claudePrompt,
@@ -650,13 +656,13 @@ async function runPromptFlight(
       const cachedCommands = commandCaches.get(runContext.project.id) || [];
       if (commands.length && commands.join('\n') !== cachedCommands.join('\n')) {
         commandCaches.set(runContext.project.id, commands);
-        broadcast(sessionMessage({ type: 'commands', commands }, runContext));
+        broadcast(sessionMessage({ type: 'commands', commands }, runContext, runId));
       }
       const nextSessionInfo = extractClaudeSessionInfo(event);
       if (nextSessionInfo) {
         sessionInfo = { ...sessionInfo, ...nextSessionInfo };
         runContext.transcript.setSessionInfo(nextSessionInfo);
-        broadcast(sessionMessage({ type: 'session_info', ...sessionInfo }, runContext));
+        broadcast(sessionMessage({ type: 'session_info', ...sessionInfo }, runContext, runId));
       }
       for (const activity of extractClaudeActivities(event)) {
         const publicActivity = redactAttachmentPaths(
@@ -665,11 +671,11 @@ async function runPromptFlight(
           uploadDirectory,
         );
         runContext.transcript.mergeActivity(publicActivity);
-        broadcast(sessionMessage({ type: 'activity', ...publicActivity }, runContext));
+        broadcast(sessionMessage({ type: 'activity', ...publicActivity }, runContext, runId));
       }
     },
     onText: text => {
-      enqueueTextDelta(runContext, text);
+      enqueueTextDelta(runContext, text, runId);
     },
     onSessionId: sessionId => {
       runContext.transcript.setClaudeSessionId(sessionId);
@@ -677,11 +683,11 @@ async function runPromptFlight(
     },
     onPermissionRequest: request => {
       runContext.transcript.addPermission(request);
-      broadcast(sessionMessage(permissionRequestMessage(request), runContext));
+      broadcast(sessionMessage(permissionRequestMessage(request), runContext, runId));
     },
     onPermissionClosed: requestId => {
       runContext.transcript.removePermission(requestId);
-      broadcast(sessionMessage({ type: 'permission_resolved', requestId }, runContext));
+      broadcast(sessionMessage({ type: 'permission_resolved', requestId }, runContext, runId));
     },
   });
 
@@ -702,11 +708,11 @@ async function runPromptFlight(
   }
   if (result.stopped) {
     await runContext.transcript.finishStopped();
-    broadcast(sessionMessage({ type: 'stopped' }, runContext));
+    broadcast(sessionMessage({ type: 'stopped' }, runContext, runId));
   } else {
     if (result.exitCode !== 0 && result.stderr) {
       await runContext.transcript.finishError(result.stderr);
-      broadcast(sessionMessage({ type: 'error', message: result.stderr }, runContext));
+      broadcast(sessionMessage({ type: 'error', message: result.stderr }, runContext, runId));
     } else {
       await runContext.transcript.finishDone();
     }
@@ -714,14 +720,14 @@ async function runPromptFlight(
       type: 'done',
       exitCode: result.exitCode,
       claudeSessionId: result.sessionId,
-    }, runContext));
+    }, runContext, runId));
   }
   broadcast(sessionMessage({
     type: 'status',
     authenticated: true,
     running: false,
     hasClaudeSessionId: Boolean(runContext.transcript.snapshot().claudeSessionId),
-  }, runContext));
+  }, runContext, runId));
   broadcastCatalog();
 }
 
@@ -806,7 +812,7 @@ function sendStatus(ws: WebSocket, authenticated: boolean): void {
     running: runFlight.isBusy(),
     hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
     workspaceDir: activeContext.project.path,
-  }));
+  }, activeContext, activeRunId));
 }
 
 function refreshCommands(): Promise<string[]> {
@@ -870,12 +876,12 @@ function broadcastActiveSession(): void {
     running: runFlight.isBusy(),
     hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
     workspaceDir: activeContext.project.path,
-  }));
-  broadcast(sessionMessage({ type: 'session_info', ...sessionInfo }));
+  }, activeContext, activeRunId));
+  broadcast(sessionMessage({ type: 'session_info', ...sessionInfo }, activeContext, activeRunId));
   broadcast(sessionMessage({
     type: 'transcript_snapshot',
     ...activeContext.transcript.snapshot(),
-  }));
+  }, activeContext, activeRunId));
   const commands = commandCaches.get(activeContext.project.id);
   if (commands?.length) broadcast(sessionMessage({ type: 'commands', commands }));
 }
@@ -883,11 +889,13 @@ function broadcastActiveSession(): void {
 function sessionMessage(
   data: Record<string, unknown>,
   context: SessionContext = activeContext,
+  runId: string | undefined = undefined,
 ): Record<string, unknown> {
   return {
     ...data,
     projectId: context.project.id,
     sessionId: context.session.id,
+    ...(runId ? { runId } : {}),
   };
 }
 
@@ -895,15 +903,17 @@ function sessionMessage(
 const TEXT_BATCH_MS = 30;
 let textBatch = '';
 let textBatchContext: SessionContext | undefined;
+let textBatchRunId: string | undefined;
 let textBatchTimer: NodeJS.Timeout | undefined;
 
-function enqueueTextDelta(context: SessionContext, text: string): void {
+function enqueueTextDelta(context: SessionContext, text: string, runId: string): void {
   if (!text) return;
   context.transcript.appendText(text);
   if (textBatchContext && textBatchContext.session.id !== context.session.id) {
     flushTextDeltaBatch();
   }
   textBatchContext = context;
+  textBatchRunId = runId;
   textBatch += text;
   if (!textBatchTimer) {
     textBatchTimer = setTimeout(() => {
@@ -922,13 +932,16 @@ function flushTextDeltaBatch(): void {
   if (!textBatch || !textBatchContext) {
     textBatch = '';
     textBatchContext = undefined;
+    textBatchRunId = undefined;
     return;
   }
   const text = textBatch;
   const context = textBatchContext;
+  const runId = textBatchRunId;
   textBatch = '';
   textBatchContext = undefined;
-  broadcast(sessionMessage({ type: 'text', text }, context));
+  textBatchRunId = undefined;
+  broadcast(sessionMessage({ type: 'text', text }, context, runId));
 }
 
 function broadcast(data: unknown): void {
