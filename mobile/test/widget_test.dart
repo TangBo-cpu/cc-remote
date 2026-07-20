@@ -1584,6 +1584,17 @@ void main() {
       find.descendant(of: assistant, matching: find.byType(MarkdownBody)),
       findsOneWidget,
     );
+    final markdown = tester.widget<MarkdownBody>(
+      find.descendant(of: assistant, matching: find.byType(MarkdownBody)),
+    );
+    expect(
+      markdown.styleSheet!.tableColumnWidth,
+      isA<IntrinsicColumnWidth>(),
+    );
+    expect(
+      markdown.styleSheet!.tableCellsPadding,
+      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+    );
     expect(find.byKey(const ValueKey('assistant-avatar')), findsOneWidget);
     final avatarImage = tester.widget<Image>(
       find.descendant(

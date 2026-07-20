@@ -4832,6 +4832,11 @@ class MessageBlock extends StatelessWidget {
                     ),
                     blockSpacing: 10,
                     listIndent: 22,
+                    tableColumnWidth: const IntrinsicColumnWidth(),
+                    tableCellsPadding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 6,
+                    ),
                     codeblockPadding: const EdgeInsets.all(12),
                     codeblockDecoration: BoxDecoration(
                       color: AppColors.porcelainMuted,
