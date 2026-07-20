@@ -30,7 +30,27 @@ test('registers projects and keeps independent sessions', async () => {
     assert.equal(state.catalog().sessions.length, 3);
     assert.equal(
       state.catalog().sessions.find(item => item.id === another.session.id)?.title,
-      'implement project switching with tes',
+      'implement project switching with tests',
+    );
+
+    await state.setSessionTitle(another.session.id, '  切换项目  ');
+    assert.equal(
+      state.catalog().sessions.find(item => item.id === another.session.id)?.title,
+      '切换项目',
+    );
+
+    const third = await state.createSession(secondContext.project.id, 'to-archive');
+    await state.archiveSession(third.session.id);
+    assert.equal(
+      state.catalog().sessions.find(item => item.id === third.session.id)?.archived,
+      true,
+    );
+
+    const deleted = await state.deleteSession(another.session.id);
+    assert.equal(deleted.deletedSessionId, another.session.id);
+    assert.equal(
+      deleted.catalog.sessions.some(item => item.id === another.session.id),
+      false,
     );
 
     await state.selectSession(initial.session.id);
@@ -43,6 +63,7 @@ test('registers projects and keeps independent sessions', async () => {
     });
     assert.equal(reloaded.active().session.id, initial.session.id);
     assert.equal(reloaded.catalog().projects.length, 2);
+    // archived third + remaining sessions after delete of "another"
     assert.equal(reloaded.catalog().sessions.length, 3);
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -69,6 +90,28 @@ test('registering the launch workspace reactivates it after reload', async () =>
     assert.equal(reloaded.active().project.path, second);
     await reloaded.registerProject(first);
     assert.equal(reloaded.active().project.path, first);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('registerProject skips archived sessions when reactivating a project', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-skip-archived-'));
+  const first = join(dir, 'first');
+  const second = join(dir, 'second');
+  await mkdir(first);
+  await mkdir(second);
+  try {
+    const state = await createProjectSessionState({ dataDir: join(dir, 'data'), initialWorkspace: first });
+    const live = state.active();
+    const archived = await state.createSession(live.project.id, 'old');
+    await state.archiveSession(archived.session.id);
+    assert.equal(state.active().session.id, live.session.id);
+
+    await state.registerProject(second);
+    await state.registerProject(first);
+    assert.equal(state.active().session.id, live.session.id);
+    assert.equal(state.active().session.archivedAt, undefined);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

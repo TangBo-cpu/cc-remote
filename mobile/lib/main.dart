@@ -1347,14 +1347,35 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   void applyCatalog(RemoteProjectCatalog? catalog) {
     if (catalog == null) return;
+    final changedSession =
+        activeSessionId != null && activeSessionId != catalog.activeSessionId;
     activeProjectId = catalog.activeProjectId;
     activeSessionId = catalog.activeSessionId;
+    if (changedSession) {
+      // Match WS catalog handling so HTTP rename/archive/delete cannot leave
+      // the previous session's transcript under the new activeSessionId.
+      uploadingAttachments = false;
+      stopping = false;
+      pendingAttachments.clear();
+      remoteTranscriptRevision = 0;
+      clearStreamTextBatch(apply: false);
+      messages.clear();
+      pendingPermissions.clear();
+      respondingPermissionIds.clear();
+      modelName = null;
+      contextWindow = null;
+      remainingContext = null;
+    }
     projects
       ..clear()
       ..addAll(catalog.projects);
     remoteSessions
       ..clear()
       ..addAll(catalog.sessions);
+    final project = catalog.activeProject;
+    if (project != null && session != null) {
+      session = session!.copyWith(workspaceDir: project.path);
+    }
   }
 
   void openSessions() {
@@ -1368,11 +1389,22 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       running: running || uploadingAttachments,
       onSelect: selectRemoteSession,
       onCreate: createRemoteSession,
+      onRename: renameRemoteSession,
+      onArchive: archiveRemoteSession,
+      onDelete: deleteRemoteSession,
     );
   }
 
   void selectRemoteSession(String sessionId) {
     if (running || uploadingAttachments || sessionId == activeSessionId) return;
+    RemoteSessionSummary? target;
+    for (final item in remoteSessions) {
+      if (item.id == sessionId) {
+        target = item;
+        break;
+      }
+    }
+    if (target?.archived == true) return;
     ws?.sink.add(
       jsonEncode({'type': 'select_session', 'sessionId': sessionId}),
     );
@@ -1396,6 +1428,94 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     } catch (_) {
       if (!mounted) return;
       setState(() => messages.add(TranscriptMessage.system('新建会话失败，请重试')));
+    }
+  }
+
+  Future<void> renameRemoteSession(String sessionId, String title) async {
+    if (running || uploadingAttachments) return;
+    final current = session;
+    if (current == null) return;
+    try {
+      final res = await httpClient
+          .post(
+            current.origin.resolve('/api/sessions/$sessionId/title'),
+            headers: {
+              'Authorization': 'Bearer ${current.token}',
+              'Content-Type': 'application/json',
+            },
+            body: jsonEncode({'title': title}),
+          )
+          .timeout(networkTimeout);
+      if (res.statusCode == 401) throw const UnauthorizedSession();
+      if (res.statusCode != 200) throw StateError('rename_session_failed');
+      final body = jsonDecode(res.body);
+      if (body is Map<String, dynamic>) {
+        final catalog = RemoteProjectCatalog.tryParse(body);
+        if (catalog != null && mounted) {
+          setState(() => applyCatalog(catalog));
+        }
+      }
+    } on UnauthorizedSession {
+      await recoverUnauthorizedSession();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => messages.add(TranscriptMessage.system('重命名会话失败，请重试')));
+    }
+  }
+
+  Future<void> archiveRemoteSession(String sessionId) async {
+    if (running || uploadingAttachments) return;
+    final current = session;
+    if (current == null) return;
+    try {
+      final res = await httpClient
+          .post(
+            current.origin.resolve('/api/sessions/$sessionId/archive'),
+            headers: {'Authorization': 'Bearer ${current.token}'},
+          )
+          .timeout(networkTimeout);
+      if (res.statusCode == 401) throw const UnauthorizedSession();
+      if (res.statusCode != 200) throw StateError('archive_session_failed');
+      final body = jsonDecode(res.body);
+      if (body is Map<String, dynamic>) {
+        final catalog = RemoteProjectCatalog.tryParse(body);
+        if (catalog != null && mounted) {
+          setState(() => applyCatalog(catalog));
+        }
+      }
+    } on UnauthorizedSession {
+      await recoverUnauthorizedSession();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => messages.add(TranscriptMessage.system('归档会话失败，请重试')));
+    }
+  }
+
+  Future<void> deleteRemoteSession(String sessionId) async {
+    if (running || uploadingAttachments) return;
+    final current = session;
+    if (current == null) return;
+    try {
+      final res = await httpClient
+          .delete(
+            current.origin.resolve('/api/sessions/$sessionId'),
+            headers: {'Authorization': 'Bearer ${current.token}'},
+          )
+          .timeout(networkTimeout);
+      if (res.statusCode == 401) throw const UnauthorizedSession();
+      if (res.statusCode != 200) throw StateError('delete_session_failed');
+      final body = jsonDecode(res.body);
+      if (body is Map<String, dynamic>) {
+        final catalog = RemoteProjectCatalog.tryParse(body);
+        if (catalog != null && mounted) {
+          setState(() => applyCatalog(catalog));
+        }
+      }
+    } on UnauthorizedSession {
+      await recoverUnauthorizedSession();
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => messages.add(TranscriptMessage.system('删除会话失败，请重试')));
     }
   }
 
@@ -2964,6 +3084,9 @@ Future<void> showSessionNavigator(
   required bool running,
   required ValueChanged<String> onSelect,
   required ValueChanged<String> onCreate,
+  required Future<void> Function(String sessionId, String title) onRename,
+  required Future<void> Function(String sessionId) onArchive,
+  required Future<void> Function(String sessionId) onDelete,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -2983,6 +3106,18 @@ Future<void> showSessionNavigator(
         Navigator.pop(sheetContext);
         onCreate(projectId);
       },
+      onRename: (sessionId, title) async {
+        Navigator.pop(sheetContext);
+        await onRename(sessionId, title);
+      },
+      onArchive: (sessionId) async {
+        Navigator.pop(sheetContext);
+        await onArchive(sessionId);
+      },
+      onDelete: (sessionId) async {
+        Navigator.pop(sheetContext);
+        await onDelete(sessionId);
+      },
     ),
   );
 }
@@ -2997,6 +3132,9 @@ class SessionNavigatorSheet extends StatefulWidget {
     required this.running,
     required this.onSelect,
     required this.onCreate,
+    required this.onRename,
+    required this.onArchive,
+    required this.onDelete,
   });
 
   final List<RemoteProjectSummary> projects;
@@ -3006,6 +3144,9 @@ class SessionNavigatorSheet extends StatefulWidget {
   final bool running;
   final ValueChanged<String> onSelect;
   final ValueChanged<String> onCreate;
+  final Future<void> Function(String sessionId, String title) onRename;
+  final Future<void> Function(String sessionId) onArchive;
+  final Future<void> Function(String sessionId) onDelete;
 
   @override
   State<SessionNavigatorSheet> createState() => _SessionNavigatorSheetState();
@@ -3108,14 +3249,17 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
                         itemBuilder: (context, index) {
                           final item = projectSessions[index];
                           final active = item.id == widget.activeSessionId;
+                          final canMutate = !widget.running && !item.running;
                           return ListTile(
                             key: ValueKey('session-${item.id}'),
-                            enabled: !widget.running || active,
+                            enabled: (!widget.running || active) && !item.archived,
                             contentPadding: const EdgeInsets.symmetric(
                               horizontal: 4,
                             ),
                             leading: Icon(
-                              item.running
+                              item.archived
+                                  ? Icons.inventory_2_outlined
+                                  : item.running
                                   ? Icons.pending_outlined
                                   : Icons.chat_bubble_outline_rounded,
                               color: item.running
@@ -3132,13 +3276,62 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                             ),
-                            trailing: active
-                                ? const Icon(
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (canMutate)
+                                  PopupMenuButton<String>(
+                                    key: ValueKey('session-menu-${item.id}'),
+                                    onSelected: (value) async {
+                                      if (value == 'rename') {
+                                        final next = await promptSessionTitle(
+                                          context,
+                                          initial: item.title,
+                                        );
+                                        if (next == null || next.trim().isEmpty) {
+                                          return;
+                                        }
+                                        await widget.onRename(item.id, next);
+                                        if (mounted) setState(() {});
+                                      } else if (value == 'archive') {
+                                        await widget.onArchive(item.id);
+                                      } else if (value == 'delete') {
+                                        final confirmed =
+                                            await confirmSessionDelete(
+                                              context,
+                                              item.title,
+                                            );
+                                        if (confirmed == true) {
+                                          await widget.onDelete(item.id);
+                                        }
+                                      }
+                                    },
+                                    itemBuilder: (context) => [
+                                      const PopupMenuItem(
+                                        value: 'rename',
+                                        child: Text('重命名'),
+                                      ),
+                                      if (!item.archived)
+                                        const PopupMenuItem(
+                                          value: 'archive',
+                                          child: Text('归档'),
+                                        ),
+                                      const PopupMenuItem(
+                                        value: 'delete',
+                                        child: Text('删除'),
+                                      ),
+                                    ],
+                                  ),
+                                if (active)
+                                  const Icon(
                                     Icons.check_circle_rounded,
                                     color: AppColors.accent,
                                   )
-                                : const Icon(Icons.chevron_right_rounded),
-                            onTap: active || widget.running
+                                else
+                                  const Icon(Icons.chevron_right_rounded),
+                              ],
+                            ),
+                            onTap: active || widget.running || item.archived
                                 ? null
                                 : () => widget.onSelect(item.id),
                           );
@@ -6590,6 +6783,7 @@ class RemoteSessionSummary {
     required this.running,
     required this.messageCount,
     this.model,
+    this.archived = false,
   });
 
   final String id;
@@ -6599,9 +6793,11 @@ class RemoteSessionSummary {
   final bool running;
   final int messageCount;
   final String? model;
+  final bool archived;
 
   String get summary {
     final parts = <String>[];
+    if (archived) parts.add('已归档');
     if (running) parts.add('运行中');
     if (model != null) parts.add(formatModelName(model!));
     parts.add('$messageCount 条消息');
@@ -6621,8 +6817,62 @@ class RemoteSessionSummary {
       running: json['running'] == true,
       messageCount: (json['messageCount'] as num?)?.toInt() ?? 0,
       model: json['model'] as String?,
+      archived: json['archived'] == true || json['archivedAt'] is num,
     );
   }
+}
+
+Future<String?> promptSessionTitle(
+  BuildContext context, {
+  required String initial,
+}) {
+  final controller = TextEditingController(text: initial);
+  return showDialog<String>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('重命名会话'),
+      content: TextField(
+        key: const ValueKey('rename-session-field'),
+        controller: controller,
+        autofocus: true,
+        maxLength: 48,
+        decoration: const InputDecoration(hintText: '会话标题'),
+        onSubmitted: (value) => Navigator.pop(dialogContext, value.trim()),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          key: const ValueKey('rename-session-confirm'),
+          onPressed: () => Navigator.pop(dialogContext, controller.text.trim()),
+          child: const Text('保存'),
+        ),
+      ],
+    ),
+  ).whenComplete(controller.dispose);
+}
+
+Future<bool?> confirmSessionDelete(BuildContext context, String title) {
+  return showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('删除会话？'),
+      content: Text('将删除「$title」及其 transcript，不可恢复。'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          key: const ValueKey('delete-session-confirm'),
+          onPressed: () => Navigator.pop(dialogContext, true),
+          child: const Text('删除'),
+        ),
+      ],
+    ),
+  );
 }
 
 class RemoteStatus {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { access, copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createTranscriptState, type TranscriptSnapshot, type TranscriptState } from './transcriptState.js';
 
@@ -19,6 +19,7 @@ type StoredSession = {
   title: string;
   createdAt: number;
   updatedAt: number;
+  archivedAt?: number;
 };
 
 type StoredCatalog = {
@@ -39,6 +40,7 @@ export type SessionSummary = StoredSession & {
   messageCount: number;
   model?: string;
   remainingTokens?: number;
+  archived: boolean;
 };
 
 export type ProjectSessionCatalog = {
@@ -63,8 +65,23 @@ export type ProjectSessionState = {
   createSession(projectId: string, title?: string): Promise<SessionContext>;
   selectSession(sessionId: string): Promise<SessionContext>;
   setSessionTitleFromPrompt(sessionId: string, prompt: string): Promise<void>;
+  setSessionTitle(sessionId: string, title: string): Promise<SessionContext>;
+  archiveSession(sessionId: string): Promise<SessionContext>;
+  deleteSession(sessionId: string): Promise<{ catalog: ProjectSessionCatalog; deletedSessionId: string }>;
   flush(): Promise<void>;
 };
+
+export function titleFromPrompt(prompt: string, maxLength = 48): string {
+  const firstLine = prompt
+    .split(/\r?\n/)
+    .map(line => line.replace(/\s+/g, ' ').trim())
+    .find(line => line.length > 0) || '';
+  return firstLine.slice(0, maxLength) || '新会话';
+}
+
+function isDefaultTitle(title: string): boolean {
+  return title === '新会话' || title === '当前会话' || title.trim().length === 0;
+}
 
 export async function createProjectSessionState(options: {
   dataDir?: string;
@@ -168,12 +185,17 @@ export async function createProjectSessionState(options: {
   function snapshotCatalog(): ProjectSessionCatalog {
     const sessions = catalog.sessions
       .map(session => sessionSummary(session, transcripts.get(session.id)?.snapshot()))
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+      .sort((a, b) => {
+        if (a.archived !== b.archived) return a.archived ? 1 : -1;
+        return b.updatedAt - a.updatedAt;
+      });
     const projects = catalog.projects
       .map(project => ({
         ...project,
-        sessionCount: sessions.filter(session => session.projectId === project.id).length,
-        running: sessions.some(session => session.projectId === project.id && session.running),
+        sessionCount: sessions.filter(session =>
+          session.projectId === project.id && !session.archived).length,
+        running: sessions.some(session =>
+          session.projectId === project.id && session.running && !session.archived),
       }))
       .sort((a, b) => b.updatedAt - a.updatedAt);
     return {
@@ -203,7 +225,7 @@ export async function createProjectSessionState(options: {
         project.updatedAt = Date.now();
         catalog.activeProjectId = project.id;
         const latest = catalog.sessions
-          .filter(item => item.projectId === project!.id)
+          .filter(item => item.projectId === project!.id && !item.archivedAt)
           .sort((a, b) => b.updatedAt - a.updatedAt)[0];
         if (latest) catalog.activeSessionId = latest.id;
         else await createSessionRecord(project.id);
@@ -217,6 +239,7 @@ export async function createProjectSessionState(options: {
     async selectSession(sessionId: string): Promise<SessionContext> {
       const context = getSessionContext(sessionId);
       if (!context) throw new Error('session_not_found');
+      if (context.session.archivedAt) throw new Error('session_archived');
       catalog.activeProjectId = context.project.id;
       catalog.activeSessionId = context.session.id;
       context.project.updatedAt = Date.now();
@@ -228,12 +251,74 @@ export async function createProjectSessionState(options: {
       const context = getSessionContext(sessionId);
       if (!context) return;
       const now = Date.now();
-      if (context.session.title === '新会话' || context.session.title === '当前会话') {
-        context.session.title = prompt.replace(/\s+/g, ' ').trim().slice(0, 36) || '新会话';
+      if (isDefaultTitle(context.session.title)) {
+        context.session.title = titleFromPrompt(prompt);
       }
       context.session.updatedAt = now;
       context.project.updatedAt = now;
       await saveCatalog();
+    },
+
+    async setSessionTitle(sessionId: string, title: string): Promise<SessionContext> {
+      const context = getSessionContext(sessionId);
+      if (!context) throw new Error('session_not_found');
+      const cleaned = cleanName(title).slice(0, 48);
+      if (!cleaned) throw new Error('title_required');
+      const now = Date.now();
+      context.session.title = cleaned;
+      context.session.updatedAt = now;
+      context.project.updatedAt = now;
+      await saveCatalog();
+      return context;
+    },
+
+    async archiveSession(sessionId: string): Promise<SessionContext> {
+      const context = getSessionContext(sessionId);
+      if (!context) throw new Error('session_not_found');
+      if (context.transcript.snapshot().running) throw new Error('claude_is_busy');
+      const projectSessions = catalog.sessions.filter(item =>
+        item.projectId === context.project.id && !item.archivedAt);
+      if (projectSessions.length <= 1) throw new Error('last_session');
+      const now = Date.now();
+      context.session.archivedAt = now;
+      context.session.updatedAt = now;
+      context.project.updatedAt = now;
+      if (catalog.activeSessionId === sessionId) {
+        const next = catalog.sessions
+          .filter(item => item.projectId === context.project.id && !item.archivedAt && item.id !== sessionId)
+          .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+        if (!next) throw new Error('last_session');
+        catalog.activeSessionId = next.id;
+      }
+      await saveCatalog();
+      return getSessionContext(catalog.activeSessionId!)!;
+    },
+
+    async deleteSession(sessionId: string): Promise<{ catalog: ProjectSessionCatalog; deletedSessionId: string }> {
+      const context = getSessionContext(sessionId);
+      if (!context) throw new Error('session_not_found');
+      if (context.transcript.snapshot().running) throw new Error('claude_is_busy');
+      const projectId = context.project.id;
+      const remaining = catalog.sessions.filter(item => item.id !== sessionId);
+      const remainingInProject = remaining.filter(item => item.projectId === projectId && !item.archivedAt);
+      catalog.sessions = remaining;
+      context.project.updatedAt = Date.now();
+
+      await context.transcript.flush().catch(() => undefined);
+      transcripts.delete(sessionId);
+      await rm(join(sessionsDir, `${sessionId}.json`), { force: true }).catch(() => undefined);
+
+      if (remainingInProject.length === 0) {
+        const created = await createSessionRecord(projectId);
+        catalog.activeProjectId = projectId;
+        catalog.activeSessionId = created.session.id;
+      } else if (catalog.activeSessionId === sessionId) {
+        const next = remainingInProject.sort((a, b) => b.updatedAt - a.updatedAt)[0];
+        catalog.activeProjectId = projectId;
+        catalog.activeSessionId = next.id;
+      }
+      await saveCatalog();
+      return { catalog: snapshotCatalog(), deletedSessionId: sessionId };
     },
 
     async flush(): Promise<void> {
@@ -263,6 +348,7 @@ function sessionSummary(session: StoredSession, snapshot?: TranscriptSnapshot): 
     messageCount: snapshot?.messages.length ?? 0,
     model: snapshot?.sessionInfo.model,
     remainingTokens: snapshot?.sessionInfo.remainingTokens,
+    archived: typeof session.archivedAt === 'number',
   };
 }
 
@@ -298,12 +384,16 @@ function isProject(value: unknown): value is StoredProject {
 }
 
 function isSession(value: unknown): value is StoredSession {
-  return isRecord(value)
+  if (!(isRecord(value)
     && typeof value.id === 'string'
     && typeof value.projectId === 'string'
     && typeof value.title === 'string'
     && typeof value.createdAt === 'number'
-    && typeof value.updatedAt === 'number';
+    && typeof value.updatedAt === 'number')) {
+    return false;
+  }
+  if (value.archivedAt !== undefined && typeof value.archivedAt !== 'number') return false;
+  return true;
 }
 
 function cleanName(value: string | undefined): string {

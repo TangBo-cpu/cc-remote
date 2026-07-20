@@ -163,6 +163,11 @@ export class AttachmentStore {
     return directory;
   }
 
+  async removeSessionDirectory(projectId: string, sessionId: string): Promise<void> {
+    const directory = this.sessionDirectory(projectId, sessionId);
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
+  }
+
   private metadataPath(projectId: string, sessionId: string, attachmentId: string): string {
     return join(this.sessionDirectory(projectId, sessionId), `${safeId(attachmentId)}.json`);
   }

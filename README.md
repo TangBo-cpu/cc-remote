@@ -19,7 +19,7 @@ Flutter App
 
 最近补齐了工作区冷启动对齐：daemon 启动时会按 `WORKSPACE_DIR` / 启动目录注册并激活项目，和“daemon 已在跑时再执行 `cc-remote`”语义一致。手机「项目与会话」面板与设置页会显示完整项目路径。流式回复做了文本合批、流式轻渲染和本地落盘节流，减轻手机经隧道时的卡顿体感。
 
-当前限制是单设备授权。工作区不提供远程编辑、暂存和提交。手机不能注册任意电脑目录，只能切换电脑端已注册项目。会话全文搜索、归档、删除与 FCM 远程推送尚未实现。
+当前限制是单设备授权。工作区不提供远程编辑、暂存和提交。手机不能注册任意电脑目录，只能切换电脑端已注册项目。会话全文搜索与 FCM 远程推送尚未实现。
 
 ## 启动电脑端
 
@@ -135,6 +135,9 @@ GET  /api/projects
 GET  /api/sessions/:sessionId
 POST /api/projects/:projectId/sessions
 POST /api/sessions/:sessionId/select
+POST /api/sessions/:sessionId/title
+POST /api/sessions/:sessionId/archive
+DELETE /api/sessions/:sessionId
 POST /api/sessions/:sessionId/attachments
 GET  /api/sessions/:sessionId/attachments/:attachmentId/content
 GET  /api/workspace
@@ -191,8 +194,11 @@ POST /api/logout
 | `PUBLIC_ORIGIN` | `http://127.0.0.1:8787` | 手机访问的源站 |
 | `WORKSPACE_DIR` | 当前目录 | 启动时注册并激活的项目目录 |
 | `CLAUDE_BIN` | `claude` | Claude Code CLI 路径 |
+| `CLAUDE_ARGS` | 未设置 | 以 `|` 分隔的额外 Claude CLI 参数，主要用于测试或特殊启动参数 |
 | `DEVICE_NAME` | 当前主机名 | 配对时显示的电脑名 |
 | `ALLOW_BYPASS_PERMISSIONS` | `1` | 是否允许手机为单次任务选择跳过权限 |
+| `MAX_WS_CONNECTIONS` | `16` | WebSocket 最大连接数 |
+| `WS_AUTH_TIMEOUT_MS` | `10000` | WebSocket 首包鉴权超时（毫秒） |
 
 ## 校验
 

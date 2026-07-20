@@ -304,6 +304,90 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     return;
   }
 
+  const renameSessionMatch = req.method === 'POST'
+    ? url.pathname.match(/^\/api\/sessions\/([^/]+)\/title$/)
+    : null;
+  if (renameSessionMatch) {
+    if (!runFlight.tryBegin('mutate')) return sendJson(res, 409, { error: 'claude_is_busy' });
+    try {
+      const body = await readJson<{ title?: string }>(req);
+      await projectSessions.setSessionTitle(
+        decodeURIComponent(renameSessionMatch[1]),
+        body.title || '',
+      );
+      broadcastCatalog();
+      sendJson(res, 200, { ok: true, ...projectSessions.catalog() });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = message === 'session_not_found' ? 404
+        : message === 'title_required' ? 400
+        : 400;
+      sendJson(res, status, { error: message });
+    } finally {
+      runFlight.end();
+    }
+    return;
+  }
+
+  const archiveSessionMatch = req.method === 'POST'
+    ? url.pathname.match(/^\/api\/sessions\/([^/]+)\/archive$/)
+    : null;
+  if (archiveSessionMatch) {
+    if (!runFlight.tryBegin('mutate')) return sendJson(res, 409, { error: 'claude_is_busy' });
+    try {
+      const next = await projectSessions.archiveSession(decodeURIComponent(archiveSessionMatch[1]));
+      if (next.session.id !== activeContext.session.id) {
+        await selectActiveSession(next);
+        broadcastActiveSession();
+      } else {
+        broadcastCatalog();
+      }
+      sendJson(res, 200, { ok: true, ...projectSessions.catalog() });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = message === 'session_not_found' ? 404
+        : message === 'claude_is_busy' ? 409
+        : message === 'last_session' ? 400
+        : 400;
+      sendJson(res, status, { error: message });
+    } finally {
+      runFlight.end();
+    }
+    return;
+  }
+
+  const deleteSessionMatch = req.method === 'DELETE'
+    ? url.pathname.match(/^\/api\/sessions\/([^/]+)$/)
+    : null;
+  if (deleteSessionMatch) {
+    if (!runFlight.tryBegin('mutate')) return sendJson(res, 409, { error: 'claude_is_busy' });
+    try {
+      const sessionId = decodeURIComponent(deleteSessionMatch[1]);
+      const existing = projectSessions.getSession(sessionId);
+      if (!existing) return sendJson(res, 404, { error: 'session_not_found' });
+      const result = await projectSessions.deleteSession(sessionId);
+      await attachments.removeSessionDirectory(existing.project.id, sessionId);
+      const next = projectSessions.active();
+      if (next.session.id !== activeContext.session.id
+        || next.project.id !== activeContext.project.id) {
+        await selectActiveSession(next);
+        broadcastActiveSession();
+      } else {
+        broadcastCatalog();
+      }
+      sendJson(res, 200, { ok: true, deletedSessionId: result.deletedSessionId, ...result.catalog });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = message === 'session_not_found' ? 404
+        : message === 'claude_is_busy' ? 409
+        : 400;
+      sendJson(res, status, { error: message });
+    } finally {
+      runFlight.end();
+    }
+    return;
+  }
+
   const sessionMatch = req.method === 'GET'
     ? url.pathname.match(/^\/api\/sessions\/([^/]+)$/)
     : null;
@@ -314,6 +398,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       projectId: context.project.id,
       sessionId: context.session.id,
       title: context.session.title,
+      archived: Boolean(context.session.archivedAt),
       transcript: context.transcript.snapshot(),
     });
     return;

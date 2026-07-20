@@ -63,7 +63,7 @@ App 调用 `POST /api/pair` 换取 Bearer token。token 明文只返回给 App�
 
 `GET /api/health` 和 `POST /api/pair` 不需要 Bearer token。其余手机 API 都需要授权。
 
-项目与会话接口包括 `/api/status`、`/api/projects`、`/api/sessions/:id`、创建会话和选择会话。活动 Claude 任务运行时禁止切换或创建会话。
+项目与会话接口包括 `/api/status`、`/api/projects`、`/api/sessions/:id`、创建会话、选择会话、重命名、归档和删除。活动 Claude 任务运行时禁止切换或创建会话。
 
 工作区接口包括 `/api/workspace`、`/api/workspace/file` 和 `/api/workspace/diff`。路径必须位于活动项目内，Git 内部文件、被忽略文件和路径穿越会被拒绝。接口只读。
 
@@ -105,4 +105,4 @@ daemon 默认只监听 loopback。公网访问由 tunnel 提供。手机不能�
 
 ## 当前未完成
 
-多设备管理、会话全文搜索、归档、删除、FCM 推送、发布签名和商店材料尚未实现。真机 Stop 长任务残留进程、公网 health 检查，以及冷启动切项目 / 隧道首字延迟对照仍需专项验证。Claude 进程预热和可选局域网直连属于后续性能项。
+多设备管理、会话全文搜索、FCM 推送、发布签名和商店材料尚未实现。真机 Stop 长任务残留进程、公网 health 检查，以及冷启动切项目 / 隧道首字延迟对照仍需专项验证。Claude 进程预热和可选局域网直连属于后续性能项。
