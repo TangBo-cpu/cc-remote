@@ -1,0 +1,29 @@
+{
+  "name": "cc-remote",
+  "version": "0.1.0",
+  "description": "Phone-friendly remote console for local Claude Code via Cloudflare Tunnel.",
+  "type": "module",
+  "scripts": {
+    "build:web": "node scripts/build-web.mjs",
+    "build": "npm run build:web && tsc -p tsconfig.json",
+    "dev": "npm run build:web && tsx src/daemon.ts",
+    "cc-remote": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/cc-remote.ps1",
+    "start": "node dist/src/daemon.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "busboy": "^1.6.0",
+    "qrcode-terminal": "^0.12.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/busboy": "^1.5.4",
+    "@types/node": "^22.10.2",
+    "@types/qrcode-terminal": "^0.12.2",
+    "@types/ws": "^8.5.13",
+    "esbuild": "^0.24.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

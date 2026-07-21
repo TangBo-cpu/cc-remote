@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.data/
+*.log
+.DS_Store
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/build/
+mobile/android/build/
+.run/
