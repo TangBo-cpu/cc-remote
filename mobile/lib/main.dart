@@ -3502,6 +3502,11 @@ class _SettingsSheetState extends State<SettingsSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final sectionLabelStyle = Theme.of(context).textTheme.labelSmall?.copyWith(
+      color: AppColors.muted,
+      fontWeight: FontWeight.w800,
+      letterSpacing: 0.55,
+    );
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
@@ -3534,7 +3539,9 @@ class _SettingsSheetState extends State<SettingsSheet> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 4),
+                  Text('设备与服务', style: sectionLabelStyle),
+                  const SizedBox(height: 4),
                   InfoRow(
                     label: '电脑',
                     value: widget.session?.deviceName ?? 'Jayson PC',
@@ -3551,6 +3558,11 @@ class _SettingsSheetState extends State<SettingsSheet> {
                         widget.session?.workspaceName ??
                         'cc-remote',
                   ),
+                  const SizedBox(height: 8),
+                  const Divider(),
+                  const SizedBox(height: 14),
+                  Text('对话偏好', style: sectionLabelStyle),
+                  const SizedBox(height: 2),
                   ListTile(
                     key: const ValueKey('model-setting'),
                     contentPadding: EdgeInsets.zero,
@@ -3590,6 +3602,10 @@ class _SettingsSheetState extends State<SettingsSheet> {
                       onPickImage: pickChatBackgroundImage,
                     ),
                   ),
+                  const Divider(),
+                  const SizedBox(height: 14),
+                  Text('通知', style: sectionLabelStyle),
+                  const SizedBox(height: 2),
                   SwitchListTile(
                     key: const ValueKey('background-notifications-toggle'),
                     contentPadding: EdgeInsets.zero,
@@ -3601,7 +3617,10 @@ class _SettingsSheetState extends State<SettingsSheet> {
                     title: const Text('后台通知'),
                     subtitle: const Text('任务完成、失败或等待权限时提醒'),
                   ),
+                  const Divider(),
                   const SizedBox(height: 14),
+                  Text('连接与配对', style: sectionLabelStyle),
+                  const SizedBox(height: 10),
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
