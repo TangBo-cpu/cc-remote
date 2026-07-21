@@ -4303,8 +4303,6 @@ class TranscriptView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (messages.isEmpty && pendingPermissions.isEmpty) {
-      final title = connected ? '本机已连接，可以发送任务给 Claude Code' : '等待电脑端连接';
-      final subtitle = connected ? '从下方输入，或先点一个快捷任务' : '恢复连接后即可发送任务';
       return LayoutBuilder(
         builder: (context, constraints) {
           return SingleChildScrollView(
@@ -4316,63 +4314,23 @@ class TranscriptView extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        const Text(
-                          '下一件事',
-                          style: TextStyle(
-                            fontSize: 21,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: -0.65,
-                          ),
-                        ),
-                        const Spacer(),
-                        Transform.rotate(
-                          angle: -0.055,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 9,
-                              vertical: 5,
-                            ),
-                            decoration: BoxDecoration(
-                              color: connected
-                                  ? AppColors.yellow
-                                  : AppColors.coralSoft,
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: AppColors.ink,
-                                width: 1.2,
-                              ),
-                            ),
-                            child: Text(
-                              connected ? '随时开工' : '等电脑回来',
-                              style: const TextStyle(
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        color: AppColors.muted,
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      subtitle,
-                      style: const TextStyle(
-                        color: AppColors.muted,
-                        fontSize: 11.5,
-                      ),
-                    ),
                     if (connected) ...[
+                      const Text(
+                        '下一件事',
+                        style: TextStyle(
+                          fontSize: 21,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: -0.65,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        '从下方输入，或先点一个快捷任务',
+                        style: TextStyle(
+                          color: AppColors.muted,
+                          fontSize: 11.5,
+                        ),
+                      ),
                       const SizedBox(height: 14),
                       Row(
                         children: [
@@ -4400,11 +4358,10 @@ class TranscriptView extends StatelessWidget {
                         ],
                       ),
                     ] else ...[
-                      const SizedBox(height: 14),
                       SizedBox(
-                        height: (constraints.maxHeight - 94).clamp(
-                          176.0,
+                        height: (constraints.maxHeight - 14).clamp(
                           224.0,
+                          320.0,
                         ),
                         child: _OfflineReconnectCard(onReconnect: onReconnect),
                       ),
