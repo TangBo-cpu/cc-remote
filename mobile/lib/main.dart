@@ -2409,26 +2409,31 @@ class ChatScreen extends StatelessWidget {
                 header,
                 const SizedBox(height: 12),
                 Expanded(child: transcript),
-                const SizedBox(height: 7),
-                PromptBar(
-                  controller: promptController,
-                  attachments: pendingAttachments,
-                  commands: commands,
-                  running: running,
-                  stopping: stopping,
-                  uploading: uploadingAttachments,
-                  connected: connected,
-                  offline: offline,
-                  permissionMode: permissionMode,
-                  allowBypassPermissions: allowBypassPermissions,
-                  suggestionMaxHeight: suggestionMaxHeight,
-                  onPermissionModeSelected: onPermissionModeSelected,
-                  onCommandSelected: (command) => onFillPrompt('/$command '),
-                  onAddAttachment: onAddAttachment,
-                  onRemoveAttachment: onRemoveAttachment,
-                  onSend: onSend,
-                  onStop: onStop,
-                ),
+                if (!(offline &&
+                    messages.isEmpty &&
+                    pendingPermissions.isEmpty)) ...[
+                  const SizedBox(height: 7),
+                  PromptBar(
+                    controller: promptController,
+                    attachments: pendingAttachments,
+                    commands: commands,
+                    running: running,
+                    stopping: stopping,
+                    uploading: uploadingAttachments,
+                    connected: connected,
+                    offline: offline,
+                    permissionMode: permissionMode,
+                    allowBypassPermissions: allowBypassPermissions,
+                    suggestionMaxHeight: suggestionMaxHeight,
+                    onPermissionModeSelected: onPermissionModeSelected,
+                    onCommandSelected: (command) => onFillPrompt('/$command '),
+                    onAddAttachment: onAddAttachment,
+                    onRemoveAttachment: onRemoveAttachment,
+                    onReconnect: onReconnect,
+                    onSend: onSend,
+                    onStop: onStop,
+                  ),
+                ],
               ],
             ),
           ),
@@ -5446,6 +5451,7 @@ class PromptBar extends StatelessWidget {
     required this.onCommandSelected,
     this.onAddAttachment,
     this.onRemoveAttachment,
+    required this.onReconnect,
     required this.onSend,
     required this.onStop,
   });
@@ -5465,11 +5471,76 @@ class PromptBar extends StatelessWidget {
   final ValueChanged<String> onCommandSelected;
   final VoidCallback? onAddAttachment;
   final ValueChanged<AttachmentDraft>? onRemoveAttachment;
+  final VoidCallback onReconnect;
   final VoidCallback onSend;
   final VoidCallback onStop;
 
   @override
   Widget build(BuildContext context) {
+    if (offline) {
+      return Semantics(
+        button: true,
+        label: '重新连接电脑',
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onReconnect,
+            borderRadius: BorderRadius.circular(20),
+            child: Ink(
+              width: double.infinity,
+              padding: const EdgeInsets.fromLTRB(10, 10, 12, 10),
+              decoration: BoxDecoration(
+                color: AppColors.ink,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppColors.ink, width: 1.5),
+                boxShadow: const [
+                  BoxShadow(
+                    color: AppColors.coral,
+                    blurRadius: 0,
+                    offset: Offset(4, 5),
+                  ),
+                ],
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: AppColors.yellow,
+                      borderRadius: BorderRadius.circular(13),
+                    ),
+                    alignment: Alignment.center,
+                    child: const Icon(
+                      Icons.refresh_rounded,
+                      size: 22,
+                      color: AppColors.ink,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  const Expanded(
+                    child: Text(
+                      '重新连接',
+                      style: TextStyle(
+                        color: AppColors.porcelain,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                  const Icon(
+                    Icons.arrow_forward_rounded,
+                    size: 20,
+                    color: AppColors.mint,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     return MediaQuery(
       data: MediaQuery.of(context).copyWith(
         textScaler: MediaQuery.textScalerOf(
