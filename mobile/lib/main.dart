@@ -612,9 +612,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       session = SavedSession(
-        origin: Uri.parse('https://tbhaoshuai.ccwu.cc'),
+        origin: Uri.parse('https://cc-remote.example.com'),
         token: 'demo',
-        deviceName: 'Jayson PC',
+        deviceName: 'My PC',
         workspaceDir: 'cc-remote',
       );
       route = ShellRoute.chat;
@@ -2496,7 +2496,7 @@ class ConnectionHeader extends StatelessWidget {
         ? '正在处理这件事'
         : '已经准备好了';
     final workspace = session?.workspaceName ?? 'cc-remote';
-    final device = session?.deviceName ?? 'Jayson PC';
+    final device = session?.deviceName ?? 'My PC';
     final compact = MediaQuery.sizeOf(context).height < 720;
 
     if (compact) {
@@ -2882,7 +2882,7 @@ class LegacyConnectionHeader extends StatelessWidget {
         ? AppColors.stop
         : AppColors.warning;
     final workspace = session?.workspaceName ?? 'cc-remote';
-    final device = session?.deviceName ?? 'Jayson PC';
+    final device = session?.deviceName ?? 'My PC';
 
     return GlassPanel(
       radius: AppRadii.panel,
@@ -3549,13 +3549,13 @@ class _SettingsSheetState extends State<SettingsSheet> {
                   const SizedBox(height: 4),
                   InfoRow(
                     label: '电脑',
-                    value: widget.session?.deviceName ?? 'Jayson PC',
+                    value: widget.session?.deviceName ?? 'My PC',
                   ),
                   InfoRow(
                     label: '服务',
                     value:
                         widget.session?.origin.toString() ??
-                        'https://tbhaoshuai.ccwu.cc',
+                        'https://cc-remote.example.com',
                   ),
                   InfoRow(
                     label: '目录',

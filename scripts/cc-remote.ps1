@@ -1,7 +1,7 @@
 param(
-  [string]$PublicOrigin = "https://tbhaoshuai.ccwu.cc",
+  [string]$PublicOrigin = "",
   [string]$WorkspaceDir = "",
-  [string]$DeviceName = "tb",
+  [string]$DeviceName = "My PC",
   [int]$Port = 8787,
   [switch]$NoTunnel,
   [switch]$AllowBypassPermissions,

@@ -43,7 +43,7 @@ cc-remote
 
 ```powershell
 cc-remote -NoTunnel
-cc-remote -WorkspaceDir "E:\Code-All\cc-remote" -DeviceName "tb"
+cc-remote -WorkspaceDir "C:\Projects\cc-remote" -DeviceName "My PC"
 cc-remote -DisableBypassPermissions
 ```
 
@@ -51,9 +51,9 @@ cc-remote -DisableBypassPermissions
 
 ```powershell
 npm install
-$env:PUBLIC_ORIGIN = "https://tbhaoshuai.ccwu.cc"
-$env:WORKSPACE_DIR = "E:\Code-All\cc-remote"
-$env:DEVICE_NAME = "tb"
+$env:PUBLIC_ORIGIN = "https://cc-remote.example.com"
+$env:WORKSPACE_DIR = "C:\Projects\cc-remote"
+$env:DEVICE_NAME = "My PC"
 npm run dev
 ```
 
@@ -68,7 +68,7 @@ cloudflared tunnel --config ".run\cloudflared-cc-remote.yml" run
 健康检查：
 
 ```text
-https://tbhaoshuai.ccwu.cc/api/health
+https://cc-remote.example.com/api/health
 ```
 
 正常响应：
@@ -82,7 +82,7 @@ https://tbhaoshuai.ccwu.cc/api/health
 开发运行：
 
 ```powershell
-cd E:\Code-All\cc-remote\mobile
+cd C:\Projects\cc-remote\mobile
 flutter pub get
 flutter analyze
 flutter test
@@ -92,7 +92,7 @@ flutter run
 构建并安装 Android 调试版：
 
 ```powershell
-cd E:\Code-All\cc-remote\mobile
+cd C:\Projects\cc-remote\mobile
 flutter build apk --debug
 adb devices -l
 adb install -r build\app\outputs\flutter-apk\app-debug.apk
@@ -109,9 +109,9 @@ daemon 启动后会打印一次性 JSON 二维码：
 {
   "type": "cc-remote-pair",
   "version": 1,
-  "origin": "https://tbhaoshuai.ccwu.cc",
+  "origin": "https://cc-remote.example.com",
   "nonce": "base64url-random-nonce",
-  "deviceName": "tb",
+  "deviceName": "My PC",
   "expiresAt": 1780000000000
 }
 ```

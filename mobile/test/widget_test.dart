@@ -190,7 +190,7 @@ void main() {
 
   test('remote status carries the current model and context', () {
     final status = RemoteStatus.fromJson({
-      'deviceName': 'tb',
+      'deviceName': 'My PC',
       'workspaceDir': 'cc-remote',
       'running': false,
       'sessionInfo': {
@@ -213,7 +213,7 @@ void main() {
         {
           'id': 'project-1',
           'name': 'cc-remote',
-          'path': r'E:\Code-All\cc-remote',
+          'path': r'C:\Projects\cc-remote',
           'sessionCount': 2,
           'running': false,
         },
@@ -434,7 +434,8 @@ void main() {
 
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
-    expect(find.text('本机已连接，可以发送任务给 Claude Code'), findsOneWidget);
+    expect(find.text('下一件事'), findsOneWidget);
+    expect(find.text('从下方输入，或先点一个快捷任务'), findsOneWidget);
     expect(find.byTooltip('工作区'), findsOneWidget);
     expect(find.byTooltip('新对话'), findsOneWidget);
 
@@ -459,6 +460,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(await NotificationPreferenceStore().load(), isFalse);
 
+    await tester.ensureVisible(find.text('退出配对'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('退出配对'));
     await tester.pumpAndSettle();
     expect(find.text('退出后这台手机需要重新扫码。'), findsOneWidget);
@@ -709,7 +712,7 @@ void main() {
             session: SavedSession(
               origin: Uri.parse('https://example.test'),
               token: 'demo',
-              deviceName: 'Jayson PC',
+              deviceName: 'My PC',
               workspaceDir: 'cc-remote',
             ),
             notificationsEnabled: true,
@@ -998,6 +1001,7 @@ void main() {
                 allowBypassPermissions: false,
                 onPermissionModeSelected: (_) {},
                 onCommandSelected: (_) {},
+                onReconnect: () {},
                 onSend: () {},
                 onStop: () {},
               ),
@@ -1038,6 +1042,7 @@ void main() {
             allowBypassPermissions: true,
             onPermissionModeSelected: (mode) => selected = mode,
             onCommandSelected: (_) {},
+            onReconnect: () {},
             onSend: () {},
             onStop: () {},
           ),
@@ -1088,6 +1093,7 @@ void main() {
             onCommandSelected: (_) {},
             onAddAttachment: () {},
             onRemoveAttachment: (_) {},
+            onReconnect: () {},
             onSend: () => sent = true,
             onStop: () {},
           ),
@@ -1099,6 +1105,42 @@ void main() {
     expect(find.byTooltip('添加附件'), findsOneWidget);
     await tester.tap(find.byTooltip('发送'));
     expect(sent, isTrue);
+  });
+
+  testWidgets('offline prompt bar collapses to a reconnect action', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    var reconnectCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PromptBar(
+            controller: controller,
+            commands: const [],
+            running: false,
+            connected: false,
+            offline: true,
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: false,
+            onPermissionModeSelected: (_) {},
+            onCommandSelected: (_) {},
+            onReconnect: () => reconnectCount += 1,
+            onSend: () {},
+            onStop: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('重新连接'), findsOneWidget);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.byKey(const ValueKey('permission-mode-chip')), findsNothing);
+
+    await tester.tap(find.text('重新连接'));
+    expect(reconnectCount, 1);
   });
 
   testWidgets('permission request card submits one-time approval', (
@@ -1267,9 +1309,9 @@ void main() {
         home: AppBackground(
           child: ChatScreen(
             session: SavedSession(
-              origin: Uri.parse('https://tbhaoshuai.ccwu.cc'),
+              origin: Uri.parse('https://cc-remote.example.com'),
               token: 'demo',
-              deviceName: 'tb',
+              deviceName: 'My PC',
               workspaceDir: 'cc-remote',
             ),
             running: true,
@@ -1330,6 +1372,7 @@ void main() {
             allowBypassPermissions: false,
             onPermissionModeSelected: (_) {},
             onCommandSelected: (_) {},
+            onReconnect: () {},
             onSend: () {},
             onStop: () => stopCount += 1,
           ),
@@ -1384,9 +1427,9 @@ void main() {
           child: AppBackground(
             child: ChatScreen(
               session: SavedSession(
-                origin: Uri.parse('https://tbhaoshuai.ccwu.cc'),
+                origin: Uri.parse('https://cc-remote.example.com'),
                 token: 'demo',
-                deviceName: 'Jayson PC',
+                deviceName: 'My PC',
                 workspaceDir: 'cc-remote',
               ),
               running: true,
@@ -1445,9 +1488,9 @@ void main() {
                 padding: const EdgeInsets.all(14),
                 child: ConnectionHeader(
                   session: SavedSession(
-                    origin: Uri.parse('https://tbhaoshuai.ccwu.cc'),
+                    origin: Uri.parse('https://cc-remote.example.com'),
                     token: 'demo',
-                    deviceName: 'tb',
+                    deviceName: 'My PC',
                     workspaceDir: 'cc-remote',
                   ),
                   running: false,
@@ -1518,9 +1561,9 @@ void main() {
         home: AppBackground(
           child: ChatScreen(
             session: SavedSession(
-              origin: Uri.parse('https://tbhaoshuai.ccwu.cc'),
+              origin: Uri.parse('https://cc-remote.example.com'),
               token: 'demo',
-              deviceName: 'tb',
+              deviceName: 'My PC',
               workspaceDir: 'cc-remote',
             ),
             running: false,
@@ -1692,7 +1735,7 @@ void main() {
       ),
     );
 
-    expect(find.text('下一件事'), findsOneWidget);
+    expect(find.text('下一件事'), findsNothing);
     expect(find.text('让电脑重新上线'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
@@ -1717,7 +1760,8 @@ void main() {
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
 
-    expect(find.text('本机已连接，可以发送任务给 Claude Code'), findsOneWidget);
+    expect(find.text('下一件事'), findsOneWidget);
+    expect(find.text('从下方输入，或先点一个快捷任务'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -1773,18 +1817,18 @@ void main() {
       jsonEncode({
         'type': 'cc-remote-pair',
         'version': 1,
-        'origin': 'https://tbhaoshuai.ccwu.cc',
+        'origin': 'https://cc-remote.example.com',
         'nonce': 'abc123',
-        'deviceName': 'Jayson PC',
+        'deviceName': 'My PC',
         'expiresAt': DateTime.now()
             .add(const Duration(minutes: 5))
             .millisecondsSinceEpoch,
       }),
     );
 
-    expect(payload.origin.toString(), 'https://tbhaoshuai.ccwu.cc');
+    expect(payload.origin.toString(), 'https://cc-remote.example.com');
     expect(payload.nonce, 'abc123');
-    expect(payload.deviceName, 'Jayson PC');
+    expect(payload.deviceName, 'My PC');
   });
 
   test('rejects expired daemon QR pairing payloads', () {
@@ -1793,7 +1837,7 @@ void main() {
         jsonEncode({
           'type': 'cc-remote-pair',
           'version': 1,
-          'origin': 'https://tbhaoshuai.ccwu.cc',
+          'origin': 'https://cc-remote.example.com',
           'nonce': 'abc123',
           'expiresAt': DateTime.now()
               .subtract(const Duration(minutes: 1))

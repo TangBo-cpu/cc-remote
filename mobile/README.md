@@ -19,7 +19,7 @@ cc-remote
 再运行 App：
 
 ```powershell
-cd E:\Code-All\cc-remote\mobile
+cd C:\Projects\cc-remote\mobile
 flutter pub get
 flutter analyze
 flutter test
@@ -29,7 +29,7 @@ flutter run
 ## Android 构建与安装
 
 ```powershell
-cd E:\Code-All\cc-remote\mobile
+cd C:\Projects\cc-remote\mobile
 flutter build apk --debug
 adb devices -l
 adb install -r build\app\outputs\flutter-apk\app-debug.apk
@@ -57,9 +57,9 @@ adb shell monkey -p com.example.cc_remote -c android.intent.category.LAUNCHER 1
 {
   "type": "cc-remote-pair",
   "version": 1,
-  "origin": "https://tbhaoshuai.ccwu.cc",
+  "origin": "https://cc-remote.example.com",
   "nonce": "...",
-  "deviceName": "tb",
+  "deviceName": "My PC",
   "expiresAt": 1780000000000
 }
 ```
