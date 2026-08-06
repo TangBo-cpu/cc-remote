@@ -70,7 +70,8 @@
 - [x] daemon API 与 WebSocket 端到端自动化测试
 - [ ] 一键重置配对接口
 - [ ] 桌面托盘二维码窗口
-- [ ] 应用签名、版本发布和商店材料
+- [x] 发布 `v1.1.0` GitHub Release 和 Android APK
+- [ ] Android 正式签名和应用商店材料
 - [ ] Claude 进程预热 / 长驻 bridge，继续压首包延迟
 - [ ] 可选局域网直连调试入口（默认仍走 tunnel）
 

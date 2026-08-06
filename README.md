@@ -13,6 +13,8 @@ Flutter App
 
 ## 当前版本
 
+当前公开版本是 [`v1.1.0`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.1.0)。Android 用户可以从 Release 页面下载 APK；当前安装包使用测试签名，适合个人测试，不应作为应用商店正式包分发。
+
 当前主分支已经完成手机端主链路和浅色活力界面。界面使用暖纸色背景、黑色轮廓、薄荷绿、亮黄和珊瑚色，顶部连接舱采用紧凑双栏布局，目录、模型和剩余上下文集中在右侧。底部 Command Dock 负责权限模式、附件、输入、发送和停止。
 
 已经支持扫码配对、Bearer token、WebSocket 首包鉴权、流式输出、停止任务、六种权限模式、手机端一次性工具审批、斜杠指令、多项目与多会话、transcript 恢复、模型与上下文显示、只读工作区、Git diff、图片与文件附件、Android 后台本地通知和离线重连。
@@ -79,6 +81,13 @@ https://cc-remote.example.com/api/health
 
 ## Flutter App
 
+Android APK：
+
+- [查看 `v1.1.0` Release](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.1.0)
+- [直接下载 `cc-remote-v1.1.0-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.1.0/cc-remote-v1.1.0-android.apk)
+
+下载后在 Android 手机上允许当前来源安装未知应用，并打开 APK 完成安装。
+
 开发运行：
 
 ```powershell
@@ -89,7 +98,7 @@ flutter test
 flutter run
 ```
 
-构建并安装 Android 调试版：
+开发者构建并安装 Android 调试版：
 
 ```powershell
 cd C:\Projects\cc-remote\mobile

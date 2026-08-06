@@ -26,7 +26,15 @@ flutter test
 flutter run
 ```
 
-## Android 构建与安装
+## Android 安装
+
+当前公开版本是 [`v1.1.0`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.1.0)：
+
+- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.1.0/cc-remote-v1.1.0-android.apk)
+
+下载后在 Android 手机上允许当前来源安装未知应用，并打开 APK 完成安装。当前 APK 使用测试签名，适合个人测试，不应作为应用商店正式包分发。
+
+## Android 调试构建
 
 ```powershell
 cd C:\Projects\cc-remote\mobile
@@ -96,4 +104,4 @@ App 在后台或锁屏时可以发送任务完成、失败、停止和等待权�
 
 ## 当前验证状态
 
-主分支通过 `flutter analyze` 和 46 项 Flutter 测试。最新版已安装到 Android 真机并检查主界面。第二轮 session resume 和 Stop 长任务仍需专项真机验证。
+`v1.1.0` 通过 `flutter analyze` 和 70 项 Flutter 测试，并已安装到 Android 真机确认版本与主界面。第二轮 session resume 已完成真机验证；Stop 长任务仍需专项验证。
