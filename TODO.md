@@ -30,7 +30,7 @@
 - [x] 启动恢复、离线态、前台重连和退出配对
 - [x] prompt、流式输出、停止和错误状态
 - [x] Claude Code 斜杠指令搜索与滚动选择
-- [x] 思考计时、安全化工具活动和 Markdown 输出
+- [x] 思考计时、安全化工具活动（含具体 Skill 名称）和 Markdown 输出
 - [x] 流式期间轻量文本渲染，结束后再 Markdown
 - [x] 流式 `setState` 合批与本地 transcript 落盘节流
 - [x] 权限模式选择和一次性工具审批
@@ -54,7 +54,7 @@
 ## 待专项验证
 
 - [x] 真机连续发送第二条 prompt，确认 `--resume <claudeSessionId>` 延续上下文
-- [ ] 真机 Stop 中断长任务并确认没有残留 Claude 进程
+- [x] 真机 Stop 中断长任务并确认没有残留 Claude 进程
 - [x] logout 后旧 Bearer token 与旧 WebSocket 均失效
 - [x] 错误 Origin 和 Host 被 daemon 拒绝，WebSocket upgrade 同样受限
 - [ ] 手机浏览器通过公网域名访问 `/api/health`

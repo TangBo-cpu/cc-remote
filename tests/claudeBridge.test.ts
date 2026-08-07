@@ -190,6 +190,24 @@ test('normalizes safe activity events without exposing thinking text or tool res
   }]);
 
   assert.deepEqual(extractClaudeActivities({
+    type: 'assistant',
+    message: {
+      content: [{
+        type: 'tool_use',
+        id: 'tool-skill',
+        name: 'Skill',
+        input: { skill: 'full-output-enforcement', args: 'count to 100000' },
+      }],
+    },
+  }), [{
+    id: 'tool-skill',
+    kind: 'tool',
+    state: 'running',
+    toolName: 'Skill',
+    detail: 'full-output-enforcement',
+  }]);
+
+  assert.deepEqual(extractClaudeActivities({
     type: 'user',
     message: {
       content: [{

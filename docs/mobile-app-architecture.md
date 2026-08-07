@@ -77,7 +77,7 @@ App 调用 `POST /api/pair` 换取 Bearer token。token 明文只返回给 App�
 
 任务消息包含 `sessionId`、文本、附件 ID 和权限模式。daemon 校验会话归属和附件归属，将可信附件路径拼入交给 Claude 的 prompt，并通过 `--add-dir` 允许 Claude 读取隔离目录。
 
-Claude Code 运行期间，daemon 将输出归一化为 `text`、`activity`、`session_info` 和 `permission_request`。`activity` 会移除私有思考文本、完整工具结果和附件本机路径。`text` 在 daemon 侧短时合批后再推送，任务进入 `done` / `stopped` / `error` 前会 flush 尾包，随后广播空闲状态和更新后的 catalog。
+Claude Code 运行期间，daemon 将输出归一化为 `text`、`activity`、`session_info` 和 `permission_request`。`activity` 会移除私有思考文本、完整工具结果和附件本机路径，同时保留 `Skill` 工具的具体 Skill 名称。`text` 在 daemon 侧短时合批后再推送，任务进入 `done` / `stopped` / `error` 前会 flush 尾包，随后广播空闲状态和更新后的 catalog。
 
 `transcript_snapshot` 是会话内容的权威来源。App 可以先显示本地缓存，WebSocket 鉴权后再以 daemon 快照补齐断线输出。daemon 重启时，持久化为 running 的任务会归一化为 interrupted。
 
@@ -105,4 +105,4 @@ daemon 默认只监听 loopback。公网访问由 tunnel 提供。手机不能�
 
 ## 当前未完成
 
-多设备管理、会话全文搜索、FCM 推送、发布签名和商店材料尚未实现。真机 Stop 长任务残留进程、公网 health 检查，以及冷启动切项目 / 隧道首字延迟对照仍需专项验证。Claude 进程预热和可选局域网直连属于后续性能项。
+多设备管理、会话全文搜索、FCM 推送、发布签名和商店材料尚未实现。公网 health 检查，以及冷启动切项目 / 隧道首字延迟对照仍需专项验证。Claude 进程预热和可选局域网直连属于后续性能项。

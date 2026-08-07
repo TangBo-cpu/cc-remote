@@ -611,7 +611,7 @@ function findSessionId(value: unknown): string | undefined {
 
 function summarizeToolInput(value: unknown): string | undefined {
   if (!isRecord(value)) return undefined;
-  for (const key of ['file_path', 'path', 'command', 'pattern', 'query', 'description', 'url']) {
+  for (const key of ['file_path', 'path', 'command', 'skill', 'pattern', 'query', 'description', 'url']) {
     const item = value[key];
     if (typeof item === 'string' && item.trim()) return truncate(item.trim(), 240);
   }
