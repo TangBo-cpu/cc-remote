@@ -74,9 +74,9 @@ adb shell monkey -p com.example.cc_remote -c android.intent.category.LAUNCHER 1
 
 ## 会话流程
 
-WebSocket 鉴权后，App 接收项目 catalog、当前 transcript、权限能力、指令、模型和上下文。发送任务时携带当前 `sessionId`、文本、附件 ID 和权限模式。
+WebSocket 鉴权后，App 接收项目 catalog、当前 transcript、权限能力、指令、模型和上下文。发送任务时携带唯一 `promptId`、当前 `sessionId`、文本、附件 ID 和权限模式；daemon 接管后返回 `prompt_accepted`。
 
-输入 `/` 会显示 daemon 同步的 Claude Code 指令。运行中会显示思考计时和安全化工具活动；调用 `Skill` 时会显示具体 Skill 名称。完成后临时活动收起，最终回复保留。连接异常时 WebSocket 按退避间隔自动重连，但不会自动重发任务；重连后以 daemon 的 transcript snapshot 和运行状态恢复内容、活动任务与 Stop 中间态。
+输入 `/` 会显示 daemon 同步的 Claude Code 指令。运行中会显示思考计时和安全化工具活动；调用 `Skill` 时会显示具体 Skill 名称。完成后临时活动收起，最终回复保留。连接异常时 WebSocket 按退避间隔自动重连；只有尚未收到确认的 Prompt 会使用同一 `promptId` 重发，daemon 去重后不会重复启动 Claude。重连后再以 daemon 的 transcript snapshot 和运行状态恢复内容、活动任务与 Stop 中间态。
 
 项目只能从电脑端注册：在目标目录运行 `cc-remote`，或 daemon 已在跑时再执行一次。App 可以切换已注册项目与会话，并在当前项目创建新会话，但不能添加任意磁盘路径。运行任务或上传附件时禁止切换。
 
@@ -104,4 +104,4 @@ App 在后台或锁屏时可以发送任务完成、失败、停止和等待权�
 
 ## 当前验证状态
 
-当前 `master` 通过 `flutter analyze` 和 74 项 Flutter 测试，并已安装过 `v1.1.0` 到 Android 真机确认版本与主界面。第二轮 session resume 与 Stop 长任务均已完成真机验证；Stop 后 daemon 没有残留 Claude 子进程。自动重连、活动任务恢复和 Stop 中间态已由 Flutter 与 daemon 端到端测试覆盖。
+当前 `master` 通过 `flutter analyze` 和 75 项 Flutter 测试，并已安装过 `v1.1.0` 到 Android 真机确认版本与主界面。第二轮 session resume 与 Stop 长任务均已完成真机验证；Stop 后 daemon 没有残留 Claude 子进程。自动重连、Prompt 确认去重、活动任务恢复和 Stop 中间态已由 Flutter 与 daemon 端到端测试覆盖。

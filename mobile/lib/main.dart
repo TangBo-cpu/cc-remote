@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -91,6 +92,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   static const disconnectedRunMessage = '连接已断开，正在等待电脑端状态';
   static const sessionScopedMessageTypes = <String>{
     'status',
+    'prompt_accepted',
     'transcript_snapshot',
     'permission_request',
     'permission_resolved',
@@ -104,6 +106,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     'error',
   };
   static const runScopedMessageTypes = <String>{
+    'prompt_accepted',
     'text',
     'activity',
     'permission_request',
@@ -663,7 +666,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       return;
     }
 
-    closeWs();
     setState(() => wsReady = false);
 
     try {
@@ -746,6 +748,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         });
         openPendingNotificationSession();
         persistTranscriptSnapshotLater();
+      case 'prompt_accepted':
+        return;
       case 'transcript_snapshot':
         final snapshot = RemoteTranscriptSnapshot.tryParse(decoded);
         if (snapshot == null ||
@@ -1127,8 +1131,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     }
 
     final permissionMode = selectedPermissionMode;
-    final sent = wsClient.send(
+    final sent = wsClient.sendPrompt(
       buildPromptMessage(
+        promptId: createPromptId(),
         text: text,
         attachmentIds: uploaded.map((attachment) => attachment.id),
         permissionMode: permissionMode,
@@ -5175,6 +5180,7 @@ class AssistantAvatar extends StatelessWidget {
 }
 
 Map<String, Object> buildPromptMessage({
+  required String promptId,
   required String text,
   required Iterable<String> attachmentIds,
   required PermissionMode permissionMode,
@@ -5184,12 +5190,21 @@ Map<String, Object> buildPromptMessage({
   final attachments = attachmentIds.toList(growable: false);
   return {
     'type': 'prompt',
+    'promptId': promptId,
     'text': text,
     if (attachments.isNotEmpty) 'attachmentIds': attachments,
     'permissionMode': permissionMode.wireName,
     'sessionId': sessionId,
     'model': ?model.wireName,
   };
+}
+
+final Random _promptIdRandom = Random.secure();
+
+String createPromptId() {
+  final timestamp = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+  final random = _promptIdRandom.nextInt(0x7fffffff).toRadixString(36);
+  return '$timestamp-$random';
 }
 
 class ActivityBlock extends StatelessWidget {

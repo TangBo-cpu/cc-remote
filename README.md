@@ -175,6 +175,7 @@ POST /api/logout
 ```json
 {
   "type": "prompt",
+  "promptId": "...",
   "sessionId": "...",
   "text": "帮我检查这个项目",
   "attachmentIds": ["..."],
@@ -190,9 +191,9 @@ POST /api/logout
 { "type": "permission_response", "requestId": "...", "decision": "allow" }
 ```
 
-服务端消息包括 `status`、`catalog`、`transcript_snapshot`、`permission_capabilities`、`permission_request`、`permission_resolved`、`permission_expired`、`commands`、`session_info`、`activity`、`text`、`done`、`stopped` 和 `error`。
+服务端消息包括 `status`、`catalog`、`prompt_accepted`、`transcript_snapshot`、`permission_capabilities`、`permission_request`、`permission_resolved`、`permission_expired`、`commands`、`session_info`、`activity`、`text`、`done`、`stopped` 和 `error`。
 
-`activity` 只发送安全化后的思考状态、工具名和摘要，不发送私有思考文本或完整工具结果。`text` 在 daemon 侧会短时合批后再推送，任务结束前会 flush 尾包。会话消息带 `projectId` 和 `sessionId`；App 重连后以 daemon 的 `transcript_snapshot` 为准恢复内容，并通过 `running`、`stopping`、`runId` 和 `startedAt` 恢复活动任务及 Stop 中间态，不会重复发送 prompt。
+`activity` 只发送安全化后的思考状态、工具名和摘要，不发送私有思考文本或完整工具结果。`text` 在 daemon 侧会短时合批后再推送，任务结束前会 flush 尾包。会话消息带 `projectId` 和 `sessionId`；daemon 接管任务后返回带相同 `promptId` 的 `prompt_accepted`。App 只会在确认丢失时重发同一个 `promptId`，daemon 的有界收据缓存会返回原确认而不再次启动 Claude。重连后再以 `transcript_snapshot`、`running`、`stopping`、`runId` 和 `startedAt` 恢复任务内容与 Stop 中间态。
 
 ## 配置
 

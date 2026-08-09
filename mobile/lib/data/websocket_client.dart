@@ -37,6 +37,7 @@ class RemoteWebSocketClient {
   WebSocketMessageHandler? _onMessage;
   WebSocketErrorHandler? _onError;
   void Function()? _onDone;
+  Map<String, dynamic>? _pendingPrompt;
 
   WebSocketChannel? get channel => _channel;
 
@@ -47,6 +48,8 @@ class RemoteWebSocketClient {
     required WebSocketErrorHandler onError,
     required void Function() onDone,
   }) {
+    final sameCredentials = _origin == origin && _token == token;
+    if (!sameCredentials) _pendingPrompt = null;
     _origin = origin;
     _token = token;
     _onMessage = onMessage;
@@ -79,7 +82,9 @@ class RemoteWebSocketClient {
       (data) {
         if (!_isCurrent(channel, generation)) return;
         _reconnectAttempt = 0;
+        final authenticated = _handlePromptProtocolMessage(data);
         _onMessage?.call(data);
+        if (authenticated) _retryPendingPrompt(channel, generation);
       },
       onError: (Object error, StackTrace stackTrace) {
         if (!_isCurrent(channel, generation)) return;
@@ -119,6 +124,33 @@ class RemoteWebSocketClient {
     }
   }
 
+  bool sendPrompt(Map<String, dynamic> message, {Object? expectedConnection}) {
+    final channel = _channel;
+    if (channel == null ||
+        (expectedConnection != null && channel != expectedConnection)) {
+      return false;
+    }
+    final promptId = message['promptId'];
+    if (message['type'] != 'prompt' ||
+        promptId is! String ||
+        promptId.isEmpty) {
+      return false;
+    }
+    final pending = _pendingPrompt;
+    if (pending != null && pending['promptId'] != promptId) return false;
+    _pendingPrompt = Map<String, dynamic>.from(message);
+    final generation = _generation;
+    try {
+      channel.sink.add(jsonEncode(message));
+    } catch (error) {
+      if (_isCurrent(channel, generation)) {
+        _onError?.call(error);
+        _handleDisconnect(channel, generation);
+      }
+    }
+    return true;
+  }
+
   void close() {
     _explicitlyClosed = true;
     _reconnectAttempt = 0;
@@ -129,7 +161,39 @@ class RemoteWebSocketClient {
     _onMessage = null;
     _onError = null;
     _onDone = null;
+    _pendingPrompt = null;
     _closeCurrentConnection();
+  }
+
+  bool _handlePromptProtocolMessage(dynamic data) {
+    try {
+      final decoded = jsonDecode(data.toString());
+      if (decoded is! Map<String, dynamic>) return false;
+      final pendingPromptId = _pendingPrompt?['promptId'];
+      final messagePromptId = decoded['promptId'];
+      if (pendingPromptId is String && messagePromptId == pendingPromptId) {
+        if (decoded['type'] == 'prompt_accepted' ||
+            decoded['type'] == 'error') {
+          _pendingPrompt = null;
+        }
+      }
+      return decoded['type'] == 'status' && decoded['authenticated'] == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _retryPendingPrompt(WebSocketChannel channel, int generation) {
+    final pending = _pendingPrompt;
+    if (pending == null || !_isCurrent(channel, generation)) return;
+    try {
+      channel.sink.add(jsonEncode(pending));
+    } catch (error) {
+      if (_isCurrent(channel, generation)) {
+        _onError?.call(error);
+        _handleDisconnect(channel, generation);
+      }
+    }
   }
 
   void _handleDisconnect(WebSocketChannel channel, int generation) {

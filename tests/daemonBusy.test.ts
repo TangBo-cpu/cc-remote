@@ -32,16 +32,21 @@ after(async () => {
 
 test('running task recovers across reconnect and stops after the process exits', async () => {
   const { token, sessionId, socket, inbox } = await pairAndConnect();
+  const promptId = 'prompt-reconnect-1';
   let activeSocket = socket;
   try {
     activeSocket.send(JSON.stringify({
       type: 'prompt',
+      promptId,
       sessionId,
       text: 'hang please',
       permissionMode: 'manual',
     }));
+    const accepted = await inbox.next(message =>
+      message.type === 'prompt_accepted' && message.promptId === promptId);
+    assert.equal(typeof accepted.runId, 'string');
     const started = await inbox.next(message => message.type === 'status' && message.running === true);
-    assert.equal(typeof started.runId, 'string');
+    assert.equal(started.runId, accepted.runId);
     assert.equal(typeof started.startedAt, 'number');
     assert.equal(started.stopping, false);
 
@@ -86,6 +91,17 @@ test('running task recovers across reconnect and stops after the process exits',
     assert.equal(recoveredSnapshot.stopping, false);
     assert.equal(recoveredSnapshot.runId, started.runId);
     assert.equal(recoveredSnapshot.startedAt, started.startedAt);
+
+    activeSocket.send(JSON.stringify({
+      type: 'prompt',
+      promptId,
+      sessionId,
+      text: 'hang please',
+      permissionMode: 'manual',
+    }));
+    const duplicateAccepted = await reconnected.inbox.next(message =>
+      message.type === 'prompt_accepted' && message.promptId === promptId);
+    assert.equal(duplicateAccepted.runId, started.runId);
 
     const stopResponse = await fetch(`${daemon.baseUrl}/api/stop`, {
       method: 'POST',

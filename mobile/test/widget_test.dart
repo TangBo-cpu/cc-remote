@@ -100,6 +100,7 @@ void main() {
 
   test('prompt messages only include an explicit model override', () {
     final following = buildPromptMessage(
+      promptId: 'prompt-1',
       text: 'hello',
       attachmentIds: const [],
       permissionMode: PermissionMode.manual,
@@ -107,6 +108,7 @@ void main() {
       model: ClaudeModelPreference.followComputer,
     );
     final opus = buildPromptMessage(
+      promptId: 'prompt-2',
       text: 'hello',
       attachmentIds: const ['attachment-1'],
       permissionMode: PermissionMode.plan,
@@ -115,7 +117,9 @@ void main() {
     );
 
     expect(following, isNot(contains('model')));
+    expect(following['promptId'], 'prompt-1');
     expect(opus['model'], 'opus');
+    expect(opus['promptId'], 'prompt-2');
     expect(opus['attachmentIds'], ['attachment-1']);
   });
 

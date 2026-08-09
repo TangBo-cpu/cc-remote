@@ -67,6 +67,8 @@ const openSockets = new Set<WebSocket>();
 const authedSockets = new Set<WebSocket>();
 const commandCaches = new Map<string, string[]>();
 const commandDiscoveries = new Map<string, Promise<string[]>>();
+const promptReceipts = new Map<string, PromptReceipt>();
+const MAX_PROMPT_RECEIPTS = 256;
 let nextRunId = 0;
 let activeRunId: string | undefined;
 let activeRunStartedAt: number | undefined;
@@ -514,6 +516,7 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     requestId?: string;
     decision?: string;
     sessionId?: string;
+    promptId?: unknown;
     model?: unknown;
     attachmentIds?: unknown;
   };
@@ -572,9 +575,53 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
   const attachmentIds = (msg.attachmentIds ?? []) as string[];
   if (!prompt && attachmentIds.length === 0) return;
   if (prompt.length > MAX_BODY_BYTES) throw new Error('prompt_too_large');
-  if (!runFlight.tryBegin('prompt')) throw new Error('claude_is_busy');
+  const promptId = parsePromptId(msg.promptId);
+  const promptContext = msg.sessionId
+    ? projectSessions.getSession(msg.sessionId)
+    : activeContext;
+  if (!promptContext) throw new Error('session_not_found');
+  const signature = promptSignature(msg, prompt, attachmentIds);
+  if (promptId) {
+    const receipt = promptReceipts.get(promptId);
+    if (receipt) {
+      if (receipt.signature !== signature) {
+        send(ws, {
+          type: 'error',
+          message: 'prompt_id_conflict',
+          promptId,
+          projectId: receipt.projectId,
+          sessionId: receipt.sessionId,
+          runId: receipt.runId,
+        });
+      } else {
+        sendPromptAccepted(ws, promptId, receipt);
+      }
+      return;
+    }
+  }
+  if (!runFlight.tryBegin('prompt')) {
+    if (promptId) {
+      send(ws, sessionMessage({
+        type: 'error',
+        message: 'claude_is_busy',
+        promptId,
+      }, promptContext));
+      return;
+    }
+    throw new Error('claude_is_busy');
+  }
   const runId = `run-${++nextRunId}`;
   activeRunId = runId;
+  if (promptId) {
+    const receipt = {
+      signature,
+      projectId: promptContext.project.id,
+      sessionId: promptContext.session.id,
+      runId,
+    };
+    rememberPromptReceipt(promptId, receipt);
+    sendPromptAccepted(ws, promptId, receipt);
+  }
   try {
     await runPromptFlight(msg, prompt, attachmentIds, runId);
   } finally {
@@ -910,6 +957,54 @@ function sessionMessage(
     sessionId: context.session.id,
     ...(runId ? { runId } : {}),
   };
+}
+
+type PromptReceipt = {
+  signature: string;
+  projectId: string;
+  sessionId: string;
+  runId: string;
+};
+
+function parsePromptId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value.length < 1 || value.length > 128) {
+    throw new Error('invalid_prompt_id');
+  }
+  return value;
+}
+
+function promptSignature(
+  msg: { sessionId?: string; permissionMode?: string; model?: unknown },
+  prompt: string,
+  attachmentIds: string[],
+): string {
+  return JSON.stringify({
+    sessionId: msg.sessionId ?? activeContext.session.id,
+    prompt,
+    attachmentIds,
+    permissionMode: msg.permissionMode ?? 'manual',
+    model: msg.model ?? null,
+  });
+}
+
+function rememberPromptReceipt(promptId: string, receipt: PromptReceipt): void {
+  promptReceipts.set(promptId, receipt);
+  while (promptReceipts.size > MAX_PROMPT_RECEIPTS) {
+    const oldest = promptReceipts.keys().next().value as string | undefined;
+    if (!oldest) break;
+    promptReceipts.delete(oldest);
+  }
+}
+
+function sendPromptAccepted(ws: WebSocket, promptId: string, receipt: PromptReceipt): void {
+  send(ws, {
+    type: 'prompt_accepted',
+    promptId,
+    projectId: receipt.projectId,
+    sessionId: receipt.sessionId,
+    runId: receipt.runId,
+  });
 }
 
 function taskStatus(context: SessionContext): Record<string, unknown> {

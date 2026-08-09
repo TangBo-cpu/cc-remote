@@ -160,6 +160,59 @@ void main() {
     client.close();
   });
 
+  test('resends an unacknowledged prompt after reconnect only', () async {
+    final first = FakeWebSocketChannel();
+    final second = FakeWebSocketChannel();
+    final third = FakeWebSocketChannel();
+    final channels = <FakeWebSocketChannel>[first, second, third];
+    final client = RemoteWebSocketClient(
+      connect: (_) => channels.removeAt(0),
+      reconnectDelays: const [Duration.zero],
+    );
+    final prompt = <String, dynamic>{
+      'type': 'prompt',
+      'promptId': 'prompt-1',
+      'sessionId': 'session-1',
+      'text': 'keep this prompt',
+      'permissionMode': 'manual',
+    };
+
+    client.connect(
+      origin: Uri.parse('https://example.test'),
+      token: 'secret',
+      onMessage: (_) {},
+      onError: (_) {},
+      onDone: () {},
+    );
+    expect(client.sendPrompt(prompt, expectedConnection: first), isTrue);
+
+    await first.incoming.close();
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    second.incoming.add(jsonEncode({'type': 'status', 'authenticated': true}));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(second.sent, [
+      jsonEncode({'type': 'auth', 'token': 'secret'}),
+      jsonEncode(prompt),
+    ]);
+
+    second.incoming.add(
+      jsonEncode({'type': 'prompt_accepted', 'promptId': 'prompt-1'}),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await second.incoming.close();
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+    third.incoming.add(jsonEncode({'type': 'status', 'authenticated': true}));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(third.sent, [
+      jsonEncode({'type': 'auth', 'token': 'secret'}),
+    ]);
+    client.close();
+  });
+
   test('retries when opening a connection throws synchronously', () async {
     final channel = FakeWebSocketChannel();
     var connectCount = 0;
