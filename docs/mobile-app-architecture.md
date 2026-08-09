@@ -73,13 +73,13 @@ App 调用 `POST /api/pair` 换取 Bearer token。token 明文只返回给 App�
 
 ## WebSocket 运行流
 
-鉴权完成后，daemon 发送 `catalog`、`status`、`transcript_snapshot`、`permission_capabilities` 和当前 `session_info`。App 由此恢复项目、会话、运行状态、待审批请求、模型和剩余上下文。
+鉴权完成后，daemon 发送 `catalog`、`status`、`transcript_snapshot`、`permission_capabilities` 和当前 `session_info`。App 由此恢复项目、会话、运行状态、待审批请求、模型和剩余上下文。活动任务状态包含 `running`、`stopping`、`runId` 和 `startedAt`，用于在重连后恢复 Stop 按钮状态与思考计时。
 
 任务消息包含 `sessionId`、文本、附件 ID 和权限模式。daemon 校验会话归属和附件归属，将可信附件路径拼入交给 Claude 的 prompt，并通过 `--add-dir` 允许 Claude 读取隔离目录。
 
 Claude Code 运行期间，daemon 将输出归一化为 `text`、`activity`、`session_info` 和 `permission_request`。`activity` 会移除私有思考文本、完整工具结果和附件本机路径，同时保留 `Skill` 工具的具体 Skill 名称。`text` 在 daemon 侧短时合批后再推送，任务进入 `done` / `stopped` / `error` 前会 flush 尾包，随后广播空闲状态和更新后的 catalog。
 
-`transcript_snapshot` 是会话内容的权威来源。App 可以先显示本地缓存，WebSocket 鉴权后再以 daemon 快照补齐断线输出。daemon 重启时，持久化为 running 的任务会归一化为 interrupted。
+`transcript_snapshot` 是会话内容的权威来源。App 可以先显示本地缓存，WebSocket 鉴权后再以 daemon 快照补齐断线输出。WebSocket 客户端按退避间隔自动重连，但不自动重发 prompt；重连后通过同一份快照和活动任务状态继续展示运行中或停止中的任务。daemon 重启时，持久化为 running 的任务会归一化为 interrupted。
 
 ## Flutter 状态流
 

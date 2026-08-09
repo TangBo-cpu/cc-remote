@@ -69,6 +69,7 @@ const commandCaches = new Map<string, string[]>();
 const commandDiscoveries = new Map<string, Promise<string[]>>();
 let nextRunId = 0;
 let activeRunId: string | undefined;
+let activeRunStartedAt: number | undefined;
 let sessionInfo: ClaudeSessionInfo = activeContext.transcript.snapshot().sessionInfo;
 if (!Object.keys(sessionInfo).length) {
   const restoredSessionInfo = await restoreClaudeSessionInfo({
@@ -164,6 +165,7 @@ wss.on('connection', ws => {
         send(ws, sessionMessage({
           type: 'transcript_snapshot',
           ...activeContext.transcript.snapshot(),
+          ...taskStatus(activeContext),
         }, activeContext, activeRunId));
         send(ws, { type: 'permission_capabilities', allowBypassPermissions: ALLOW_BYPASS_PERMISSIONS });
         return true;
@@ -251,7 +253,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   if (req.method === 'GET' && url.pathname === '/api/status') {
     sendJson(res, 200, {
       authorized: true,
-      running: runFlight.isBusy(),
+      ...taskStatus(activeContext),
       deviceName: DEVICE_NAME,
       workspaceDir: activeContext.project.path,
       activeProjectId: activeContext.project.id,
@@ -484,11 +486,10 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   if (req.method === 'POST' && url.pathname === '/api/stop') {
     runFlight.requestStop();
     const stopped = bridge.stop();
-    if (stopped) await activeContext.transcript.finishStopped();
     broadcast(sessionMessage({
-      type: stopped ? 'stopped' : 'status',
+      type: 'status',
       authenticated: true,
-      running: false,
+      ...taskStatus(activeContext),
       hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
     }, activeContext, activeRunId));
     sendJson(res, 200, { stopped });
@@ -528,8 +529,13 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
 
   if (msg.type === 'stop') {
     runFlight.requestStop();
-    const stopped = bridge.stop();
-    if (!stopped) sendStatus(ws, true);
+    bridge.stop();
+    broadcast(sessionMessage({
+      type: 'status',
+      authenticated: true,
+      ...taskStatus(activeContext),
+      hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
+    }, activeContext, activeRunId));
     return;
   }
 
@@ -572,7 +578,10 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
   try {
     await runPromptFlight(msg, prompt, attachmentIds, runId);
   } finally {
-    if (activeRunId === runId) activeRunId = undefined;
+    if (activeRunId === runId) {
+      activeRunId = undefined;
+      activeRunStartedAt = undefined;
+    }
     runFlight.end();
   }
 }
@@ -616,6 +625,7 @@ async function runPromptFlight(
   const claudePrompt = promptWithAttachments(prompt, promptAttachments);
   if (runFlight.isStopRequested()) return;
 
+  activeRunStartedAt = Date.now();
   runContext.transcript.beginPrompt(
     displayPrompt,
     permissionMode,
@@ -631,7 +641,7 @@ async function runPromptFlight(
     broadcast(sessionMessage({
       type: 'status',
       authenticated: true,
-      running: false,
+      ...taskStatus(runContext),
       hasClaudeSessionId: Boolean(runContext.transcript.snapshot().claudeSessionId),
     }, runContext, runId));
     broadcastCatalog();
@@ -641,7 +651,7 @@ async function runPromptFlight(
   broadcast(sessionMessage({
     type: 'status',
     authenticated: true,
-    running: true,
+    ...taskStatus(runContext),
     hasClaudeSessionId: Boolean(runContext.transcript.snapshot().claudeSessionId),
   }, runContext, runId));
 
@@ -696,7 +706,9 @@ async function runPromptFlight(
   if (previousSessionId && result.exitCode !== 0 && isMissingConversationError(result.stderr)) {
     await auth.setClaudeSessionId(undefined);
     runContext.transcript.setClaudeSessionId(undefined);
-    result = await runClaude(undefined);
+    result = runFlight.isStopRequested()
+      ? { ...result, stopped: true }
+      : await runClaude(undefined);
   }
 
   // Flush coalesced stream text before terminal events so clients never miss a tail.
@@ -725,7 +737,7 @@ async function runPromptFlight(
   broadcast(sessionMessage({
     type: 'status',
     authenticated: true,
-    running: false,
+    ...taskStatus(runContext),
     hasClaudeSessionId: Boolean(runContext.transcript.snapshot().claudeSessionId),
   }, runContext, runId));
   broadcastCatalog();
@@ -809,7 +821,7 @@ function sendStatus(ws: WebSocket, authenticated: boolean): void {
   send(ws, sessionMessage({
     type: 'status',
     authenticated,
-    running: runFlight.isBusy(),
+    ...taskStatus(activeContext),
     hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
     workspaceDir: activeContext.project.path,
   }, activeContext, activeRunId));
@@ -873,7 +885,7 @@ function broadcastActiveSession(): void {
   broadcast(sessionMessage({
     type: 'status',
     authenticated: true,
-    running: runFlight.isBusy(),
+    ...taskStatus(activeContext),
     hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
     workspaceDir: activeContext.project.path,
   }, activeContext, activeRunId));
@@ -881,6 +893,7 @@ function broadcastActiveSession(): void {
   broadcast(sessionMessage({
     type: 'transcript_snapshot',
     ...activeContext.transcript.snapshot(),
+    ...taskStatus(activeContext),
   }, activeContext, activeRunId));
   const commands = commandCaches.get(activeContext.project.id);
   if (commands?.length) broadcast(sessionMessage({ type: 'commands', commands }));
@@ -896,6 +909,15 @@ function sessionMessage(
     projectId: context.project.id,
     sessionId: context.session.id,
     ...(runId ? { runId } : {}),
+  };
+}
+
+function taskStatus(context: SessionContext): Record<string, unknown> {
+  const running = context.transcript.snapshot().running;
+  return {
+    running,
+    stopping: running && runFlight.isStopRequested(),
+    ...(running && activeRunStartedAt ? { startedAt: activeRunStartedAt } : {}),
   };
 }
 

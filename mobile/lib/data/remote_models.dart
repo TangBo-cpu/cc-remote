@@ -243,6 +243,9 @@ class RemoteStatus {
     required this.workspaceDir,
     required this.running,
     required this.hasSessionInfo,
+    this.stopping = false,
+    this.runId,
+    this.startedAt,
     this.catalog,
     this.modelName,
     this.contextWindow,
@@ -253,6 +256,9 @@ class RemoteStatus {
   final String? workspaceDir;
   final bool running;
   final bool hasSessionInfo;
+  final bool stopping;
+  final String? runId;
+  final DateTime? startedAt;
   final RemoteProjectCatalog? catalog;
   final String? modelName;
   final int? contextWindow;
@@ -268,6 +274,9 @@ class RemoteStatus {
       workspaceDir: json['workspaceDir'] as String?,
       running: json['running'] == true,
       hasSessionInfo: rawSessionInfo is Map<String, dynamic>,
+      stopping: json['stopping'] == true,
+      runId: json['runId'] as String?,
+      startedAt: _dateTimeFromMilliseconds(json['startedAt']),
       catalog: json['catalog'] is Map<String, dynamic>
           ? RemoteProjectCatalog.tryParse(
               json['catalog'] as Map<String, dynamic>,
@@ -372,7 +381,9 @@ class RemoteTranscriptSnapshot {
     required this.messages,
     required this.permissionMode,
     required this.pendingPermissions,
+    this.stopping = false,
     this.runId,
+    this.startedAt,
     this.modelName,
     this.contextWindow,
     this.remainingContext,
@@ -383,7 +394,9 @@ class RemoteTranscriptSnapshot {
   final List<TranscriptMessage> messages;
   final PermissionMode permissionMode;
   final List<RemotePermissionRequest> pendingPermissions;
+  final bool stopping;
   final String? runId;
+  final DateTime? startedAt;
   final String? modelName;
   final int? contextWindow;
   final int? remainingContext;
@@ -408,7 +421,9 @@ class RemoteTranscriptSnapshot {
             )
             .toList(),
         permissionMode: PermissionMode.fromWire(json['permissionMode']),
+        stopping: json['stopping'] == true,
         runId: json['runId'] as String?,
+        startedAt: _dateTimeFromMilliseconds(json['startedAt']),
         pendingPermissions: (json['pendingPermissions'] as List? ?? const [])
             .map(
               (item) => RemotePermissionRequest.tryParse(
@@ -431,13 +446,14 @@ bool shouldApplyRemoteTranscriptSnapshot({
   required RemoteTranscriptSnapshot snapshot,
   required int currentRevision,
   required bool hasLocalMessages,
-  bool hasUnappliedLiveChanges = false,
 }) {
   if (snapshot.revision < currentRevision) return false;
-  if (snapshot.revision == currentRevision && hasUnappliedLiveChanges) {
-    return false;
-  }
   return snapshot.revision != 0 || !hasLocalMessages;
+}
+
+DateTime? _dateTimeFromMilliseconds(Object? value) {
+  if (value is! num) return null;
+  return DateTime.fromMillisecondsSinceEpoch(value.toInt());
 }
 
 class TranscriptSnapshot {

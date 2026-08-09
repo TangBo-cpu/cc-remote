@@ -27,8 +27,9 @@
 ### Flutter App
 
 - [x] 扫码、配对确认和 Secure Storage
-- [x] 启动恢复、离线态、前台重连和退出配对
+- [x] 启动恢复、离线态、WebSocket 自动重连、前台探测和退出配对
 - [x] prompt、流式输出、停止和错误状态
+- [x] 断线重连后恢复活动任务、Stop 中间态和思考计时
 - [x] Claude Code 斜杠指令搜索与滚动选择
 - [x] 思考计时、安全化工具活动（含具体 Skill 名称）和 Markdown 输出
 - [x] 流式期间轻量文本渲染，结束后再 Markdown

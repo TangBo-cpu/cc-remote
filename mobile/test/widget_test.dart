@@ -192,7 +192,10 @@ void main() {
     final status = RemoteStatus.fromJson({
       'deviceName': 'My PC',
       'workspaceDir': 'cc-remote',
-      'running': false,
+      'running': true,
+      'stopping': true,
+      'runId': 'run-12',
+      'startedAt': 1780000000000,
       'sessionInfo': {
         'model': 'claude-opus-4-8',
         'contextWindow': 200000,
@@ -203,6 +206,12 @@ void main() {
     expect(status.modelName, 'claude-opus-4-8');
     expect(status.contextWindow, 200000);
     expect(status.remainingContext, 175000);
+    expect(status.stopping, isTrue);
+    expect(status.runId, 'run-12');
+    expect(
+      status.startedAt,
+      DateTime.fromMillisecondsSinceEpoch(1780000000000),
+    );
   });
 
   test('project catalog parses projects and independent sessions', () {
@@ -306,9 +315,11 @@ void main() {
   test('remote transcript snapshot restores messages and session context', () {
     final snapshot = RemoteTranscriptSnapshot.tryParse({
       'version': 1,
-       'revision': 8,
-       'running': true,
-       'runId': 'run-8',
+      'revision': 8,
+      'running': true,
+      'stopping': true,
+      'runId': 'run-8',
+      'startedAt': 1780000000000,
       'permissionMode': 'manual',
       'pendingPermissions': [
         {
@@ -341,7 +352,12 @@ void main() {
     expect(snapshot, isNotNull);
     expect(snapshot!.revision, 8);
     expect(snapshot.running, isTrue);
+    expect(snapshot.stopping, isTrue);
     expect(snapshot.runId, 'run-8');
+    expect(
+      snapshot.startedAt,
+      DateTime.fromMillisecondsSinceEpoch(1780000000000),
+    );
     expect(snapshot.messages, hasLength(3));
     expect(snapshot.messages.last.activityTool, 'Read');
     expect(snapshot.modelName, 'claude-opus-4-8');
@@ -403,9 +419,8 @@ void main() {
           ),
           currentRevision: 4,
           hasLocalMessages: false,
-          hasUnappliedLiveChanges: true,
         ),
-        isFalse,
+        isTrue,
       );
     },
   );
@@ -1630,10 +1645,7 @@ void main() {
     final markdown = tester.widget<MarkdownBody>(
       find.descendant(of: assistant, matching: find.byType(MarkdownBody)),
     );
-    expect(
-      markdown.styleSheet!.tableColumnWidth,
-      isA<IntrinsicColumnWidth>(),
-    );
+    expect(markdown.styleSheet!.tableColumnWidth, isA<IntrinsicColumnWidth>());
     expect(
       markdown.styleSheet!.tableCellsPadding,
       const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -1660,6 +1672,7 @@ void main() {
       MaterialApp(
         home: Scaffold(
           body: MessageBlock(
+            runStartedAt: DateTime.now().subtract(const Duration(seconds: 12)),
             message: TranscriptMessage.activity(
               '正在思考',
               id: 'thinking',
@@ -1674,10 +1687,10 @@ void main() {
     expect(find.byKey(const ValueKey('thinking-bubble')), findsOneWidget);
     expect(find.byKey(const ValueKey('thinking-icon')), findsOneWidget);
     expect(find.text('正在思考'), findsOneWidget);
-    expect(find.text('0 秒'), findsOneWidget);
+    expect(find.text('12 秒'), findsOneWidget);
 
     await tester.pump(const Duration(seconds: 1));
-    expect(find.text('1 秒'), findsOneWidget);
+    expect(find.text('13 秒'), findsOneWidget);
   });
 
   testWidgets('tool activity expands to show its target', (tester) async {

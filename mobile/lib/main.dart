@@ -129,8 +129,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   String? activeProjectId;
   String? activeSessionId;
   String? activeRunId;
+  DateTime? runStartedAt;
   int remoteTranscriptRevision = 0;
-  bool hasUnappliedLiveTranscriptChanges = false;
   bool allowBypassPermissions = false;
   bool notificationsEnabled = true;
   bool notificationsReady = false;
@@ -156,6 +156,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final List<RemotePermissionRequest> pendingPermissions = [];
   final Set<String> respondingPermissionIds = {};
   Future<void> lastTranscriptWrite = Future<void>.value();
+  Future<void>? refreshConnectionInFlight;
   // ponytail: batch stream paint/persist; tighten if first glyph feels late
   static const streamTextBatchInterval = Duration(milliseconds: 40);
   static const streamPersistInterval = Duration(milliseconds: 1500);
@@ -482,7 +483,20 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     return true;
   }
 
-  Future<void> refreshConnection() async {
+  Future<void> refreshConnection() {
+    final inFlight = refreshConnectionInFlight;
+    if (inFlight != null) return inFlight;
+    late final Future<void> operation;
+    operation = _refreshConnection().whenComplete(() {
+      if (identical(refreshConnectionInFlight, operation)) {
+        refreshConnectionInFlight = null;
+      }
+    });
+    refreshConnectionInFlight = operation;
+    return operation;
+  }
+
+  Future<void> _refreshConnection() async {
     final current = session;
     if (widget.demoMode || route != ShellRoute.chat || current == null) return;
     setState(() {
@@ -500,7 +514,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         session = restored;
         remoteOffline = false;
         running = status.running;
-        stopping = false;
+        stopping = status.running && status.stopping;
+        activeRunId = status.running ? status.runId : null;
+        runStartedAt = status.running ? status.startedAt : null;
         if (status.hasSessionInfo) {
           modelName = status.modelName;
           contextWindow = status.contextWindow;
@@ -513,8 +529,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       connectWs(restored);
     } catch (err) {
       if (!mounted || session != current) return;
-      closeWs();
       if (err is UnauthorizedSession) {
+        closeWs();
         await tokenStore.clear();
         await clearTranscriptStore();
         if (!mounted || session != current) return;
@@ -531,9 +547,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       }
       setState(() {
         remoteOffline = true;
-        stopping = false;
       });
       persistTranscriptSnapshotLater();
+      connectWs(current);
     }
   }
 
@@ -570,7 +586,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         route = ShellRoute.chat;
         remoteOffline = false;
         running = status.running;
-        stopping = false;
+        stopping = status.running && status.stopping;
+        activeRunId = status.running ? status.runId : null;
+        runStartedAt = status.running ? status.startedAt : null;
         if (status.hasSessionInfo) {
           modelName = status.modelName;
           contextWindow = status.contextWindow;
@@ -625,6 +643,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       modelName = 'claude-opus-4-8';
       contextWindow = 200000;
       remainingContext = 174919;
+      activeRunId = null;
+      runStartedAt = null;
       messages.clear();
       commands
         ..clear()
@@ -644,7 +664,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     }
 
     closeWs();
-    activeRunId = null;
     setState(() => wsReady = false);
 
     try {
@@ -687,7 +706,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             pendingAttachments.clear();
             remoteTranscriptRevision = 0;
             activeRunId = null;
-            hasUnappliedLiveTranscriptChanges = false;
+            runStartedAt = null;
             clearStreamTextBatch(apply: false);
             messages.clear();
             pendingPermissions.clear();
@@ -714,10 +733,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           wsReady = decoded['authenticated'] == true;
           remoteOffline = false;
           running = decoded['running'] == true;
+          stopping = running && decoded['stopping'] == true;
           final nextRunId = decoded['runId'];
           activeRunId = running && nextRunId is String ? nextRunId : null;
+          final nextStartedAt = (decoded['startedAt'] as num?)?.toInt();
+          runStartedAt = running && nextStartedAt != null
+              ? DateTime.fromMillisecondsSinceEpoch(nextStartedAt)
+              : null;
           removeDisconnectedRunNotice();
-          if (!running) stopping = false;
           if (running) currentRunFailed = false;
           if (!running) removeInterruptedRunNotice();
         });
@@ -730,7 +753,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
               snapshot: snapshot,
               currentRevision: remoteTranscriptRevision,
               hasLocalMessages: messages.isNotEmpty,
-              hasUnappliedLiveChanges: hasUnappliedLiveTranscriptChanges,
             )) {
           return;
         }
@@ -738,10 +760,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         setState(() {
           remoteTranscriptRevision = snapshot.revision;
           running = snapshot.running;
+          stopping = snapshot.running && snapshot.stopping;
           activeRunId = snapshot.running ? snapshot.runId ?? activeRunId : null;
-          hasUnappliedLiveTranscriptChanges = false;
+          runStartedAt = snapshot.running ? snapshot.startedAt : null;
           removeDisconnectedRunNotice();
-          if (!running) stopping = false;
           messages
             ..clear()
             ..addAll(snapshot.messages);
@@ -779,7 +801,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           } else {
             pendingPermissions.add(request);
           }
-          hasUnappliedLiveTranscriptChanges = true;
         });
         showBackgroundNotification(
           key: 'permission-${request.requestId}',
@@ -798,7 +819,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             (request) => request.requestId == requestId,
           );
           respondingPermissionIds.remove(requestId);
-          hasUnappliedLiveTranscriptChanges = true;
         });
       case 'permission_expired':
         final requestId = decoded['requestId'];
@@ -809,7 +829,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           );
           respondingPermissionIds.remove(requestId);
           messages.add(TranscriptMessage.system('这个审批请求已失效'));
-          hasUnappliedLiveTranscriptChanges = true;
         });
         persistTranscriptSnapshotLater();
       case 'text':
@@ -833,7 +852,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         final activity = RemoteActivity.tryParse(decoded);
         if (activity == null) return;
         setState(() {
-          hasUnappliedLiveTranscriptChanges = true;
           mergeRemoteActivity(messages, activity);
         });
         persistTranscriptSnapshotLater();
@@ -845,7 +863,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           stopping = false;
           currentRunFailed = false;
           activeRunId = null;
-          hasUnappliedLiveTranscriptChanges = true;
+          runStartedAt = null;
           removeDisconnectedRunNotice();
           activePermissionMode = PermissionMode.manual;
           pendingPermissions.clear();
@@ -870,7 +888,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           stopping = false;
           currentRunFailed = false;
           activeRunId = null;
-          hasUnappliedLiveTranscriptChanges = true;
+          runStartedAt = null;
           removeDisconnectedRunNotice();
           activePermissionMode = PermissionMode.manual;
           pendingPermissions.clear();
@@ -891,7 +909,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           stopping = false;
           currentRunFailed = true;
           activeRunId = null;
-          hasUnappliedLiveTranscriptChanges = true;
+          runStartedAt = null;
           removeDisconnectedRunNotice();
           activePermissionMode = PermissionMode.manual;
           pendingPermissions.clear();
@@ -928,8 +946,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       activeProjectId = null;
       activeSessionId = null;
       activeRunId = null;
+      runStartedAt = null;
       remoteTranscriptRevision = 0;
-      hasUnappliedLiveTranscriptChanges = false;
       allowBypassPermissions = false;
       selectedPermissionMode = PermissionMode.manual;
       activePermissionMode = PermissionMode.manual;
@@ -944,9 +962,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     setState(() {
       wsReady = false;
       remoteOffline = true;
-      stopping = false;
       if (running) {
-        hasUnappliedLiveTranscriptChanges = true;
         if (!messages.any(
           (item) =>
               item.role == MessageRole.system &&
@@ -961,9 +977,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   void queueAssistantText(String text) {
     if (text.isEmpty) return;
-    hasUnappliedLiveTranscriptChanges = true;
     pendingAssistantText += text;
-    streamTextFlushTimer ??= Timer(streamTextBatchInterval, flushStreamTextBatch);
+    streamTextFlushTimer ??= Timer(
+      streamTextBatchInterval,
+      flushStreamTextBatch,
+    );
   }
 
   void flushStreamTextBatch() {
@@ -1108,31 +1126,40 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       return;
     }
 
+    final permissionMode = selectedPermissionMode;
+    final sent = wsClient.send(
+      buildPromptMessage(
+        text: text,
+        attachmentIds: uploaded.map((attachment) => attachment.id),
+        permissionMode: permissionMode,
+        sessionId: currentSessionId,
+        model: selectedModel,
+      ),
+      expectedConnection: channel,
+    );
+    if (!sent) {
+      setState(() {
+        uploadingAttachments = false;
+        messages.add(TranscriptMessage.system('发送失败，正在自动重连'));
+      });
+      persistTranscriptSnapshotLater();
+      return;
+    }
     setState(() {
       promptController.clear();
       pendingAttachments.clear();
       uploadingAttachments = false;
       running = true;
       stopping = false;
+      runStartedAt = DateTime.now();
       currentRunFailed = false;
-      activePermissionMode = selectedPermissionMode;
-      hasUnappliedLiveTranscriptChanges = true;
+      activePermissionMode = permissionMode;
       beginPrompt(messages, text, attachments: uploaded);
-      if (selectedPermissionMode == PermissionMode.bypassPermissions) {
+      if (permissionMode == PermissionMode.bypassPermissions) {
         selectedPermissionMode = PermissionMode.manual;
       }
     });
     persistTranscriptSnapshotLater();
-    wsClient.send(
-      buildPromptMessage(
-        text: text,
-        attachmentIds: uploaded.map((attachment) => attachment.id),
-        permissionMode: activePermissionMode,
-        sessionId: currentSessionId,
-        model: selectedModel,
-      ),
-      expectedConnection: channel,
-    );
   }
 
   Future<void> chooseAttachments() async {
@@ -1215,16 +1242,45 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       return;
     }
     setState(() => respondingPermissionIds.add(request.requestId));
-    wsClient.send({
+    final sent = wsClient.send({
       'type': 'permission_response',
       'requestId': request.requestId,
       'decision': decision,
       if (activeSessionId != null) 'sessionId': activeSessionId,
     }, expectedConnection: channel);
+    if (!sent) {
+      setState(() {
+        respondingPermissionIds.remove(request.requestId);
+        messages.add(TranscriptMessage.system('审批发送失败，正在自动重连'));
+      });
+      persistTranscriptSnapshotLater();
+    }
   }
 
   Future<void> stopRun() async {
     if (!running || stopping) return;
+
+    final channel = ws;
+    if (!widget.demoMode && (channel == null || !wsReady)) {
+      setState(() {
+        messages.add(TranscriptMessage.system('未连接，无法发送停止指令'));
+      });
+      persistTranscriptSnapshotLater();
+      return;
+    }
+
+    if (!widget.demoMode) {
+      final sent = wsClient.send({
+        'type': 'stop',
+      }, expectedConnection: channel!);
+      if (!sent) {
+        setState(() {
+          messages.add(TranscriptMessage.system('停止指令发送失败，正在自动重连'));
+        });
+        persistTranscriptSnapshotLater();
+        return;
+      }
+    }
 
     setState(() {
       stopping = true;
@@ -1238,24 +1294,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       setState(() {
         running = false;
         stopping = false;
+        runStartedAt = null;
         messages.add(TranscriptMessage.system('已停止'));
       });
       persistTranscriptSnapshotLater();
       return;
     }
 
-    final channel = ws;
-    if (channel == null || !wsReady) {
-      setState(() {
-        stopping = false;
-        hasUnappliedLiveTranscriptChanges = true;
-        messages.add(TranscriptMessage.system('未连接，无法发送停止指令'));
-      });
-      persistTranscriptSnapshotLater();
-      return;
-    }
-
-    wsClient.send({'type': 'stop'}, expectedConnection: channel);
     final requestedSessionId = activeSessionId;
     await Future<void>.delayed(networkTimeout);
     if (!mounted || !stopping || activeSessionId != requestedSessionId) return;
@@ -1312,7 +1357,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         }
         remoteTranscriptRevision = 0;
         activeRunId = null;
-        hasUnappliedLiveTranscriptChanges = false;
+        runStartedAt = null;
         modelName = null;
         contextWindow = null;
         remainingContext = null;
@@ -1360,6 +1405,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remoteSessions.clear();
       activeProjectId = null;
       activeSessionId = null;
+      activeRunId = null;
+      runStartedAt = null;
       remoteTranscriptRevision = 0;
       allowBypassPermissions = false;
       selectedPermissionMode = PermissionMode.manual;
@@ -1432,6 +1479,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       // the previous session's transcript under the new activeSessionId.
       uploadingAttachments = false;
       stopping = false;
+      activeRunId = null;
+      runStartedAt = null;
       pendingAttachments.clear();
       remoteTranscriptRevision = 0;
       clearStreamTextBatch(apply: false);
@@ -1639,6 +1688,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         route = ShellRoute.chat;
         running = false;
         stopping = false;
+        activeRunId = null;
+        runStartedAt = null;
         remoteOffline = false;
         pausedQrRaw = null;
         pairError = null;
@@ -1681,6 +1732,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         activeSessionId: activeSessionId,
         running: running,
         stopping: stopping,
+        runStartedAt: runStartedAt,
         uploadingAttachments: uploadingAttachments,
         connected: wsReady,
         offline: remoteOffline,
@@ -2297,6 +2349,7 @@ class ChatScreen extends StatelessWidget {
     this.activeSessionId,
     required this.running,
     this.stopping = false,
+    this.runStartedAt,
     this.uploadingAttachments = false,
     required this.connected,
     required this.offline,
@@ -2330,6 +2383,7 @@ class ChatScreen extends StatelessWidget {
   final String? activeSessionId;
   final bool running;
   final bool stopping;
+  final DateTime? runStartedAt;
   final bool uploadingAttachments;
   final bool connected;
   final bool offline;
@@ -2384,6 +2438,7 @@ class ChatScreen extends StatelessWidget {
         session: session,
         activeSessionId: activeSessionId,
         running: running,
+        runStartedAt: runStartedAt,
         pendingPermissions: pendingPermissions,
         respondingPermissionIds: respondingPermissionIds,
         connected: connected,
@@ -3322,7 +3377,8 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
                           final canMutate = !widget.running && !item.running;
                           return ListTile(
                             key: ValueKey('session-${item.id}'),
-                            enabled: (!widget.running || active) && !item.archived,
+                            enabled:
+                                (!widget.running || active) && !item.archived,
                             contentPadding: const EdgeInsets.symmetric(
                               horizontal: 4,
                             ),
@@ -3358,7 +3414,8 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
                                           context,
                                           initial: item.title,
                                         );
-                                        if (next == null || next.trim().isEmpty) {
+                                        if (next == null ||
+                                            next.trim().isEmpty) {
                                           return;
                                         }
                                         await widget.onRename(item.id, next);
@@ -3559,7 +3616,8 @@ class _SettingsSheetState extends State<SettingsSheet> {
                   ),
                   InfoRow(
                     label: '目录',
-                    value: widget.session?.workspaceDir ??
+                    value:
+                        widget.session?.workspaceDir ??
                         widget.session?.workspaceName ??
                         'cc-remote',
                   ),
@@ -4284,6 +4342,7 @@ class TranscriptView extends StatelessWidget {
     this.session,
     this.activeSessionId,
     this.running = false,
+    this.runStartedAt,
     required this.pendingPermissions,
     required this.respondingPermissionIds,
     required this.connected,
@@ -4297,6 +4356,7 @@ class TranscriptView extends StatelessWidget {
   final SavedSession? session;
   final String? activeSessionId;
   final bool running;
+  final DateTime? runStartedAt;
   final List<RemotePermissionRequest> pendingPermissions;
   final Set<String> respondingPermissionIds;
   final bool connected;
@@ -4392,6 +4452,7 @@ class TranscriptView extends StatelessWidget {
             message: item,
             session: session,
             activeSessionId: activeSessionId,
+            runStartedAt: runStartedAt,
             streaming:
                 running &&
                 item.role == MessageRole.assistant &&
@@ -4744,12 +4805,14 @@ class MessageBlock extends StatelessWidget {
     required this.message,
     this.session,
     this.activeSessionId,
+    this.runStartedAt,
     this.streaming = false,
   });
 
   final TranscriptMessage message;
   final SavedSession? session;
   final String? activeSessionId;
+  final DateTime? runStartedAt;
   final bool streaming;
 
   @override
@@ -4764,7 +4827,7 @@ class MessageBlock extends StatelessWidget {
     }
 
     if (message.role == MessageRole.activity) {
-      return ActivityBlock(message: message);
+      return ActivityBlock(message: message, runStartedAt: runStartedAt);
     }
 
     final isUser = message.role == MessageRole.user;
@@ -5130,22 +5193,25 @@ Map<String, Object> buildPromptMessage({
 }
 
 class ActivityBlock extends StatelessWidget {
-  const ActivityBlock({super.key, required this.message});
+  const ActivityBlock({super.key, required this.message, this.runStartedAt});
 
   final TranscriptMessage message;
+  final DateTime? runStartedAt;
 
   @override
   Widget build(BuildContext context) {
     if (message.activityKind == ActivityKind.thinking) {
       if (message.activityState == ActivityState.running) {
-        return const TaskRailFrame(
+        return TaskRailFrame(
           color: AppColors.accent,
           active: true,
           compact: true,
           child: AssistantBubbleFrame(
-            bubbleKey: ValueKey('thinking-bubble'),
+            bubbleKey: const ValueKey('thinking-bubble'),
             compact: true,
-            child: ThinkingIndicator(),
+            child: ThinkingIndicator(
+              initialElapsedSeconds: elapsedSecondsSince(runStartedAt),
+            ),
           ),
         );
       }
@@ -5331,7 +5397,9 @@ class ActivityBlock extends StatelessWidget {
 }
 
 class ThinkingIndicator extends StatefulWidget {
-  const ThinkingIndicator({super.key});
+  const ThinkingIndicator({super.key, this.initialElapsedSeconds = 0});
+
+  final int initialElapsedSeconds;
 
   @override
   State<ThinkingIndicator> createState() => _ThinkingIndicatorState();
@@ -5347,6 +5415,7 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
   @override
   void initState() {
     super.initState();
+    elapsedSeconds = widget.initialElapsedSeconds;
     animation = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 850),
@@ -5354,6 +5423,14 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => elapsedSeconds += 1);
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant ThinkingIndicator oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.initialElapsedSeconds > elapsedSeconds) {
+      elapsedSeconds = widget.initialElapsedSeconds;
+    }
   }
 
   @override
@@ -5431,6 +5508,12 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
       ),
     );
   }
+}
+
+int elapsedSecondsSince(DateTime? startedAt) {
+  if (startedAt == null) return 0;
+  final seconds = DateTime.now().difference(startedAt).inSeconds;
+  return seconds < 0 ? 0 : seconds;
 }
 
 class PromptBar extends StatelessWidget {
@@ -6955,6 +7038,6 @@ String activityLabel(ActivityKind kind, String? toolName, ActivityState state) {
     ActivityState.running => '正在$action',
     ActivityState.done => '已$action',
     ActivityState.error => '$action失败',
-  ActivityState.stopped => '已停止$action',
+    ActivityState.stopped => '已停止$action',
   };
 }

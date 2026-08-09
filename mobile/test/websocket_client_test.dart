@@ -23,7 +23,9 @@ void main() {
       onDone: () {},
     );
 
-    expect(first.sent, [jsonEncode({'type': 'auth', 'token': 'secret'})]);
+    expect(first.sent, [
+      jsonEncode({'type': 'auth', 'token': 'secret'}),
+    ]);
     expect(client.send({'type': 'ping'}, expectedConnection: first), isTrue);
     expect(first.sent.last, jsonEncode({'type': 'ping'}));
 
@@ -36,7 +38,10 @@ void main() {
     );
 
     expect(client.send({'type': 'stale'}, expectedConnection: first), isFalse);
-    expect(client.send({'type': 'current'}, expectedConnection: second), isTrue);
+    expect(
+      client.send({'type': 'current'}, expectedConnection: second),
+      isTrue,
+    );
     expect(second.sent.last, jsonEncode({'type': 'current'}));
     client.close();
   });
@@ -69,6 +74,123 @@ void main() {
     client.close();
   });
 
+  test('automatically reconnects after the active connection closes', () async {
+    final first = FakeWebSocketChannel();
+    final second = FakeWebSocketChannel();
+    final channels = <FakeWebSocketChannel>[first, second];
+    var doneCount = 0;
+    final client = RemoteWebSocketClient(
+      connect: (_) => channels.removeAt(0),
+      reconnectDelays: const [Duration.zero],
+    );
+
+    client.connect(
+      origin: Uri.parse('https://example.test'),
+      token: 'secret',
+      onMessage: (_) {},
+      onError: (_) {},
+      onDone: () => doneCount += 1,
+    );
+    await first.incoming.close();
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(doneCount, 1);
+    expect(second.sent, [
+      jsonEncode({'type': 'auth', 'token': 'secret'}),
+    ]);
+    expect(client.channel, same(second));
+    client.close();
+  });
+
+  test('explicit close cancels a pending automatic reconnect', () async {
+    final first = FakeWebSocketChannel();
+    var connectCount = 0;
+    final client = RemoteWebSocketClient(
+      connect: (_) {
+        connectCount += 1;
+        return first;
+      },
+      reconnectDelays: const [Duration(milliseconds: 20)],
+    );
+
+    client.connect(
+      origin: Uri.parse('https://example.test'),
+      token: 'secret',
+      onMessage: (_) {},
+      onError: (_) {},
+      onDone: () {},
+    );
+    await first.incoming.close();
+    await Future<void>.delayed(Duration.zero);
+    client.close();
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+
+    expect(connectCount, 1);
+  });
+
+  test('send failure reports false and reconnects', () async {
+    final first = FakeWebSocketChannel();
+    final second = FakeWebSocketChannel();
+    final channels = <FakeWebSocketChannel>[first, second];
+    var errorCount = 0;
+    final client = RemoteWebSocketClient(
+      connect: (_) => channels.removeAt(0),
+      reconnectDelays: const [Duration.zero],
+    );
+
+    client.connect(
+      origin: Uri.parse('https://example.test'),
+      token: 'secret',
+      onMessage: (_) {},
+      onError: (_) => errorCount += 1,
+      onDone: () {},
+    );
+    first.failNextSend();
+
+    expect(client.send({'type': 'prompt'}), isFalse);
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(errorCount, 1);
+    expect(second.sent, [
+      jsonEncode({'type': 'auth', 'token': 'secret'}),
+    ]);
+    expect(client.channel, same(second));
+    client.close();
+  });
+
+  test('retries when opening a connection throws synchronously', () async {
+    final channel = FakeWebSocketChannel();
+    var connectCount = 0;
+    var errorCount = 0;
+    final client = RemoteWebSocketClient(
+      connect: (_) {
+        connectCount += 1;
+        if (connectCount == 1) throw StateError('connect_failed');
+        return channel;
+      },
+      reconnectDelays: const [Duration.zero],
+    );
+
+    client.connect(
+      origin: Uri.parse('https://example.test'),
+      token: 'secret',
+      onMessage: (_) {},
+      onError: (_) => errorCount += 1,
+      onDone: () {},
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(connectCount, 2);
+    expect(errorCount, 1);
+    expect(channel.sent, [
+      jsonEncode({'type': 'auth', 'token': 'secret'}),
+    ]);
+    client.close();
+  });
+
   test('maps an origin base path to the daemon websocket endpoint', () {
     expect(
       RemoteWebSocketClient.webSocketUri(
@@ -83,7 +205,9 @@ class FakeWebSocketChannel extends StreamChannelMixin
     implements WebSocketChannel {
   final incoming = StreamController<dynamic>();
   final sent = <dynamic>[];
-  late final WebSocketSink _sink = FakeWebSocketSink(sent, incoming);
+  late final FakeWebSocketSink _sink = FakeWebSocketSink(sent, incoming);
+
+  void failNextSend() => _sink.nextError = StateError('send_failed');
 
   @override
   String? get protocol => null;
@@ -110,9 +234,15 @@ class FakeWebSocketSink implements WebSocketSink {
   final List<dynamic> sent;
   final StreamController<dynamic> incoming;
   final Completer<void> _done = Completer<void>();
+  Object? nextError;
 
   @override
-  void add(dynamic event) => sent.add(event);
+  void add(dynamic event) {
+    final error = nextError;
+    nextError = null;
+    if (error != null) throw error;
+    sent.add(event);
+  }
 
   @override
   void addError(Object error, [StackTrace? stackTrace]) {}

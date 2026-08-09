@@ -30,10 +30,11 @@ after(async () => {
   await rm(daemon.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
-test('second concurrent prompt is rejected as claude_is_busy', async () => {
+test('running task recovers across reconnect and stops after the process exits', async () => {
   const { token, sessionId, socket, inbox } = await pairAndConnect();
+  let activeSocket = socket;
   try {
-    socket.send(JSON.stringify({
+    activeSocket.send(JSON.stringify({
       type: 'prompt',
       sessionId,
       text: 'hang please',
@@ -41,8 +42,10 @@ test('second concurrent prompt is rejected as claude_is_busy', async () => {
     }));
     const started = await inbox.next(message => message.type === 'status' && message.running === true);
     assert.equal(typeof started.runId, 'string');
+    assert.equal(typeof started.startedAt, 'number');
+    assert.equal(started.stopping, false);
 
-    socket.send(JSON.stringify({
+    activeSocket.send(JSON.stringify({
       type: 'prompt',
       sessionId,
       text: 'should be busy',
@@ -65,13 +68,53 @@ test('second concurrent prompt is rejected as claude_is_busy', async () => {
     assert.equal(createResponse.status, 409);
     assert.deepEqual(await createResponse.json(), { error: 'claude_is_busy' });
 
-    socket.send(JSON.stringify({ type: 'stop' }));
-    const stopped = await inbox.next(message =>
-      message.type === 'stopped'
-      || (message.type === 'status' && message.running === false));
+    activeSocket.close();
+    await once(activeSocket, 'close');
+
+    const reconnected = await connectWithToken(token);
+    activeSocket = reconnected.socket;
+    const recoveredStatus = await reconnected.inbox.next(message =>
+      message.type === 'status' && message.authenticated === true);
+    assert.equal(recoveredStatus.running, true);
+    assert.equal(recoveredStatus.stopping, false);
+    assert.equal(recoveredStatus.runId, started.runId);
+    assert.equal(recoveredStatus.startedAt, started.startedAt);
+
+    const recoveredSnapshot = await reconnected.inbox.next(message =>
+      message.type === 'transcript_snapshot');
+    assert.equal(recoveredSnapshot.running, true);
+    assert.equal(recoveredSnapshot.stopping, false);
+    assert.equal(recoveredSnapshot.runId, started.runId);
+    assert.equal(recoveredSnapshot.startedAt, started.startedAt);
+
+    const stopResponse = await fetch(`${daemon.baseUrl}/api/stop`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Origin: daemon.baseUrl,
+      },
+    });
+    assert.equal(stopResponse.status, 200);
+    assert.deepEqual(await stopResponse.json(), { stopped: true });
+
+    const stopping = await reconnected.inbox.next(message =>
+      message.type === 'status' && message.stopping === true);
+    assert.equal(stopping.running, true);
+    assert.equal(stopping.runId, started.runId);
+    assert.equal(stopping.startedAt, started.startedAt);
+
+    const stopped = await reconnected.inbox.next(message => message.type === 'stopped');
     assert.equal(stopped.runId, started.runId);
+    const finished = await reconnected.inbox.next(message =>
+      message.type === 'status' && message.running === false);
+    assert.equal(finished.stopping, false);
+    assert.equal(finished.runId, started.runId);
+
+    const finalStatus = await statusBody(token);
+    assert.equal(finalStatus.running, false);
+    assert.equal(finalStatus.stopping, false);
   } finally {
-    socket.close();
+    activeSocket.close();
   }
 });
 
@@ -92,23 +135,39 @@ async function pairAndConnect(): Promise<{
   assert.equal(pairResponse.status, 200);
   const { token } = await pairResponse.json() as { token: string };
   const status = await statusBody(token);
+  const { socket, inbox } = await connectWithToken(token);
+  return { token, sessionId: status.activeSessionId, socket, inbox };
+}
 
+async function connectWithToken(token: string): Promise<{
+  socket: WebSocket;
+  inbox: WsInbox;
+}> {
   const socket = new WebSocket(daemon.baseUrl.replace('http:', 'ws:') + '/ws', {
     headers: { Origin: daemon.baseUrl },
   });
   const inbox = new WsInbox(socket);
   await once(socket, 'open');
   socket.send(JSON.stringify({ type: 'auth', token }));
-  await inbox.next(message => message.type === 'status' && message.authenticated === true);
-  return { token, sessionId: status.activeSessionId, socket, inbox };
+  return { socket, inbox };
 }
 
-async function statusBody(token: string): Promise<{ activeSessionId: string; activeProjectId: string }> {
+async function statusBody(token: string): Promise<{
+  activeSessionId: string;
+  activeProjectId: string;
+  running: boolean;
+  stopping: boolean;
+}> {
   const response = await fetch(`${daemon.baseUrl}/api/status`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   assert.equal(response.status, 200);
-  return await response.json() as { activeSessionId: string; activeProjectId: string };
+  return await response.json() as {
+    activeSessionId: string;
+    activeProjectId: string;
+    running: boolean;
+    stopping: boolean;
+  };
 }
 
 async function startBusyDaemon(): Promise<RunningDaemon> {

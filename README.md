@@ -17,7 +17,7 @@ Flutter App
 
 当前主分支已经完成手机端主链路和浅色活力界面。界面使用暖纸色背景、黑色轮廓、薄荷绿、亮黄和珊瑚色，顶部连接舱采用紧凑双栏布局，目录、模型和剩余上下文集中在右侧。底部 Command Dock 负责权限模式、附件、输入、发送和停止。
 
-已经支持扫码配对、Bearer token、WebSocket 首包鉴权、流式输出、停止任务、六种权限模式、手机端一次性工具审批、斜杠指令、多项目与多会话、transcript 恢复、模型与上下文显示、只读工作区、Git diff、图片与文件附件、Android 后台本地通知和离线重连。
+已经支持扫码配对、Bearer token、WebSocket 首包鉴权、流式输出、停止任务、六种权限模式、手机端一次性工具审批、斜杠指令、多项目与多会话、transcript 恢复、模型与上下文显示、只读工作区、Git diff、图片与文件附件、Android 后台本地通知、WebSocket 自动重连和活动任务恢复。
 
 最近补齐了工作区冷启动对齐：daemon 启动时会按 `WORKSPACE_DIR` / 启动目录注册并激活项目，和“daemon 已在跑时再执行 `cc-remote`”语义一致。手机「项目与会话」面板与设置页会显示完整项目路径。流式回复做了文本合批、流式轻渲染和本地落盘节流，减轻手机经隧道时的卡顿体感。历史 Claude session 已失效时，daemon 会识别 CLI 的原始错误、清除旧 session ID，并自动以新会话重试本轮请求。
 
@@ -192,7 +192,7 @@ POST /api/logout
 
 服务端消息包括 `status`、`catalog`、`transcript_snapshot`、`permission_capabilities`、`permission_request`、`permission_resolved`、`permission_expired`、`commands`、`session_info`、`activity`、`text`、`done`、`stopped` 和 `error`。
 
-`activity` 只发送安全化后的思考状态、工具名和摘要，不发送私有思考文本或完整工具结果。`text` 在 daemon 侧会短时合批后再推送，任务结束前会 flush 尾包。会话消息带 `projectId` 和 `sessionId`，App 重连后以 daemon 的 `transcript_snapshot` 为准恢复内容。
+`activity` 只发送安全化后的思考状态、工具名和摘要，不发送私有思考文本或完整工具结果。`text` 在 daemon 侧会短时合批后再推送，任务结束前会 flush 尾包。会话消息带 `projectId` 和 `sessionId`；App 重连后以 daemon 的 `transcript_snapshot` 为准恢复内容，并通过 `running`、`stopping`、`runId` 和 `startedAt` 恢复活动任务及 Stop 中间态，不会重复发送 prompt。
 
 ## 配置
 
