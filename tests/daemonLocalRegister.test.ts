@@ -152,6 +152,7 @@ function rawJsonRequest(options: {
       path: options.path,
       method: 'POST',
       headers: options.headers,
+      agent: false,
     }, response => {
       let body = '';
       response.setEncoding('utf8');

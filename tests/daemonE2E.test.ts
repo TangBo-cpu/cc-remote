@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer, request } from 'node:http';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
@@ -119,9 +119,89 @@ test('logout revokes the old Bearer token and closes its WebSocket', async () =>
   assert.equal(statusResponse.status, 401);
 });
 
-async function startDaemon(): Promise<RunningDaemon> {
+test('daemon retries a prompt without a stale Claude session id', async () => {
+  const staleSessionId = 'stale-session-id';
+  const fixture = resolve('tests/fixtures/fakeClaude.mjs');
+  const retryDaemon = await startDaemon({
+    staleSessionId,
+    claudeBin: process.execPath,
+    claudeArgs: root => [
+      fixture,
+      '--fake-mode=stale-resume',
+      `--fake-log=${join(root, 'claude-args.jsonl')}`,
+    ],
+  });
+  let socket: WebSocket | undefined;
+  try {
+    const pairResponse = await fetch(`${retryDaemon.baseUrl}/api/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: retryDaemon.baseUrl },
+      body: JSON.stringify({ nonce: retryDaemon.nonce }),
+    });
+    assert.equal(pairResponse.status, 200);
+    const { token } = await pairResponse.json() as { token: string };
+    const statusResponse = await fetch(`${retryDaemon.baseUrl}/api/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const { activeSessionId } = await statusResponse.json() as { activeSessionId: string };
+
+    socket = new WebSocket(retryDaemon.baseUrl.replace('http:', 'ws:') + '/ws', {
+      headers: { Origin: retryDaemon.baseUrl },
+    });
+    await once(socket, 'open');
+    socket.send(JSON.stringify({ type: 'auth', token }));
+    await waitForWsMessage(socket, message => message.type === 'status' && message.authenticated === true);
+
+    const promptResult = waitForPromptResult(socket, activeSessionId);
+    socket.send(JSON.stringify({
+      type: 'prompt',
+      sessionId: activeSessionId,
+      text: 'retry stale session',
+      permissionMode: 'manual',
+    }));
+    const result = await promptResult;
+
+    assert.equal(result.text, 'fake reply');
+    assert.equal(result.claudeSessionId, 'fake-session-id');
+    const invocations = (await readFile(join(retryDaemon.root, 'claude-args.jsonl'), 'utf8'))
+      .trim()
+      .split(/\r?\n/)
+      .map(line => JSON.parse(line) as string[]);
+    assert.equal(invocations.length, 2);
+    assert.deepEqual(invocations[0].slice(-2), ['--resume', staleSessionId]);
+    assert.equal(invocations[1].includes('--resume'), false);
+  } finally {
+    socket?.close();
+    retryDaemon.child.kill();
+    await Promise.race([
+      retryDaemon.child.exitCode === null ? once(retryDaemon.child, 'exit') : Promise.resolve(),
+      new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
+    ]);
+    await rm(retryDaemon.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
+async function startDaemon(options: {
+  claudeBin?: string;
+  claudeArgs?: (root: string) => string[];
+  staleSessionId?: string;
+} = {}): Promise<RunningDaemon> {
   const root = await mkdtemp(join(tmpdir(), 'cc-remote-daemon-e2e-'));
   await writeFile(join(root, 'README.md'), '# fixture\n', 'utf8');
+  if (options.staleSessionId) {
+    await mkdir(join(root, '.data'), { recursive: true });
+    await writeFile(join(root, '.data', 'transcript.json'), JSON.stringify({
+      version: 1,
+      revision: 0,
+      running: false,
+      updatedAt: Date.now(),
+      claudeSessionId: options.staleSessionId,
+      permissionMode: 'manual',
+      pendingPermissions: [],
+      sessionInfo: {},
+      messages: [],
+    }, null, 2) + '\n', 'utf8');
+  }
   const port = await findFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const daemonPath = resolve('src/daemon.ts');
@@ -134,7 +214,8 @@ async function startDaemon(): Promise<RunningDaemon> {
       PORT: String(port),
       PUBLIC_ORIGIN: baseUrl,
       WORKSPACE_DIR: root,
-      CLAUDE_BIN: join(root, 'missing-claude-executable'),
+      CLAUDE_BIN: options.claudeBin ?? join(root, 'missing-claude-executable'),
+      ...(options.claudeArgs ? { CLAUDE_ARGS: options.claudeArgs(root).join('|') } : {}),
       DEVICE_NAME: 'e2e-host',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -169,6 +250,46 @@ async function startDaemon(): Promise<RunningDaemon> {
   throw new Error(`daemon did not start in time: ${stderr || stdout}`);
 }
 
+function waitForPromptResult(
+  socket: WebSocket,
+  sessionId: string,
+): Promise<{ text: string; claudeSessionId?: string }> {
+  return new Promise((resolvePrompt, rejectPrompt) => {
+    let text = '';
+    const timeout = setTimeout(() => {
+      cleanup();
+      rejectPrompt(new Error('websocket_prompt_timeout'));
+    }, 5_000);
+    const onMessage = (data: WebSocket.RawData) => {
+      const message = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (message.sessionId !== sessionId) return;
+      if (message.type === 'text') text += String(message.text || '');
+      if (message.type === 'error') {
+        cleanup();
+        rejectPrompt(new Error(String(message.message || 'prompt_failed')));
+      }
+      if (message.type === 'done') {
+        cleanup();
+        resolvePrompt({
+          text,
+          claudeSessionId: typeof message.claudeSessionId === 'string' ? message.claudeSessionId : undefined,
+        });
+      }
+    };
+    const onClose = () => {
+      cleanup();
+      rejectPrompt(new Error('websocket_closed_before_prompt_finished'));
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      socket.off('message', onMessage);
+      socket.off('close', onClose);
+    };
+    socket.on('message', onMessage);
+    socket.on('close', onClose);
+  });
+}
+
 async function findFreePort(): Promise<number> {
   const server = createServer();
   server.listen(0, '127.0.0.1');
@@ -188,7 +309,7 @@ function rawRequest(options: {
   headers?: Record<string, string>;
 }): Promise<{ statusCode: number; body: string }> {
   return new Promise((resolveRequest, rejectRequest) => {
-    const req = request(options, response => {
+    const req = request({ ...options, agent: false }, response => {
       let body = '';
       response.setEncoding('utf8');
       response.on('data', chunk => {

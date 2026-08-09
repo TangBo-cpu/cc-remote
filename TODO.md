@@ -11,7 +11,7 @@
 - [x] WebSocket 首条 `auth` 消息鉴权
 - [x] logout 与重新配对撤销旧连接
 - [x] 本机 `claude` CLI stream-json 桥接
-- [x] Claude session 恢复与 stale session 自动重试
+- [x] Claude session 恢复；历史 session 失效时清除旧 ID 并自动重试
 - [x] 权限请求双向控制和六种权限模式
 - [x] transcript、审批状态、模型和上下文持久化
 - [x] 多项目注册、多会话创建与切换
@@ -21,7 +21,7 @@
 - [x] `cc-remote` 一键启动与重复运行时注册项目
 - [x] 流式 `text` 短时合批推送，任务结束前 flush 尾包
 - [x] daemon HTTP、WebSocket、鉴权和静态暴露黑盒测试
-- [x] Claude CLI fixture 覆盖 session resume 和 Windows Stop 进程树清理
+- [x] Claude CLI fixture 覆盖 session resume、失效 session 自动重试和 Windows Stop 进程树清理
 - [x] 实际 daemon、WebSocket 和 Claude CLI 完成两轮 resume 与 Stop 验证
 
 ### Flutter App

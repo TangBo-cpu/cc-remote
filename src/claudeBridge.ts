@@ -145,8 +145,15 @@ export class ClaudeBridge {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env },
     });
+    let exitCode: number | null = null;
+    const closed = new Promise<[number | null, NodeJS.Signals | null]>(resolveClose => {
+      child.once('close', (code, signal) => {
+        exitCode = code;
+        resolveClose([code, signal]);
+      });
+    });
     const exitOrError = Promise.race([
-      once(child, 'exit') as Promise<[number | null, NodeJS.Signals | null]>,
+      closed,
       once(child, 'error').then(([err]) => err instanceof Error ? err : new Error(String(err))),
       once(child.stdin, 'error').then(([err]) => err instanceof Error ? err : new Error(String(err))),
     ]);
@@ -287,7 +294,8 @@ export class ClaudeBridge {
       if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
       return { exitCode, stopped: run.stopped, sessionId, stderr };
     } catch (err) {
-      return { exitCode: null, stopped: run.stopped, sessionId, stderr: err instanceof Error ? err.message : String(err) };
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      return { exitCode, stopped: run.stopped, sessionId, stderr: stderr.trim() ? stderr : errorMessage };
     } finally {
       for (const requestId of run.pendingPermissions.keys()) options.onPermissionClosed(requestId);
       run.pendingPermissions.clear();

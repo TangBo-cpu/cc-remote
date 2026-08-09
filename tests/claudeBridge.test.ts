@@ -77,6 +77,33 @@ test('ClaudeBridge resumes the session id returned by the previous run', async (
   }
 });
 
+test('ClaudeBridge preserves stale-session stderr emitted before initialization', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-bridge-stale-session-'));
+  const fixture = join(process.cwd(), 'tests', 'fixtures', 'fakeClaude.mjs');
+  try {
+    const bridge = new ClaudeBridge({
+      claudeBin: process.execPath,
+      claudeArgs: [fixture, '--fake-mode=stale-resume'],
+      workspaceDir: dir,
+    });
+    const result = await bridge.run({
+      prompt: 'test',
+      sessionId: 'stale-session-id',
+      permissionMode: 'manual',
+      onEvent: () => {},
+      onText: () => {},
+      onSessionId: () => {},
+      onPermissionRequest: () => {},
+      onPermissionClosed: () => {},
+    });
+
+    assert.equal(result.exitCode, 1);
+    assert.match(result.stderr, /No conversation found with session ID: stale-session-id/i);
+  } finally {
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
 test('Claude model overrides reject unsafe CLI values', () => {
   assert.equal(normalizeClaudeModel(' claude-opus-4-8 '), 'claude-opus-4-8');
   assert.equal(normalizeClaudeModel(undefined), undefined);

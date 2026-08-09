@@ -91,6 +91,8 @@ App 区分已配对、正在连接、已连接、运行中、停止中、上传�
 
 流式回复时，App 会短时合并 `text` 增量再刷新 UI，运行中用轻量文本渲染，任务结束后再切回 Markdown；本地 transcript 落盘在流式期间节流，终态强制写入。
 
+恢复历史 Claude session 时，桥接层等待子进程 `close` 后再汇总退出码与 stderr，避免初始化前退出覆盖 CLI 的真实错误。若 daemon 识别到 session 已不存在，只清除旧 Claude session ID，并在同一轮请求中无 `--resume` 重试一次；其他初始化错误不会触发自动重试。桥接层和 daemon WebSocket 端到端测试均覆盖这一行为。
+
 ## 通知
 
 Android 本地通知由已建立的 App WebSocket 触发，覆盖任务完成、失败、停止和等待权限。通知偏好本地持久化，点击通知返回对应会话。
