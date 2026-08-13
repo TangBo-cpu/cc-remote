@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:cc_remote/main.dart';
 import 'package:cc_remote/attachments.dart';
+import 'package:cc_remote/camera_permission.dart';
 import 'package:cc_remote/chat_background.dart';
 import 'package:cc_remote/data/permission_mode.dart';
 import 'package:cc_remote/data/remote_models.dart';
@@ -15,6 +16,23 @@ import 'package:cc_remote/notification_service.dart';
 import 'package:cc_remote/model_preference.dart';
 import 'package:cc_remote/signal_console_theme.dart';
 import 'package:cc_remote/workspace_drawer.dart';
+
+Future<void> openSessionMenu(WidgetTester tester) async {
+  await tester.tap(find.byTooltip('更多'));
+  await tester.pumpAndSettle();
+}
+
+Future<void> openSettingsFromHeader(WidgetTester tester) async {
+  await openSessionMenu(tester);
+  await tester.tap(find.text('设置').last);
+  await tester.pumpAndSettle();
+}
+
+Future<void> openWorkspaceFromHeader(WidgetTester tester) async {
+  await openSessionMenu(tester);
+  await tester.tap(find.text('工作区').last);
+  await tester.pumpAndSettle();
+}
 
 void main() {
   setUp(() {
@@ -443,6 +461,49 @@ void main() {
     expect(find.text('连接这台电脑'), findsOneWidget);
   });
 
+  testWidgets('startup and pairing surfaces use warm tonal depth', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: const Scaffold(body: BootstrapScreen()),
+      ),
+    );
+
+    final bootstrapMark = tester.widget<Container>(
+      find.byKey(const ValueKey('bootstrap-mark')),
+    );
+    final bootstrapDecoration = bootstrapMark.decoration! as BoxDecoration;
+    expect(bootstrapDecoration.color, AppColors.surface);
+    expect(bootstrapDecoration.boxShadow, isNull);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: AppBackground(
+          child: PairScreen(
+            enableCamera: false,
+            pairing: false,
+            canResetScan: false,
+            onQr: (_) {},
+            onClearError: () {},
+            onDemoConnect: () {},
+          ),
+        ),
+      ),
+    );
+
+    final pairPanel = tester.widget<Container>(
+      find.byKey(const ValueKey('pair-status-panel')),
+    );
+    final pairDecoration = pairPanel.decoration! as BoxDecoration;
+    expect(pairDecoration.color, AppColors.surface);
+    expect(pairDecoration.boxShadow, isNull);
+    expect(find.byIcon(Icons.computer_rounded), findsOneWidget);
+    expect(find.text('相机已就绪'), findsOneWidget);
+  });
+
   testWidgets('settings uses a confirmation before leaving pairing', (
     tester,
   ) async {
@@ -455,7 +516,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('下一件事'), findsOneWidget);
     expect(find.text('从下方输入，或先点一个快捷任务'), findsOneWidget);
-    expect(find.byTooltip('工作区'), findsOneWidget);
+    expect(find.byTooltip('更多'), findsOneWidget);
     expect(find.byTooltip('新对话'), findsOneWidget);
 
     await TranscriptStore().save(
@@ -465,8 +526,7 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byTooltip('设置'));
-    await tester.pumpAndSettle();
+    await openSettingsFromHeader(tester);
     expect(find.text('退出配对'), findsOneWidget);
     expect(find.text('重新连接'), findsOneWidget);
     expect(find.text('后台通知'), findsOneWidget);
@@ -500,18 +560,16 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('设置'));
-    await tester.pumpAndSettle();
 
-    expect(find.text('当前：Opus 4.8'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('model-setting')));
+    await tester.tap(find.byKey(const ValueKey('composer-model-button')));
     await tester.pumpAndSettle();
     expect(find.text('选择模型'), findsOneWidget);
+    expect(find.text('设置'), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('model-option-sonnet')));
     await tester.pumpAndSettle();
 
-    expect(find.text('后续消息使用 Sonnet'), findsOneWidget);
+    expect(find.text('Sonnet'), findsOneWidget);
     expect(
       await ClaudeModelPreferenceStore().load(),
       ClaudeModelPreference.sonnet,
@@ -551,9 +609,135 @@ void main() {
       isEmpty,
     );
 
-    await tester.tap(find.byTooltip('设置'));
+    await tester.tap(find.byKey(const ValueKey('composer-model-button')));
     await tester.pumpAndSettle();
-    expect(find.text('后续消息使用 Sonnet'), findsOneWidget);
+    expect(find.byKey(const ValueKey('model-option-sonnet')), findsOneWidget);
+  });
+
+  testWidgets('app requests camera permission during the first startup', (
+    tester,
+  ) async {
+    final cameraPermission = FakeCameraPermissionService();
+
+    await tester.pumpWidget(
+      CcRemoteApp(
+        cameraPermissionService: cameraPermission,
+        notificationService: FakeBackgroundNotificationService(),
+      ),
+    );
+    await tester.pump();
+
+    expect(cameraPermission.requestCount, 1);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 1));
+  });
+
+  testWidgets('camera permission is requested before notification permission', (
+    tester,
+  ) async {
+    final order = <String>[];
+    final cameraPermission = FakeCameraPermissionService(
+      onRequest: () {
+        order.add('camera');
+      },
+    );
+    final notificationService = FakeBackgroundNotificationService()
+      ..onRequestPermission = () => order.add('notification');
+
+    await tester.pumpWidget(
+      CcRemoteApp(
+        cameraPermissionService: cameraPermission,
+        notificationService: notificationService,
+      ),
+    );
+    await tester.pump();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(order, ['camera', 'notification']);
+  });
+
+  testWidgets('camera permission is not requested again after a prior denial', (
+    tester,
+  ) async {
+    final cameraPermission = FakeCameraPermissionService(
+      statusValue: CameraPermissionState.denied,
+      requestValue: CameraPermissionState.denied,
+      requestOnLaunch: false,
+    );
+
+    await tester.pumpWidget(
+      CcRemoteApp(
+        cameraPermissionService: cameraPermission,
+        notificationService: FakeBackgroundNotificationService(),
+      ),
+    );
+    await tester.pump();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(seconds: 1));
+
+    expect(cameraPermission.requestCount, 0);
+  });
+
+  testWidgets('pairing screen offers a retry when camera access is denied', (
+    tester,
+  ) async {
+    final cameraPermission = FakeCameraPermissionService(
+      statusValue: CameraPermissionState.denied,
+      requestValue: CameraPermissionState.denied,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: PairScreen(
+          enableCamera: true,
+          cameraPermissionService: cameraPermission,
+          pairing: false,
+          canResetScan: false,
+          onQr: (_) {},
+          onClearError: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('需要相机权限'), findsOneWidget);
+    expect(find.text('等待相机权限'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('camera-permission-action')));
+    await tester.pumpAndSettle();
+    expect(cameraPermission.requestCount, 1);
+  });
+
+  testWidgets('pairing screen opens settings for permanently denied camera', (
+    tester,
+  ) async {
+    final cameraPermission = FakeCameraPermissionService(
+      statusValue: CameraPermissionState.permanentlyDenied,
+      requestValue: CameraPermissionState.permanentlyDenied,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: PairScreen(
+          enableCamera: true,
+          cameraPermissionService: cameraPermission,
+          pairing: false,
+          canResetScan: false,
+          onQr: (_) {},
+          onClearError: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('相机权限已关闭'), findsOneWidget);
+    expect(find.text('打开设置'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('camera-permission-action')));
+    await tester.pumpAndSettle();
+    expect(cameraPermission.openSettingsCount, 1);
+    expect(cameraPermission.requestCount, 0);
   });
 
   testWidgets('chat background can use a preset, local image and reset', (
@@ -578,8 +762,7 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('设置'));
-    await tester.pumpAndSettle();
+    await openSettingsFromHeader(tester);
 
     expect(find.text('聊天背景'), findsOneWidget);
     expect(find.text('默认纸感'), findsOneWidget);
@@ -589,7 +772,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('chat-background-setting')));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('薄荷'));
+    await tester.tap(find.text('亚麻'));
     await tester.pumpAndSettle();
     expect(
       tester.widget<AppBackground>(find.byType(AppBackground)).chatBackground,
@@ -684,14 +867,13 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('设置'));
-    await tester.pumpAndSettle();
+    await openSettingsFromHeader(tester);
     await tester.ensureVisible(
       find.byKey(const ValueKey('chat-background-setting')),
     );
     await tester.tap(find.byKey(const ValueKey('chat-background-setting')));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('薄荷'));
+    await tester.tap(find.text('亚麻'));
     await tester.pumpAndSettle();
 
     store.completeLoad(
@@ -836,7 +1018,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('keyboard resize keeps the decorative background stationary', (
+  testWidgets('keyboard resize keeps the warm paper background stationary', (
     tester,
   ) async {
     Widget buildScreen(double keyboardInset) {
@@ -854,36 +1036,51 @@ void main() {
       );
     }
 
-    final bottomAccent = find.byWidgetPredicate(
-      (widget) =>
-          widget is Container &&
-          widget.constraints ==
-              const BoxConstraints.tightFor(width: 190, height: 190),
-    );
-
     await tester.pumpWidget(buildScreen(0));
-    final accentTopBefore = tester.getTopLeft(bottomAccent).dy;
+    final backgroundBefore = tester.widget<ColoredBox>(
+      find.descendant(
+        of: find.byKey(const ValueKey('chat-background-layer')),
+        matching: find.byType(ColoredBox),
+      ),
+    );
     final contentHeightBefore = tester
         .getSize(find.byKey(const ValueKey('keyboard-content')))
         .height;
 
     await tester.pumpWidget(buildScreen(300));
 
-    expect(tester.getTopLeft(bottomAccent).dy, accentTopBefore);
+    expect(backgroundBefore.color, AppColors.paper);
+    expect(
+      tester
+          .widget<ColoredBox>(
+            find.descendant(
+              of: find.byKey(const ValueKey('chat-background-layer')),
+              matching: find.byType(ColoredBox),
+            ),
+          )
+          .color,
+      AppColors.paper,
+    );
     expect(
       tester.getSize(find.byKey(const ValueKey('keyboard-content'))).height,
       contentHeightBefore - 300,
     );
   });
 
-  testWidgets('glass panels avoid realtime backdrop blur', (tester) async {
+  testWidgets('warm sheet surfaces use tonal depth without shadows', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       const MaterialApp(
-        home: Scaffold(body: GlassPanel(child: Text('content'))),
+        home: Scaffold(body: WarmSheetSurface(child: Text('content'))),
       ),
     );
 
     expect(find.byType(BackdropFilter), findsNothing);
+    final surface = tester.widget<Container>(find.byType(Container).first);
+    final decoration = surface.decoration! as BoxDecoration;
+    expect(decoration.color, AppColors.surfaceElevated);
+    expect(decoration.boxShadow, isNull);
   });
 
   testWidgets('new conversation clears the current transcript', (tester) async {
@@ -920,8 +1117,7 @@ void main() {
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byTooltip('工作区'));
-    await tester.pumpAndSettle();
+    await openWorkspaceFromHeader(tester);
 
     expect(find.byKey(const ValueKey('workspace-files')), findsOneWidget);
     expect(find.textContaining('codex/workspace-sidebar'), findsOneWidget);
@@ -1069,6 +1265,8 @@ void main() {
       ),
     );
 
+    await tester.tap(find.byKey(const ValueKey('composer-expand-button')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('permission-mode-chip')));
     await tester.pumpAndSettle();
     await tester.ensureVisible(
@@ -1121,7 +1319,7 @@ void main() {
     );
 
     expect(find.text('error.log'), findsOneWidget);
-    expect(find.byTooltip('添加附件'), findsOneWidget);
+    expect(find.byTooltip('添加内容和设置权限'), findsOneWidget);
     await tester.tap(find.byTooltip('发送'));
     expect(sent, isTrue);
   });
@@ -1349,6 +1547,7 @@ void main() {
             onFillPrompt: (_) {},
             onReconnect: () {},
             onOpenSettings: () {},
+            onOpenModelPicker: () {},
             onNewConversation: () {},
             onOpenSessions: () {},
             onOpenWorkspace: () {},
@@ -1362,11 +1561,52 @@ void main() {
       ),
     );
 
-    expect(find.textContaining('运行中'), findsOneWidget);
-    expect(find.text('Opus 4.8'), findsOneWidget);
-    expect(find.text('剩余 175K / 200K'), findsOneWidget);
-    expect(find.text('新会话'), findsNothing);
+    expect(find.text('运行中  My PC'), findsOneWidget);
+    expect(find.byKey(const ValueKey('session-header')), findsOneWidget);
+    expect(find.byKey(const ValueKey('composer-model-button')), findsOneWidget);
+    final newConversation = tester.widget<IconButton>(
+      find.descendant(
+        of: find.byKey(const ValueKey('session-new-button')),
+        matching: find.byType(IconButton),
+      ),
+    );
+    expect(newConversation.onPressed, isNull);
     expect(find.byType(LinearProgressIndicator), findsNothing);
+  });
+
+  testWidgets('idle connection state does not imply the task was stopped', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: ConnectionHeader(
+            session: SavedSession(
+              origin: Uri.parse('https://cc-remote.example.com'),
+              token: 'demo',
+              deviceName: 'My PC',
+              workspaceDir: 'cc-remote',
+            ),
+            running: false,
+            connected: true,
+            offline: false,
+            modelName: 'claude-opus-4-8',
+            contextWindow: 200000,
+            remainingContext: 174919,
+            onReconnect: () {},
+            onOpenSettings: () {},
+            onNewConversation: () {},
+            onOpenSessions: () {},
+            onOpenWorkspace: () {},
+            uploadingAttachments: false,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('已连接  My PC'), findsOneWidget);
+    expect(find.textContaining('已停止'), findsNothing);
   });
 
   testWidgets('stopping state disables the stop action and shows progress', (
@@ -1399,11 +1639,13 @@ void main() {
       ),
     );
 
-    expect(find.text('正在停止任务'), findsOneWidget);
-    expect(find.text('停止中'), findsOneWidget);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.text('等待主机确认停止'), findsOneWidget);
+    final stopButton = tester.widget<IconButton>(
+      find.byKey(const ValueKey('composer-primary-action')),
+    );
+    expect(stopButton.onPressed, isNull);
 
-    await tester.tap(find.text('停止中'));
+    await tester.tap(find.byKey(const ValueKey('composer-primary-action')));
     expect(stopCount, 0);
   });
 
@@ -1467,6 +1709,7 @@ void main() {
               onFillPrompt: (_) {},
               onReconnect: () {},
               onOpenSettings: () {},
+              onOpenModelPicker: () {},
               onNewConversation: () {},
               onOpenSessions: () {},
               onOpenWorkspace: () {},
@@ -1481,64 +1724,68 @@ void main() {
       ),
     );
 
-    expect(find.text('停止'), findsOneWidget);
+    expect(find.byTooltip('停止'), findsOneWidget);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('composer-primary-action'))),
+      const Size.square(AppSizes.touchTarget),
+    );
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('two-column hero does not overflow with scaled device text', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(393, 852);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: buildSignalConsoleTheme(),
-        home: MediaQuery(
-          data: const MediaQueryData(
-            size: Size(393, 852),
-            devicePixelRatio: 1,
-            textScaler: TextScaler.linear(1.35),
-          ),
-          child: Scaffold(
-            body: SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: ConnectionHeader(
-                  session: SavedSession(
-                    origin: Uri.parse('https://cc-remote.example.com'),
-                    token: 'demo',
-                    deviceName: 'My PC',
-                    workspaceDir: 'cc-remote',
+  testWidgets(
+    'compact session header does not overflow with scaled device text',
+    (tester) async {
+      tester.view.physicalSize = const Size(393, 852);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildSignalConsoleTheme(),
+          home: MediaQuery(
+            data: const MediaQueryData(
+              size: Size(393, 852),
+              devicePixelRatio: 1,
+              textScaler: TextScaler.linear(1.35),
+            ),
+            child: Scaffold(
+              body: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: ConnectionHeader(
+                    session: SavedSession(
+                      origin: Uri.parse('https://cc-remote.example.com'),
+                      token: 'demo',
+                      deviceName: 'My PC',
+                      workspaceDir: 'cc-remote',
+                    ),
+                    running: false,
+                    connected: false,
+                    offline: true,
+                    modelName: 'claude-opus-4-8',
+                    contextWindow: 200000,
+                    remainingContext: 174919,
+                    onReconnect: () {},
+                    onOpenSettings: () {},
+                    onNewConversation: () {},
+                    onOpenSessions: () {},
+                    onOpenWorkspace: () {},
+                    uploadingAttachments: false,
                   ),
-                  running: false,
-                  connected: false,
-                  offline: true,
-                  modelName: 'claude-opus-4-8',
-                  contextWindow: 200000,
-                  remainingContext: 174919,
-                  onReconnect: () {},
-                  onOpenSettings: () {},
-                  onNewConversation: () {},
-                  onOpenSessions: () {},
-                  onOpenWorkspace: () {},
-                  uploadingAttachments: false,
                 ),
               ),
             ),
           ),
         ),
-      ),
-    );
+      );
 
-    expect(
-      tester.getSize(find.byType(ConnectionHeader)).height,
-      greaterThan(80),
-    );
-    expect(tester.getSize(find.byType(ConnectionHeader)).height, lessThan(116));
-    expect(tester.takeException(), isNull);
-  });
+      expect(
+        tester.getSize(find.byKey(const ValueKey('session-header'))).height,
+        AppSizes.sessionHeader,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('pairing screen remains scrollable in landscape', (tester) async {
     tester.view.physicalSize = const Size(812, 375);
@@ -1602,6 +1849,7 @@ void main() {
             onFillPrompt: (_) {},
             onReconnect: () {},
             onOpenSettings: () {},
+            onOpenModelPicker: () {},
             onNewConversation: () => createdConversation = true,
             onOpenSessions: () => openedSessions = true,
             onOpenWorkspace: () {},
@@ -1622,7 +1870,7 @@ void main() {
     expect(createdConversation, isFalse);
   });
 
-  testWidgets('assistant replies use a left aligned markdown bubble', (
+  testWidgets('assistant replies use a left aligned paper reading frame', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -1637,11 +1885,6 @@ void main() {
 
     final assistant = find.byKey(const ValueKey('assistant-message'));
     expect(assistant, findsOneWidget);
-    final bubble = tester.widget<Container>(assistant);
-    final decoration = bubble.decoration! as BoxDecoration;
-    expect(decoration.color, AppColors.porcelainMuted);
-    expect(decoration.border, isNotNull);
-    expect(bubble.padding, const EdgeInsets.fromLTRB(15, 12, 16, 13));
     expect(
       find.descendant(of: assistant, matching: find.byType(MarkdownBody)),
       findsOneWidget,
@@ -1654,19 +1897,58 @@ void main() {
       markdown.styleSheet!.tableCellsPadding,
       const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
     );
-    expect(find.byKey(const ValueKey('assistant-avatar')), findsOneWidget);
-    final avatarImage = tester.widget<Image>(
-      find.descendant(
-        of: find.byKey(const ValueKey('assistant-avatar')),
-        matching: find.byType(Image),
+    expect(
+      markdown.styleSheet!.p!.fontFamily,
+      AppTypography.assistantFontFamily,
+    );
+    expect(find.byType(Image), findsNothing);
+    expect(find.byKey(const ValueKey('user-message')), findsNothing);
+  });
+
+  testWidgets('composer controls use 44 point targets and 36 point visuals', (
+    tester,
+  ) async {
+    final controller = TextEditingController(text: '继续');
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: PromptBar(
+            controller: controller,
+            commands: const [],
+            running: false,
+            connected: true,
+            offline: false,
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: false,
+            onPermissionModeSelected: (_) {},
+            onCommandSelected: (_) {},
+            onReconnect: () {},
+            onSend: () {},
+            onStop: () {},
+          ),
+        ),
       ),
     );
+
     expect(
-      (avatarImage.image as AssetImage).assetName,
-      'assets/claude_mascot.png',
+      tester.getSize(find.byKey(const ValueKey('composer-expand-button'))),
+      const Size.square(AppSizes.touchTarget),
     );
-    expect(avatarImage.filterQuality, FilterQuality.none);
-    expect(find.byKey(const ValueKey('user-message')), findsNothing);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('composer-expand-visual'))),
+      const Size.square(AppSizes.iconControl),
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey('composer-primary-action'))),
+      const Size.square(AppSizes.touchTarget),
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey('composer-primary-visual'))),
+      const Size.square(AppSizes.iconControl),
+    );
   });
 
   testWidgets('thinking activity shows animated status and elapsed time', (
@@ -1917,6 +2199,7 @@ class FakeBackgroundNotificationService
   ValueChanged<String?>? onTap;
   bool permissionGranted = true;
   int cancelCount = 0;
+  VoidCallback? onRequestPermission;
 
   @override
   Future<void> initialize({required ValueChanged<String?> onTap}) async {
@@ -1924,7 +2207,10 @@ class FakeBackgroundNotificationService
   }
 
   @override
-  Future<bool> requestPermission() async => permissionGranted;
+  Future<bool> requestPermission() async {
+    onRequestPermission?.call();
+    return permissionGranted;
+  }
 
   @override
   Future<void> show(AppNotification notification) async {
@@ -1935,6 +2221,41 @@ class FakeBackgroundNotificationService
   Future<void> cancelAll() async {
     cancelCount += 1;
   }
+}
+
+class FakeCameraPermissionService implements CameraPermissionService {
+  FakeCameraPermissionService({
+    this.statusValue = CameraPermissionState.granted,
+    this.requestValue = CameraPermissionState.granted,
+    this.requestOnLaunch = true,
+    this.onRequest,
+  });
+
+  CameraPermissionState statusValue;
+  CameraPermissionState requestValue;
+  bool requestOnLaunch;
+  final VoidCallback? onRequest;
+  int requestCount = 0;
+  int openSettingsCount = 0;
+
+  @override
+  Future<bool> openSettings() async {
+    openSettingsCount += 1;
+    return true;
+  }
+
+  @override
+  Future<CameraPermissionState> request() async {
+    requestCount += 1;
+    onRequest?.call();
+    return requestValue;
+  }
+
+  @override
+  Future<CameraPermissionState> status() async => statusValue;
+
+  @override
+  Future<bool> shouldRequestOnLaunch() async => requestOnLaunch;
 }
 
 class FakeChatBackgroundImageService implements ChatBackgroundImageService {

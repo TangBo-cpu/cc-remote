@@ -162,16 +162,9 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
       child: Container(
         margin: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: AppColors.porcelain,
-          borderRadius: BorderRadius.circular(20),
+          color: AppColors.surfaceElevated,
+          borderRadius: BorderRadius.circular(AppRadii.surface),
           border: Border.all(color: AppColors.line),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.shadow.withValues(alpha: 0.12),
-              blurRadius: 36,
-              offset: const Offset(12, 8),
-            ),
-          ],
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
@@ -220,8 +213,9 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     color: _muted,
-                    fontSize: 11,
-                    fontFamily: 'monospace',
+                    fontSize: 12,
+                    fontFamily: AppTypography.codeFontFamily,
+                    fontFamilyFallback: AppTypography.codeFontFamilyFallback,
                   ),
                 ),
               ],
@@ -254,7 +248,7 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
           child: Container(
             padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
-              color: AppColors.porcelainMuted,
+              color: AppColors.control,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: AppColors.line),
             ),
@@ -287,16 +281,9 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
               : AppMotion.fast,
           padding: const EdgeInsets.symmetric(vertical: 9),
           decoration: BoxDecoration(
-            color: selected ? AppColors.porcelain : Colors.transparent,
+            color: selected ? AppColors.surfaceElevated : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
-            boxShadow: selected
-                ? [
-                    BoxShadow(
-                      color: AppColors.shadow.withValues(alpha: 0.06),
-                      blurRadius: 8,
-                    ),
-                  ]
-                : null,
+            border: selected ? Border.all(color: AppColors.line) : null,
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -399,9 +386,10 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
-              fontSize: 11,
+              fontSize: 12,
               color: _muted,
-              fontFamily: 'monospace',
+              fontFamily: AppTypography.codeFontFamily,
+              fontFamilyFallback: AppTypography.codeFontFamilyFallback,
             ),
           ),
           trailing: Row(
@@ -756,8 +744,10 @@ class _FileView extends StatelessWidget {
                       (index + 1).toString().padLeft(width),
                       textAlign: TextAlign.right,
                       style: const TextStyle(
-                        color: Color(0xFF9AABB1),
-                        fontFamily: 'monospace',
+                        color: AppColors.inactive,
+                        fontFamily: AppTypography.codeFontFamily,
+                        fontFamilyFallback:
+                            AppTypography.codeFontFamilyFallback,
                         fontSize: 12.5,
                         height: 1.55,
                       ),
@@ -770,8 +760,10 @@ class _FileView extends StatelessWidget {
                       child: SelectableText(
                         displayLine.isEmpty ? ' ' : displayLine,
                         style: const TextStyle(
-                          color: Color(0xFF26353B),
-                          fontFamily: 'monospace',
+                          color: AppColors.ink,
+                          fontFamily: AppTypography.codeFontFamily,
+                          fontFamilyFallback:
+                              AppTypography.codeFontFamilyFallback,
                           fontSize: 12.5,
                           height: 1.55,
                         ),
@@ -807,11 +799,11 @@ class _DiffView extends StatelessWidget {
         final hunk = line.startsWith('@@');
         return Container(
           color: added
-              ? AppColors.success.withValues(alpha: 0.045)
+              ? AppColors.control
               : removed
-              ? AppColors.stop.withValues(alpha: 0.045)
+              ? AppColors.danger.withValues(alpha: 0.07)
               : hunk
-              ? AppColors.accent.withValues(alpha: 0.05)
+              ? AppColors.terracotta.withValues(alpha: 0.06)
               : Colors.transparent,
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -821,11 +813,11 @@ class _DiffView extends StatelessWidget {
                 height: 23,
                 child: ColoredBox(
                   color: added
-                      ? AppColors.success
+                      ? AppColors.inactive
                       : removed
-                      ? AppColors.stop
+                      ? AppColors.danger
                       : hunk
-                      ? AppColors.accent
+                      ? AppColors.terracotta
                       : Colors.transparent,
                 ),
               ),
@@ -841,7 +833,9 @@ class _DiffView extends StatelessWidget {
                       line.isEmpty ? ' ' : line,
                       style: TextStyle(
                         color: hunk ? _accent : _ink,
-                        fontFamily: 'monospace',
+                        fontFamily: AppTypography.codeFontFamily,
+                        fontFamilyFallback:
+                            AppTypography.codeFontFamilyFallback,
                         fontSize: 12,
                         height: 1.45,
                       ),
@@ -867,9 +861,9 @@ class _ChangeBadge extends StatelessWidget {
     final status = change.unstaged ?? change.staged ?? 'M';
     final label = status == '?' ? 'U' : status;
     final color = switch (label) {
-      'A' || 'U' => const Color(0xFF2A9870),
-      'D' => const Color(0xFFC95E5E),
-      'R' => const Color(0xFF8A70B6),
+      'A' || 'U' => AppColors.inactive,
+      'D' => AppColors.danger,
+      'R' => AppColors.muted,
       _ => _accent,
     };
     return Container(
@@ -901,19 +895,20 @@ class _DiffScopeChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      borderRadius: BorderRadius.circular(7),
+      borderRadius: BorderRadius.circular(AppRadii.compact),
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
         decoration: BoxDecoration(
-          color: const Color(0xFFE8F2F5),
-          borderRadius: BorderRadius.circular(7),
+          color: AppColors.control,
+          borderRadius: BorderRadius.circular(AppRadii.compact),
+          border: Border.all(color: AppColors.line),
         ),
         child: Text(
           label,
           style: const TextStyle(
-            color: Color(0xFF4D6C76),
-            fontSize: 9.5,
+            color: AppColors.muted,
+            fontSize: 12,
             fontWeight: FontWeight.w700,
           ),
         ),

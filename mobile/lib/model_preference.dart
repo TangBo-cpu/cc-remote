@@ -51,3 +51,12 @@ String modelPreferenceDescription(
   final current = currentModel?.trim();
   return current == null || current.isEmpty ? '使用电脑端默认模型' : '当前：$current';
 }
+
+String modelPreferenceOptionDescription(ClaudeModelPreference preference) {
+  return switch (preference) {
+    ClaudeModelPreference.followComputer => '使用电脑端或 Claude Code 的默认配置',
+    ClaudeModelPreference.opus => '更强的复杂推理与大型任务能力',
+    ClaudeModelPreference.sonnet => '速度与能力均衡，适合日常开发',
+    ClaudeModelPreference.fable => '使用电脑端支持的 Fable 模型覆盖项',
+  };
+}

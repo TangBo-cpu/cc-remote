@@ -1,6 +1,6 @@
 # TODO
 
-本文同步到 `master` 当前版本。Signal Console 手机端主链路、工作区冷启动对齐、流式性能合批和可靠性自动化已经完成，并通过电脑端与 Flutter 回归测试。
+本文同步到 `master` 当前版本。Signal Console 手机端主链路、工作区冷启动对齐、流式性能合批和可靠性自动化已经完成；Warm Console 设计规范已补齐，代码迁移尚未开始。
 
 ## 已完成
 
@@ -45,11 +45,22 @@
 - [x] Claude 普通回复使用瓷白实体气泡、边框和正常留白
 - [x] 最新调试版真机安装和主界面检查
 
+### Warm Console 设计准备
+
+- [x] 建立根目录 `DESIGN.md` 与 Impeccable 设计 sidecar
+- [x] Penpot 补齐配对、会话选择、运行控制、权限、Diff 与恢复终态
+- [x] UI 实现文档同步到最新 Warm Console
+- [ ] 迁移主题 tokens、字体与统一线性图标
+- [ ] 重构紧凑会话头、transcript、活动事件和 Composer
+- [ ] 重构配对、会话选择、权限决策与 Diff
+- [ ] 实现离线、失败、停止中、已停止、停止超时和重连失败视图
+- [ ] 更新组件测试并完成 Android 真机视觉验收
+
 ### 文档
 
 - [x] 根 README 与当前启动、安装和协议一致
 - [x] 移动端 README 与当前 UI 和调试流程一致
-- [x] UI 设计文档改为当前活力浅色方案
+- [x] UI 设计文档更新为下一版 Warm Console 实现规格
 - [x] 系统架构与 Flutter 实现文档去掉初版假设
 
 ## 待专项验证

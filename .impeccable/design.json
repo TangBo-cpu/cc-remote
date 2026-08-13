@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-12T14:25:05.782Z",
+  "title": "Design System: CC Remote Warm Console",
+  "extensions": {
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Warm Paper",
+        "canonical": "#F5F4EE"
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Paper Surface",
+        "canonical": "#F8F7F2"
+      },
+      "surface-elevated": {
+        "role": "neutral",
+        "displayName": "Elevated Paper",
+        "canonical": "#FBFAF7"
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Graphite Ink",
+        "canonical": "#2B2A27"
+      },
+      "terracotta": {
+        "role": "primary",
+        "displayName": "Terracotta Action",
+        "canonical": "#DA7756"
+      },
+      "danger": {
+        "role": "primary",
+        "displayName": "Deep Brick Error",
+        "canonical": "#9E4D35"
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "UI Headline",
+        "purpose": "Page titles and high-risk decisions."
+      },
+      "assistant-body": {
+        "displayName": "Assistant Reading Voice",
+        "purpose": "Long-form Claude responses only."
+      },
+      "code": {
+        "displayName": "Technical Evidence",
+        "purpose": "Commands, paths, diffs, and numeric evidence."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "press",
+        "value": "90ms ease-out",
+        "purpose": "Direct touch acknowledgement."
+      },
+      {
+        "name": "state",
+        "value": "180ms ease-out",
+        "purpose": "Small state and control transitions."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "reference-phone",
+        "value": "390x844"
+      },
+      {
+        "name": "compact-height",
+        "value": "below 700px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single next action on permission, retry, and recovery screens.",
+      "html": "<button class=\"ds-primary\">仅本次允许</button>",
+      "css": ".ds-primary{height:52px;padding:0 20px;border:0;border-radius:12px;background:#DA7756;color:#FBFAF7;font:700 14px/1.2 sans-serif}.ds-primary:hover{background:#A65338}.ds-primary:focus-visible{outline:2px solid #2B2A27;outline-offset:2px}.ds-primary:active{transform:scale(.985)}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "A reversible alternative that does not compete with the main action.",
+      "html": "<button class=\"ds-secondary\">拒绝并返回</button>",
+      "css": ".ds-secondary{height:52px;padding:0 20px;border:0;border-radius:12px;background:#ECEBE5;color:#2B2A27;font:700 14px/1.2 sans-serif}.ds-secondary:hover{background:#E2E0D8}.ds-secondary:focus-visible{outline:2px solid #DA7756;outline-offset:2px}.ds-secondary:active{transform:scale(.985)}"
+    },
+    {
+      "name": "Compact Session Header",
+      "kind": "nav",
+      "refersTo": "session-header",
+      "description": "Fuses navigation, session identity, connection state, and utility actions.",
+      "html": "<header class=\"ds-header\"><button aria-label=\"菜单\"><svg viewBox=\"0 0 24 24\"><path d=\"M5 8h14M5 16h9\"/></svg></button><div><small>cc-remote</small><strong>移动端 UI 重构</strong><span>已连接　 Mac mini</span></div><aside><button aria-label=\"新建\"><svg viewBox=\"0 0 24 24\"><path d=\"M12 5v14M5 12h14\"/></svg></button><button aria-label=\"更多\"><svg viewBox=\"0 0 24 24\"><path d=\"M5 12h.01M12 12h.01M19 12h.01\"/></svg></button></aside></header>",
+      "css": ".ds-header{width:326px;min-height:52px;padding:12px;display:grid;grid-template-columns:40px 1fr auto;gap:10px;align-items:center;border:1px solid #ECEBE5;border-radius:22px;background:#F8F7F2;color:#2B2A27;font-family:sans-serif}.ds-header button{display:grid;place-items:center;width:36px;height:36px;border:0;border-radius:50%;background:#ECEBE5}.ds-header svg{width:20px;fill:none;stroke:#2B2A27;stroke-width:1.8;stroke-linecap:round}.ds-header div{display:grid;gap:2px}.ds-header small,.ds-header span{color:#65625C;font-size:11px}.ds-header strong{font-size:15px}.ds-header aside{display:flex;gap:4px}.ds-header:focus-within{outline:2px solid #DA7756;outline-offset:2px}"
+    },
+    {
+      "name": "Activity Event",
+      "kind": "custom",
+      "refersTo": "activity-card",
+      "description": "The current desktop action, with completed evidence compressed below.",
+      "html": "<section class=\"ds-event\"><i></i><div><em>正在执行</em><strong>mobile/lib/main.dart</strong><span>点击查看实时活动</span></div><svg viewBox=\"0 0 24 24\"><path d=\"m9 18 6-6-6-6\"/></svg></section>",
+      "css": ".ds-event{width:284px;padding:14px 16px;display:grid;grid-template-columns:14px 1fr auto;gap:10px;align-items:center;border:1px solid #ECEBE5;border-radius:16px;background:#F8F7F2;color:#2B2A27;font-family:sans-serif}.ds-event i{width:9px;height:9px;border-radius:50%;background:#DA7756}.ds-event div{display:grid;gap:3px}.ds-event em{color:#A65338;font:700 12px sans-serif}.ds-event strong{font:600 13px monospace}.ds-event span{color:#65625C;font-size:11px}.ds-event svg{width:18px;fill:none;stroke:#65625C;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}"
+    },
+    {
+      "name": "Composer",
+      "kind": "input",
+      "refersTo": "composer",
+      "description": "A compact two-level input surface with 36px visual controls and 44px hit areas.",
+      "html": "<form class=\"ds-composer\"><textarea placeholder=\"继续告诉 Claude…\"></textarea><div><button aria-label=\"扩展\"><svg viewBox=\"0 0 24 24\"><path d=\"M12 5v14M5 12h14\"/></svg></button><button class=\"ds-model\">Sonnet 4<svg viewBox=\"0 0 24 24\"><path d=\"m8 10 4 4 4-4\"/></svg></button><button class=\"ds-send\" aria-label=\"发送\"><svg viewBox=\"0 0 24 24\"><path d=\"M12 19V5m-6 6 6-6 6 6\"/></svg></button></div></form>",
+      "css": ".ds-composer{width:326px;height:86px;padding:14px 12px 10px;display:grid;grid-template-rows:1fr 44px;border:1px solid #ECEBE5;border-radius:16px;background:#FBFAF7}.ds-composer textarea{border:0;resize:none;background:transparent;color:#2B2A27;font:400 14px sans-serif;outline:0}.ds-composer div{display:flex;align-items:center;gap:10px}.ds-composer button{display:flex;align-items:center;justify-content:center;min-width:44px;height:44px;border:0;border-radius:50%;background:#ECEBE5;color:#2B2A27}.ds-composer svg{width:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.ds-composer .ds-model{width:auto;gap:5px;padding:0 14px;border-radius:999px;font:600 12px sans-serif}.ds-composer .ds-model svg{width:14px}.ds-composer .ds-send{margin-left:auto;background:#DA7756;color:#FBFAF7}.ds-composer:focus-within{outline:2px solid #DA7756;outline-offset:2px}"
+    },
+    {
+      "name": "Recovery Card",
+      "kind": "card",
+      "refersTo": "activity-card",
+      "description": "One fact, one preservation promise, and one recovery action.",
+      "html": "<section class=\"ds-recovery\"><span><svg viewBox=\"0 0 24 24\"><path d=\"M20 6v5h-5M4 18v-5h5M18.5 9A7 7 0 0 0 6.7 6.7L4 9m16 6-2.7 2.3A7 7 0 0 1 5.5 15\"/></svg></span><div><strong>自动重连中</strong><p>连接中 · 草稿已保留</p><button>立即重连</button></div></section>",
+      "css": ".ds-recovery{width:316px;padding:16px;display:grid;grid-template-columns:40px 1fr;gap:12px;border:1px solid #ECEBE5;border-radius:16px;background:#F8F7F2;color:#2B2A27;font-family:sans-serif}.ds-recovery>span{display:grid;place-items:center;width:36px;height:36px;border-radius:50%;background:#ECEBE5}.ds-recovery svg{width:19px;fill:none;stroke:#2B2A27;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.ds-recovery strong{font-size:16px}.ds-recovery p{margin:5px 0 12px;color:#65625C;font-size:12px}.ds-recovery button{height:44px;padding:0 18px;border:0;border-radius:12px;background:#ECEBE5;color:#2B2A27;font-weight:700}.ds-recovery button:focus-visible{outline:2px solid #DA7756;outline-offset:2px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "暖纸控制台 / Warm Console",
+    "overview": "A quiet warm-paper work surface where reading remains comfortable and remote state remains immediately actionable. Personality comes from typography, rhythm, and restrained terracotta action cues rather than effects.",
+    "keyCharacteristics": [
+      "Continuous warm-paper background",
+      "Rare terracotta action color",
+      "Compact session header",
+      "Readable transcript and evidence hierarchy",
+      "State expressed by icon, text, and tone"
+    ],
+    "rules": [
+      {
+        "name": "The Rare Terracotta Rule",
+        "body": "Terracotta marks the current action or the single next action; it is not decoration.",
+        "section": "colors"
+      },
+      {
+        "name": "The No Green Status Rule",
+        "body": "Online and completed states use text, icon, and neutral tone rather than a green status system.",
+        "section": "colors"
+      },
+      {
+        "name": "The Tonal Depth Rule",
+        "body": "Use paper tones and spacing before elevation effects.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do make connection, run, and stop state readable in a 300ms glance.",
+      "Do keep all interactive hit targets at least 44px.",
+      "Do drive terminal states from authoritative host events."
+    ],
+    "donts": [
+      "Don't use glass, gradients, green status styling, black docks, or offset color shadows.",
+      "Don't stack generic rounded cards and pills.",
+      "Don't claim a task stopped because a local timer expired."
+    ]
+  }
+}

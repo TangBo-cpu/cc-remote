@@ -3,49 +3,86 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 class AppColors {
-  static const ink = Color(0xFF14130F);
-  static const muted = Color(0xFF6A675F);
-  static const mint = Color(0xFF54E6B1);
-  static const mintSoft = Color(0xFFD9F7E9);
-  static const yellow = Color(0xFFFFD84A);
-  static const yellowSoft = Color(0xFFFFF1B0);
-  static const coral = Color(0xFFFF786B);
-  static const coralSoft = Color(0xFFFFDCD7);
-  static const accent = mint;
-  static const accentSoft = mintSoft;
-  static const success = Color(0xFF28B985);
-  static const warning = Color(0xFFE0A91D);
-  static const stop = coral;
-  static const shadow = ink;
-  static const line = Color(0xFFDED8CA);
-  static const lineStrong = Color(0xFFB8B1A4);
-  static const porcelain = Color(0xFFFFFDF5);
-  static const porcelainMuted = Color(0xFFF1EDE1);
+  static const paper = Color(0xFFF5F4EE);
+  static const surface = Color(0xFFF8F7F2);
+  static const surfaceElevated = Color(0xFFFBFAF7);
+  static const control = Color(0xFFECEBE5);
+  static const ink = Color(0xFF2B2A27);
+  static const muted = Color(0xFF65625C);
+  static const inactive = Color(0xFF8B877F);
+  static const inactiveLight = Color(0xFFB8B4AB);
+  static const terracotta = Color(0xFFDA7756);
+  static const terracottaDeep = Color(0xFFA65338);
+  static const danger = Color(0xFF9E4D35);
+  static const line = Color(0xFFD8D5CD);
+  static const lineStrong = inactiveLight;
+
+  static const accent = terracotta;
+  static const accentSoft = control;
+  static const warning = terracottaDeep;
+  static const stop = danger;
+  static const porcelain = surfaceElevated;
+  static const porcelainMuted = control;
   static const code = ink;
-  static const codeMuted = Color(0xFFB8BBB3);
-  static const bgTop = Color(0xFFFBF8EF);
-  static const bgMid = Color(0xFFF8F4E8);
-  static const bgBottom = Color(0xFFF3EDDE);
+  static const codeMuted = inactive;
+  static const bgTop = surfaceElevated;
+  static const bgMid = paper;
+  static const bgBottom = surface;
 }
 
 class AppTypography {
-  static const fontFamily = 'sans-serif-rounded';
+  static const fontFamily = 'sans-serif';
   static const fontFamilyFallback = <String>[
-    'Noto Sans CJK SC',
     'Noto Sans SC',
+    'Noto Sans CJK SC',
     'PingFang SC',
     'Microsoft YaHei',
+    'Roboto',
     'sans-serif',
+  ];
+  static const assistantFontFamily = 'serif';
+  static const assistantFontFamilyFallback = <String>[
+    'Noto Serif SC',
+    'Source Han Serif SC',
+    'Songti SC',
+    'serif',
+  ];
+  static const codeFontFamily = 'monospace';
+  static const codeFontFamilyFallback = <String>[
+    'JetBrains Mono',
+    'SFMono-Regular',
+    'Consolas',
+    'monospace',
   ];
 }
 
+class AppSpacing {
+  static const xxs = 4.0;
+  static const xs = 8.0;
+  static const sm = 12.0;
+  static const md = 16.0;
+  static const lg = 20.0;
+  static const xl = 24.0;
+  static const xxl = 32.0;
+}
+
+class AppSizes {
+  static const touchTarget = 44.0;
+  static const iconControl = 36.0;
+  static const sessionHeader = 76.0;
+  static const composer = 110.0;
+}
+
 class AppRadii {
-  static const panel = 26.0;
-  static const bubble = 18.0;
-  static const input = 28.0;
-  static const control = 15.0;
-  static const compact = 10.0;
+  static const compact = 8.0;
+  static const control = 12.0;
+  static const surface = 16.0;
+  static const header = 22.0;
   static const pill = 999.0;
+
+  static const panel = surface;
+  static const bubble = surface;
+  static const input = control;
 }
 
 class AppMotion {
@@ -66,15 +103,16 @@ ThemeData buildSignalConsoleTheme() {
         seedColor: AppColors.accent,
         brightness: Brightness.light,
       ).copyWith(
-        primary: AppColors.accent,
-        onPrimary: AppColors.ink,
-        secondary: AppColors.success,
-        surface: AppColors.porcelain,
+        primary: AppColors.terracotta,
+        onPrimary: AppColors.surfaceElevated,
+        secondary: AppColors.terracottaDeep,
+        onSecondary: AppColors.surfaceElevated,
+        surface: AppColors.surface,
         onSurface: AppColors.ink,
-        error: AppColors.stop,
+        error: AppColors.danger,
         outline: AppColors.lineStrong,
         outlineVariant: AppColors.line,
-        surfaceContainerHighest: AppColors.porcelainMuted,
+        surfaceContainerHighest: AppColors.control,
       );
 
   TextStyle signalText(
@@ -105,108 +143,108 @@ ThemeData buildSignalConsoleTheme() {
   final textTheme = materialText.copyWith(
     displayLarge: signalText(
       materialText.displayLarge,
-      size: 52,
-      weight: FontWeight.w900,
-      height: 0.98,
-      letterSpacing: -2.2,
+      size: 32,
+      weight: FontWeight.w700,
+      height: 1.18,
+      letterSpacing: -0.64,
     ),
     displayMedium: signalText(
       materialText.displayMedium,
-      size: 43,
-      weight: FontWeight.w900,
-      height: 1.02,
-      letterSpacing: -1.7,
+      size: 28,
+      weight: FontWeight.w700,
+      height: 1.2,
+      letterSpacing: -0.56,
     ),
     displaySmall: signalText(
       materialText.displaySmall,
-      size: 36,
-      weight: FontWeight.w900,
-      height: 1.06,
-      letterSpacing: -1.3,
+      size: 24,
+      weight: FontWeight.w700,
+      height: 1.22,
+      letterSpacing: -0.48,
     ),
     headlineLarge: signalText(
       materialText.headlineLarge,
-      size: 32,
-      weight: FontWeight.w900,
-      height: 1.08,
-      letterSpacing: -1.05,
+      size: 21,
+      weight: FontWeight.w700,
+      height: 1.25,
+      letterSpacing: -0.42,
     ),
     headlineMedium: signalText(
       materialText.headlineMedium,
-      size: 28,
-      weight: FontWeight.w900,
-      height: 1.1,
-      letterSpacing: -0.9,
+      size: 20,
+      weight: FontWeight.w700,
+      height: 1.28,
+      letterSpacing: -0.36,
     ),
     headlineSmall: signalText(
       materialText.headlineSmall,
-      size: 24,
-      weight: FontWeight.w800,
-      height: 1.14,
-      letterSpacing: -0.65,
+      size: 18,
+      weight: FontWeight.w700,
+      height: 1.3,
+      letterSpacing: -0.28,
     ),
     titleLarge: signalText(
       materialText.titleLarge,
-      size: 21,
-      weight: FontWeight.w800,
-      height: 1.18,
-      letterSpacing: -0.5,
+      size: 16,
+      weight: FontWeight.w700,
+      height: 1.35,
+      letterSpacing: -0.2,
     ),
     titleMedium: signalText(
       materialText.titleMedium,
-      size: 17,
-      weight: FontWeight.w800,
-      height: 1.22,
-      letterSpacing: -0.28,
+      size: 15,
+      weight: FontWeight.w700,
+      height: 1.35,
+      letterSpacing: -0.12,
     ),
     titleSmall: signalText(
       materialText.titleSmall,
-      size: 15,
-      weight: FontWeight.w700,
-      height: 1.28,
-      letterSpacing: -0.12,
+      size: 14,
+      weight: FontWeight.w600,
+      height: 1.4,
+      letterSpacing: 0,
     ),
     bodyLarge: signalText(
       materialText.bodyLarge,
-      size: 17,
-      weight: FontWeight.w500,
-      height: 1.46,
-      letterSpacing: -0.08,
+      size: 15,
+      weight: FontWeight.w400,
+      height: 1.55,
+      letterSpacing: 0,
     ),
     bodyMedium: signalText(
       materialText.bodyMedium,
-      size: 15,
-      weight: FontWeight.w500,
-      height: 1.46,
-      letterSpacing: -0.04,
+      size: 14,
+      weight: FontWeight.w400,
+      height: 1.5,
+      letterSpacing: 0,
     ),
     bodySmall: signalText(
       materialText.bodySmall,
-      size: 13,
-      weight: FontWeight.w500,
-      height: 1.42,
+      size: 12,
+      weight: FontWeight.w400,
+      height: 1.35,
       color: AppColors.muted,
     ),
     labelLarge: signalText(
       materialText.labelLarge,
-      size: 15,
-      weight: FontWeight.w800,
-      height: 1.2,
-      letterSpacing: 0.02,
+      size: 14,
+      weight: FontWeight.w600,
+      height: 1.35,
+      letterSpacing: 0,
     ),
     labelMedium: signalText(
       materialText.labelMedium,
       size: 13,
-      weight: FontWeight.w700,
-      height: 1.2,
-      letterSpacing: 0.08,
+      weight: FontWeight.w600,
+      height: 1.35,
+      letterSpacing: 0,
     ),
     labelSmall: signalText(
       materialText.labelSmall,
-      size: 11.5,
-      weight: FontWeight.w700,
-      height: 1.2,
-      letterSpacing: 0.18,
+      size: 12,
+      weight: FontWeight.w500,
+      height: 1.35,
+      letterSpacing: 0,
     ),
   );
 
@@ -214,7 +252,7 @@ ThemeData buildSignalConsoleTheme() {
     useMaterial3: true,
     splashFactory: InkSparkle.splashFactory,
     colorScheme: scheme,
-    scaffoldBackgroundColor: AppColors.bgMid,
+    scaffoldBackgroundColor: AppColors.paper,
     fontFamily: AppTypography.fontFamily,
     fontFamilyFallback: AppTypography.fontFamilyFallback,
     textTheme: textTheme,
@@ -234,7 +272,7 @@ ThemeData buildSignalConsoleTheme() {
     ),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: AppColors.porcelainMuted,
+      fillColor: AppColors.control,
       hintStyle: textTheme.bodyMedium?.copyWith(color: AppColors.muted),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
       border: OutlineInputBorder(
@@ -253,7 +291,9 @@ ThemeData buildSignalConsoleTheme() {
     filledButtonTheme: FilledButtonThemeData(
       style: ButtonStyle(
         animationDuration: AppMotion.fast,
-        minimumSize: const WidgetStatePropertyAll(Size(48, 48)),
+        minimumSize: const WidgetStatePropertyAll(
+          Size(AppSizes.touchTarget, AppSizes.touchTarget),
+        ),
         shape: WidgetStatePropertyAll(
           RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(AppRadii.control),
@@ -263,7 +303,7 @@ ThemeData buildSignalConsoleTheme() {
           TextStyle(
             fontFamily: AppTypography.fontFamily,
             fontFamilyFallback: AppTypography.fontFamilyFallback,
-            fontWeight: FontWeight.w800,
+            fontWeight: FontWeight.w600,
           ),
         ),
         overlayColor: WidgetStateProperty.resolveWith((states) {
@@ -277,7 +317,9 @@ ThemeData buildSignalConsoleTheme() {
     outlinedButtonTheme: OutlinedButtonThemeData(
       style: ButtonStyle(
         animationDuration: AppMotion.fast,
-        minimumSize: const WidgetStatePropertyAll(Size(48, 48)),
+        minimumSize: const WidgetStatePropertyAll(
+          Size(AppSizes.touchTarget, AppSizes.touchTarget),
+        ),
         side: const WidgetStatePropertyAll(
           BorderSide(color: AppColors.lineStrong),
         ),
@@ -290,7 +332,7 @@ ThemeData buildSignalConsoleTheme() {
           TextStyle(
             fontFamily: AppTypography.fontFamily,
             fontFamilyFallback: AppTypography.fontFamilyFallback,
-            fontWeight: FontWeight.w800,
+            fontWeight: FontWeight.w600,
           ),
         ),
         overlayColor: WidgetStateProperty.resolveWith((states) {
@@ -304,7 +346,9 @@ ThemeData buildSignalConsoleTheme() {
     iconButtonTheme: IconButtonThemeData(
       style: ButtonStyle(
         animationDuration: AppMotion.fast,
-        minimumSize: const WidgetStatePropertyAll(Size.square(48)),
+        minimumSize: const WidgetStatePropertyAll(
+          Size.square(AppSizes.touchTarget),
+        ),
         foregroundColor: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.disabled)) {
             return AppColors.muted.withValues(alpha: 0.42);
@@ -320,21 +364,23 @@ ThemeData buildSignalConsoleTheme() {
       ),
     ),
     bottomSheetTheme: const BottomSheetThemeData(
-      backgroundColor: AppColors.porcelain,
+      backgroundColor: AppColors.surfaceElevated,
       surfaceTintColor: Colors.transparent,
-      modalBackgroundColor: AppColors.porcelain,
+      modalBackgroundColor: AppColors.surfaceElevated,
       modalBarrierColor: Color(0x660D1D22),
       showDragHandle: true,
       dragHandleColor: AppColors.lineStrong,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(AppRadii.header),
+        ),
       ),
     ),
     dialogTheme: const DialogThemeData(
-      backgroundColor: AppColors.porcelain,
+      backgroundColor: AppColors.surfaceElevated,
       surfaceTintColor: Colors.transparent,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.all(Radius.circular(20)),
+        borderRadius: BorderRadius.all(Radius.circular(AppRadii.surface)),
       ),
     ),
     snackBarTheme: SnackBarThemeData(
@@ -346,152 +392,6 @@ ThemeData buildSignalConsoleTheme() {
       ),
     ),
   );
-}
-
-class LivelyTerminalPal extends StatelessWidget {
-  const LivelyTerminalPal({
-    super.key,
-    this.mood = TerminalPalMood.ready,
-    this.showBadge = false,
-  });
-
-  final TerminalPalMood mood;
-  final bool showBadge;
-
-  @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      label: switch (mood) {
-        TerminalPalMood.ready => '终端伙伴已准备好',
-        TerminalPalMood.working => '终端伙伴正在工作',
-        TerminalPalMood.offline => '终端伙伴正在等待连接',
-      },
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          Positioned.fill(
-            left: 8,
-            top: 8,
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                color: mood == TerminalPalMood.offline
-                    ? AppColors.lineStrong
-                    : AppColors.coral,
-                borderRadius: BorderRadius.circular(34),
-              ),
-            ),
-          ),
-          Positioned.fill(
-            child: CustomPaint(painter: _TerminalPalPainter(mood)),
-          ),
-          if (showBadge)
-            const Positioned(
-              right: -4,
-              bottom: -4,
-              child: LivelySparkBadge(size: 38),
-            ),
-        ],
-      ),
-    );
-  }
-}
-
-enum TerminalPalMood { ready, working, offline }
-
-class LivelySparkBadge extends StatelessWidget {
-  const LivelySparkBadge({super.key, this.size = 42});
-
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: AppColors.yellow,
-        shape: BoxShape.circle,
-        border: Border.all(color: AppColors.ink, width: 2.2),
-      ),
-      alignment: Alignment.center,
-      child: Icon(Icons.auto_awesome_rounded, size: size * 0.46),
-    );
-  }
-}
-
-class _TerminalPalPainter extends CustomPainter {
-  const _TerminalPalPainter(this.mood);
-
-  final TerminalPalMood mood;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final body = Paint()..color = AppColors.ink;
-    final shell = RRect.fromRectAndCorners(
-      Rect.fromLTWH(0, 0, size.width - 8, size.height - 8),
-      topLeft: Radius.circular(size.width * 0.48),
-      topRight: Radius.circular(size.width * 0.48),
-      bottomLeft: const Radius.circular(30),
-      bottomRight: const Radius.circular(30),
-    );
-    canvas.drawRRect(shell, body);
-
-    final eyeY = size.height * 0.38;
-    final eyeW = size.width * 0.17;
-    final eyeH = size.height * 0.12;
-    final eyePaint = Paint()..color = AppColors.porcelain;
-    for (final centerX in [size.width * 0.34, size.width * 0.66]) {
-      final eye = RRect.fromRectAndRadius(
-        Rect.fromCenter(
-          center: Offset(centerX, eyeY),
-          width: eyeW,
-          height: eyeH,
-        ),
-        Radius.circular(eyeH),
-      );
-      canvas.drawRRect(eye, eyePaint);
-      canvas.drawCircle(
-        Offset(
-          centerX + (mood == TerminalPalMood.working ? eyeW * 0.12 : 0),
-          eyeY,
-        ),
-        eyeH * 0.24,
-        body,
-      );
-    }
-
-    final mouthPaint = Paint()
-      ..color = mood == TerminalPalMood.offline
-          ? AppColors.lineStrong
-          : AppColors.coral
-      ..strokeWidth = math.max(5, size.width * 0.026)
-      ..strokeCap = StrokeCap.round;
-    final mouthY = size.height * 0.58;
-    if (mood == TerminalPalMood.working) {
-      canvas.drawArc(
-        Rect.fromCenter(
-          center: Offset(size.width * 0.5, mouthY),
-          width: size.width * 0.19,
-          height: size.height * 0.09,
-        ),
-        0,
-        math.pi,
-        false,
-        mouthPaint..style = PaintingStyle.stroke,
-      );
-    } else {
-      canvas.drawLine(
-        Offset(size.width * 0.43, mouthY),
-        Offset(size.width * 0.57, mouthY - 1),
-        mouthPaint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _TerminalPalPainter oldDelegate) {
-    return mood != oldDelegate.mood;
-  }
 }
 
 class SignalPressEffect extends StatefulWidget {
@@ -541,204 +441,6 @@ class _SignalPressEffectState extends State<SignalPressEffect> {
         child: widget.child,
       ),
     );
-  }
-}
-
-class SignalCutCornerBorder extends ShapeBorder {
-  const SignalCutCornerBorder({
-    this.side = const BorderSide(color: AppColors.line),
-    this.radius = AppRadii.control,
-    this.cut = 13,
-  });
-
-  final BorderSide side;
-  final double radius;
-  final double cut;
-
-  @override
-  EdgeInsetsGeometry get dimensions => EdgeInsets.all(side.width);
-
-  @override
-  ShapeBorder scale(double t) => SignalCutCornerBorder(
-    side: side.scale(t),
-    radius: radius * t,
-    cut: cut * t,
-  );
-
-  @override
-  Path getInnerPath(Rect rect, {TextDirection? textDirection}) {
-    return getOuterPath(rect.deflate(side.width), textDirection: textDirection);
-  }
-
-  @override
-  Path getOuterPath(Rect rect, {TextDirection? textDirection}) {
-    final r = math.min(radius, math.min(rect.width, rect.height) / 2);
-    return Path()
-      ..moveTo(rect.left + r, rect.top)
-      ..lineTo(rect.right - cut, rect.top)
-      ..lineTo(rect.right, rect.top + cut)
-      ..lineTo(rect.right, rect.bottom - r)
-      ..quadraticBezierTo(rect.right, rect.bottom, rect.right - r, rect.bottom)
-      ..lineTo(rect.left + r, rect.bottom)
-      ..quadraticBezierTo(rect.left, rect.bottom, rect.left, rect.bottom - r)
-      ..lineTo(rect.left, rect.top + r)
-      ..quadraticBezierTo(rect.left, rect.top, rect.left + r, rect.top)
-      ..close();
-  }
-
-  @override
-  void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {
-    if (side.style == BorderStyle.none || side.width == 0) return;
-    canvas.drawPath(
-      getOuterPath(rect.deflate(side.width / 2), textDirection: textDirection),
-      side.toPaint()..style = PaintingStyle.stroke,
-    );
-  }
-}
-
-class SignalTrack extends StatefulWidget {
-  const SignalTrack({
-    super.key,
-    required this.color,
-    required this.active,
-    this.broken = false,
-  });
-
-  final Color color;
-  final bool active;
-  final bool broken;
-
-  @override
-  State<SignalTrack> createState() => _SignalTrackState();
-}
-
-class _SignalTrackState extends State<SignalTrack>
-    with SingleTickerProviderStateMixin {
-  bool reduceMotion = false;
-  late final AnimationController controller = AnimationController(
-    vsync: this,
-    duration: AppMotion.signal,
-  );
-
-  @override
-  void initState() {
-    super.initState();
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    reduceMotion = MediaQuery.disableAnimationsOf(context);
-    syncAnimation();
-  }
-
-  @override
-  void didUpdateWidget(covariant SignalTrack oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (widget.active != oldWidget.active) syncAnimation();
-  }
-
-  void syncAnimation() {
-    if (widget.active && !reduceMotion) {
-      if (!controller.isAnimating) controller.repeat();
-      return;
-    }
-    controller
-      ..stop()
-      ..value = 0.5;
-  }
-
-  @override
-  void dispose() {
-    controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 8,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          return AnimatedBuilder(
-            animation: controller,
-            builder: (context, _) {
-              final progress = reduceMotion || !widget.active
-                  ? 0.5
-                  : controller.value;
-              final dotLeft = math.max(
-                0.0,
-                (constraints.maxWidth - 7) * progress,
-              );
-              return Stack(
-                alignment: Alignment.centerLeft,
-                children: [
-                  Positioned.fill(
-                    top: 3.5,
-                    bottom: 3.5,
-                    child: CustomPaint(
-                      painter: _SignalLinePainter(
-                        color: widget.color,
-                        broken: widget.broken,
-                      ),
-                    ),
-                  ),
-                  if (widget.active)
-                    Positioned(
-                      left: dotLeft,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: widget.color,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: widget.color.withValues(alpha: 0.28),
-                              blurRadius: 7,
-                            ),
-                          ],
-                        ),
-                        child: const SizedBox.square(dimension: 7),
-                      ),
-                    ),
-                ],
-              );
-            },
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _SignalLinePainter extends CustomPainter {
-  const _SignalLinePainter({required this.color, required this.broken});
-
-  final Color color;
-  final bool broken;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color.withValues(alpha: broken ? 0.36 : 0.58)
-      ..strokeWidth = 1;
-    if (!broken) {
-      canvas.drawLine(Offset.zero, Offset(size.width, 0), paint);
-      return;
-    }
-    const dash = 8.0;
-    const gap = 7.0;
-    for (double x = 0; x < size.width; x += dash + gap) {
-      canvas.drawLine(
-        Offset(x, 0),
-        Offset(math.min(x + dash, size.width), 0),
-        paint,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _SignalLinePainter oldDelegate) {
-    return color != oldDelegate.color || broken != oldDelegate.broken;
   }
 }
 
@@ -824,14 +526,6 @@ class TaskRailFrame extends StatelessWidget {
                       color: color,
                       shape: BoxShape.circle,
                       border: Border.all(color: AppColors.porcelain, width: 2),
-                      boxShadow: active
-                          ? [
-                              BoxShadow(
-                                color: color.withValues(alpha: 0.28),
-                                blurRadius: 8,
-                              ),
-                            ]
-                          : null,
                     ),
                   ),
                 ),

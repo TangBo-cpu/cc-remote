@@ -6,7 +6,7 @@ Flutter 手机 App，用于扫码配对本机 CC Remote daemon，并远程控制
 
 App 已支持扫码确认、Secure Storage、启动恢复、WebSocket 自动重连、活动任务恢复、流式对话、停止任务、斜杠指令、Markdown、模型与剩余上下文、六种权限模式、一次性工具审批、多项目与多会话、只读工作区、Git diff、图片与文件附件，以及 Android 后台本地通知。
 
-当前界面是浅色活力 Signal Console。顶部连接舱采用紧凑双栏布局，右侧显示目录、电脑、模型和上下文。中间是 transcript，底部黑色 Command Dock 负责权限、附件、输入、发送和停止。「项目与会话」面板和设置页会显示完整项目路径。流式回复期间使用轻量文本渲染并合批刷新，结束后再切回 Markdown。
+当前发布代码仍是浅色活力 Signal Console。下一轮已在 Penpot 和根目录 `DESIGN.md` 确定为“暖纸控制台 / Warm Console”：紧凑会话头、内容优先 transcript、单行活动状态和 110px 暖白 Composer，并补齐配对、会话选择、权限、Diff、断线、失败、停止中、已停止、停止超时和重连失败状态。改造将保持现有协议与可靠性行为。
 
 ## 开发运行
 

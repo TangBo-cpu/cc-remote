@@ -16,6 +16,31 @@ $tunnelOut = Join-Path $runDir "cloudflared.out.log"
 $tunnelErr = Join-Path $runDir "cloudflared.err.log"
 $tunnelProcess = $null
 
+if ([string]::IsNullOrWhiteSpace($PublicOrigin) -and
+    -not [string]::IsNullOrWhiteSpace($env:PUBLIC_ORIGIN)) {
+  $PublicOrigin = $env:PUBLIC_ORIGIN
+}
+
+if ([string]::IsNullOrWhiteSpace($PublicOrigin) -and
+    -not $NoTunnel -and
+    (Test-Path $tunnelConfig)) {
+  $hostnameLine = Select-String `
+    -LiteralPath $tunnelConfig `
+    -Pattern '^\s*-\s*hostname:\s*(?<hostname>[^#\s]+)' |
+    Select-Object -First 1
+
+  if ($hostnameLine) {
+    $hostname = $hostnameLine.Matches[0].Groups['hostname'].Value.Trim([char[]]@("'", '"'))
+    if (-not [string]::IsNullOrWhiteSpace($hostname)) {
+      $PublicOrigin = "https://$hostname"
+    }
+  }
+
+  if ([string]::IsNullOrWhiteSpace($PublicOrigin)) {
+    throw "Could not determine PUBLIC_ORIGIN from $tunnelConfig. Pass -PublicOrigin explicitly."
+  }
+}
+
 if ([string]::IsNullOrWhiteSpace($WorkspaceDir)) {
   $WorkspaceDir = (Get-Location).Path
 }

@@ -9,6 +9,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'attachments.dart';
+import 'camera_permission.dart';
 import 'chat_background.dart';
 import 'data/api_client.dart';
 import 'data/permission_mode.dart';
@@ -33,6 +34,7 @@ class CcRemoteApp extends StatelessWidget {
     this.modelPreferenceStore,
     this.chatBackgroundPreferenceStore,
     this.chatBackgroundImageService,
+    this.cameraPermissionService,
   });
 
   final bool enableCamera;
@@ -42,6 +44,7 @@ class CcRemoteApp extends StatelessWidget {
   final ClaudeModelPreferenceStore? modelPreferenceStore;
   final ChatBackgroundPreferenceStore? chatBackgroundPreferenceStore;
   final ChatBackgroundImageService? chatBackgroundImageService;
+  final CameraPermissionService? cameraPermissionService;
 
   @override
   Widget build(BuildContext context) {
@@ -57,6 +60,7 @@ class CcRemoteApp extends StatelessWidget {
         modelPreferenceStore: modelPreferenceStore,
         chatBackgroundPreferenceStore: chatBackgroundPreferenceStore,
         chatBackgroundImageService: chatBackgroundImageService,
+        cameraPermissionService: cameraPermissionService,
       ),
     );
   }
@@ -72,6 +76,7 @@ class DemoShell extends StatefulWidget {
     this.modelPreferenceStore,
     this.chatBackgroundPreferenceStore,
     this.chatBackgroundImageService,
+    this.cameraPermissionService,
   });
 
   final bool enableCamera;
@@ -81,6 +86,7 @@ class DemoShell extends StatefulWidget {
   final ClaudeModelPreferenceStore? modelPreferenceStore;
   final ChatBackgroundPreferenceStore? chatBackgroundPreferenceStore;
   final ChatBackgroundImageService? chatBackgroundImageService;
+  final CameraPermissionService? cameraPermissionService;
 
   @override
   State<DemoShell> createState() => _DemoShellState();
@@ -176,6 +182,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   late final ClaudeModelPreferenceStore modelPreferenceStore;
   late final ChatBackgroundPreferenceStore chatBackgroundPreferenceStore;
   late final ChatBackgroundImageService chatBackgroundImageService;
+  late final CameraPermissionService cameraPermissionService;
   String? pendingNotificationSessionId;
 
   Object? get ws => wsClient.channel;
@@ -193,11 +200,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         widget.chatBackgroundPreferenceStore ?? ChatBackgroundPreferenceStore();
     chatBackgroundImageService =
         widget.chatBackgroundImageService ?? LocalChatBackgroundImageService();
+    cameraPermissionService =
+        widget.cameraPermissionService ?? const SystemCameraPermissionService();
     notificationController = BackgroundNotificationController(
       service: notificationService,
     );
     WidgetsBinding.instance.addObserver(this);
-    unawaited(initializeNotifications());
+    unawaited(initializePermissions());
     modelPreferenceInitialization = initializeModelPreference();
     unawaited(modelPreferenceInitialization);
     unawaited(initializeChatBackground());
@@ -248,6 +257,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     });
   }
 
+  Future<void> initializePermissions() async {
+    await requestInitialCameraPermission();
+    await initializeNotifications();
+  }
+
   Future<void> cancelNotifications() async {
     if (widget.demoMode) return;
     try {
@@ -288,11 +302,33 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     if (mounted) setState(() => selectedModel = preference);
   }
 
+  Future<void> openModelPicker(BuildContext context) async {
+    final next = await showClaudeModelPicker(context, selected: selectedModel);
+    if (next == null || next == selectedModel || !context.mounted) return;
+    try {
+      await setModelPreference(next);
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('模型设置保存失败，请重试')));
+    }
+  }
+
   Future<void> initializeChatBackground() async {
     final revision = chatBackgroundRevision;
     final preference = await chatBackgroundPreferenceStore.load();
     if (!mounted || revision != chatBackgroundRevision) return;
     setState(() => chatBackground = preference);
+  }
+
+  Future<void> requestInitialCameraPermission() async {
+    if (!widget.enableCamera || widget.demoMode) return;
+    try {
+      if (await cameraPermissionService.shouldRequestOnLaunch()) {
+        await cameraPermissionService.request();
+      }
+    } catch (_) {}
   }
 
   Future<ChatBackgroundPreference> setChatBackground(
@@ -1177,6 +1213,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     final source = await showAttachmentSourceSheet(context);
     if (source == null || !mounted) return;
     try {
+      if (source == AttachmentSource.camera) {
+        final permission = await cameraPermissionService.request();
+        if (permission != CameraPermissionState.granted) {
+          if (mounted) showCameraPermissionMessage(permission);
+          return;
+        }
+      }
       final picked = switch (source) {
         AttachmentSource.camera => await attachmentPicker.takePhoto(),
         AttachmentSource.photos => await attachmentPicker.pickPhotos(),
@@ -1210,6 +1253,28 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     } catch (error) {
       if (mounted) showAttachmentError(error);
     }
+  }
+
+  void showCameraPermissionMessage(CameraPermissionState state) {
+    final needsSettings =
+        state == CameraPermissionState.permanentlyDenied ||
+        state == CameraPermissionState.restricted;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            needsSettings ? '请在系统设置中允许 CC Remote 使用相机' : '需要相机权限才能拍照',
+          ),
+          action: needsSettings
+              ? SnackBarAction(
+                  label: '去设置',
+                  onPressed: () =>
+                      unawaited(cameraPermissionService.openSettings()),
+                )
+              : null,
+        ),
+      );
   }
 
   void removePendingAttachment(AttachmentDraft attachment) {
@@ -1725,6 +1790,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       ShellRoute.boot => const BootstrapScreen(),
       ShellRoute.pair => PairScreen(
         enableCamera: widget.enableCamera,
+        cameraPermissionService: cameraPermissionService,
         pairing: pairing,
         canResetScan: pausedQrRaw != null,
         error: pairError,
@@ -1742,6 +1808,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         connected: wsReady,
         offline: remoteOffline,
         modelName: modelName,
+        selectedModel: selectedModel,
         contextWindow: contextWindow,
         remainingContext: remainingContext,
         messages: messages,
@@ -1768,6 +1835,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           pickChatBackgroundImage,
           logoutPairedDevice,
         ),
+        onOpenModelPicker: () => openModelPicker(context),
         onNewConversation: beginNewConversation,
         onOpenSessions: openSessions,
         onOpenWorkspace: openWorkspace,
@@ -1821,55 +1889,43 @@ class BootstrapScreen extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 84,
-              height: 84,
+              key: const ValueKey('bootstrap-mark'),
+              width: 72,
+              height: 72,
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(26),
-                color: AppColors.porcelain,
+                borderRadius: BorderRadius.circular(AppRadii.surface),
+                color: AppColors.surface,
                 border: Border.all(color: AppColors.line),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.shadow.withValues(alpha: 0.10),
-                    blurRadius: 28,
-                    offset: const Offset(0, 12),
-                  ),
-                ],
               ),
               alignment: Alignment.center,
-              child: const Text(
-                'CC',
-                style: TextStyle(
-                  color: AppColors.accent,
-                  fontSize: 28,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -0.8,
-                ),
+              child: const Icon(
+                Icons.terminal_rounded,
+                color: AppColors.terracottaDeep,
+                size: 30,
               ),
             ),
-            const SizedBox(height: 22),
+            const SizedBox(height: 20),
             const Text(
               'CC Remote',
               style: TextStyle(
-                fontSize: 28,
+                fontSize: 24,
                 fontWeight: FontWeight.w700,
-                letterSpacing: -0.4,
+                letterSpacing: -0.45,
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
             const Text(
               '正在检查本机连接',
-              style: TextStyle(color: AppColors.muted, fontSize: 15),
+              style: TextStyle(color: AppColors.muted, fontSize: 14),
             ),
-            const SizedBox(height: 28),
-            SizedBox(
+            const SizedBox(height: 22),
+            const SizedBox(
               width: 148,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(AppRadii.pill),
-                child: const LinearProgressIndicator(
-                  minHeight: 3,
-                  color: AppColors.accent,
-                  backgroundColor: Color(0xFFE8F0F3),
-                ),
+              child: LinearProgressIndicator(
+                minHeight: 2,
+                color: AppColors.terracotta,
+                backgroundColor: AppColors.line,
+                borderRadius: BorderRadius.all(Radius.circular(AppRadii.pill)),
               ),
             ),
           ],
@@ -1879,10 +1935,11 @@ class BootstrapScreen extends StatelessWidget {
   }
 }
 
-class PairScreen extends StatelessWidget {
+class PairScreen extends StatefulWidget {
   const PairScreen({
     super.key,
     required this.enableCamera,
+    this.cameraPermissionService,
     required this.pairing,
     required this.canResetScan,
     required this.onQr,
@@ -1892,12 +1949,113 @@ class PairScreen extends StatelessWidget {
   });
 
   final bool enableCamera;
+  final CameraPermissionService? cameraPermissionService;
   final bool pairing;
   final bool canResetScan;
   final String? error;
   final ValueChanged<String> onQr;
   final VoidCallback onClearError;
   final VoidCallback? onDemoConnect;
+
+  @override
+  State<PairScreen> createState() => _PairScreenState();
+}
+
+class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
+  late final CameraPermissionService cameraPermissionService =
+      widget.cameraPermissionService ?? const SystemCameraPermissionService();
+  late final MobileScannerController scannerController =
+      MobileScannerController(autoStart: false);
+  CameraPermissionState cameraPermission = CameraPermissionState.denied;
+  bool checkingCamera = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    if (widget.enableCamera) unawaited(checkCameraPermission());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(scannerController.dispose());
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && widget.enableCamera) {
+      unawaited(checkCameraPermission());
+    }
+  }
+
+  Future<void> checkCameraPermission({bool request = false}) async {
+    if (checkingCamera) return;
+    if (!mounted) return;
+    setState(() => checkingCamera = true);
+    try {
+      final next = request
+          ? await cameraPermissionService.request()
+          : await cameraPermissionService.status();
+      if (!mounted) return;
+      setState(() => cameraPermission = next);
+      if (next == CameraPermissionState.granted) {
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted) return;
+        await scannerController.start();
+      } else {
+        await scannerController.stop();
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => cameraPermission = CameraPermissionState.denied);
+      }
+    } finally {
+      if (mounted) setState(() => checkingCamera = false);
+    }
+  }
+
+  Future<void> openCameraSettings() async {
+    await cameraPermissionService.openSettings();
+  }
+
+  Widget buildScanner({bool compact = false}) {
+    if (!widget.enableCamera) return ScanPlaceholder(compact: compact);
+    if (cameraPermission != CameraPermissionState.granted) {
+      final needsSettings =
+          cameraPermission == CameraPermissionState.permanentlyDenied ||
+          cameraPermission == CameraPermissionState.restricted;
+      return CameraPermissionPlaceholder(
+        compact: compact,
+        checking: checkingCamera,
+        needsSettings: needsSettings,
+        onPressed: needsSettings
+            ? openCameraSettings
+            : () => checkCameraPermission(request: true),
+      );
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(compact ? 20 : 28),
+      child: MobileScanner(
+        controller: scannerController,
+        placeholderBuilder: (_) => const ColoredBox(color: AppColors.control),
+        errorBuilder: (context, error) => CameraPermissionPlaceholder(
+          compact: compact,
+          onPressed: () => checkCameraPermission(request: true),
+        ),
+        onDetect: (capture) {
+          for (final barcode in capture.barcodes) {
+            final value = barcode.rawValue;
+            if (value != null && value.isNotEmpty) {
+              widget.onQr(value);
+              break;
+            }
+          }
+        },
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1918,37 +2076,32 @@ class PairScreen extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
-                              vertical: 6,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppColors.mintSoft,
-                              borderRadius: BorderRadius.circular(
-                                AppRadii.pill,
+                          const Row(
+                            children: [
+                              Icon(
+                                Icons.phone_android_rounded,
+                                size: 18,
+                                color: AppColors.terracottaDeep,
                               ),
-                              border: Border.all(
-                                color: AppColors.ink,
-                                width: 1.2,
+                              SizedBox(width: 7),
+                              Text(
+                                '首次连接',
+                                style: TextStyle(
+                                  color: AppColors.muted,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
-                            ),
-                            child: const Text(
-                              '手机端 · 第一次见面',
-                              style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w800,
-                              ),
-                            ),
+                            ],
                           ),
                           SizedBox(height: compact ? 7 : 10),
                           Text(
                             '让手机找到电脑',
                             style: TextStyle(
-                              fontSize: compact ? 25 : 31,
-                              height: 1.04,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: -1.0,
+                              fontSize: compact ? 24 : 28,
+                              height: 1.12,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: -0.56,
                             ),
                           ),
                           const SizedBox(height: 5),
@@ -1963,12 +2116,19 @@ class PairScreen extends StatelessWidget {
                       ),
                     ),
                     SizedBox(width: compact ? 10 : 14),
-                    SizedBox(
-                      width: compact ? 64 : 82,
-                      height: compact ? 60 : 76,
-                      child: const LivelyTerminalPal(
-                        mood: TerminalPalMood.ready,
-                        showBadge: true,
+                    Container(
+                      width: compact ? 52 : 60,
+                      height: compact ? 52 : 60,
+                      decoration: BoxDecoration(
+                        color: AppColors.surface,
+                        borderRadius: BorderRadius.circular(AppRadii.surface),
+                        border: Border.all(color: AppColors.line),
+                      ),
+                      alignment: Alignment.center,
+                      child: const Icon(
+                        Icons.computer_rounded,
+                        size: 26,
+                        color: AppColors.terracottaDeep,
                       ),
                     ),
                   ],
@@ -1982,22 +2142,7 @@ class PairScreen extends StatelessWidget {
                         aspectRatio: 1.68,
                         child: ScanFrame(
                           compact: true,
-                          child: enableCamera
-                              ? ClipRRect(
-                                  borderRadius: BorderRadius.circular(20),
-                                  child: MobileScanner(
-                                    onDetect: (capture) {
-                                      for (final barcode in capture.barcodes) {
-                                        final value = barcode.rawValue;
-                                        if (value != null && value.isNotEmpty) {
-                                          onQr(value);
-                                          break;
-                                        }
-                                      }
-                                    },
-                                  ),
-                                )
-                              : const ScanPlaceholder(compact: true),
+                          child: buildScanner(compact: true),
                         ),
                       ),
                     ),
@@ -2007,44 +2152,18 @@ class PairScreen extends StatelessWidget {
                     child: Center(
                       child: AspectRatio(
                         aspectRatio: 0.94,
-                        child: ScanFrame(
-                          child: enableCamera
-                              ? ClipRRect(
-                                  borderRadius: BorderRadius.circular(28),
-                                  child: MobileScanner(
-                                    onDetect: (capture) {
-                                      for (final barcode in capture.barcodes) {
-                                        final value = barcode.rawValue;
-                                        if (value != null && value.isNotEmpty) {
-                                          onQr(value);
-                                          break;
-                                        }
-                                      }
-                                    },
-                                  ),
-                                )
-                              : const ScanPlaceholder(),
-                        ),
+                        child: ScanFrame(child: buildScanner()),
                       ),
                     ),
                   ),
                 SizedBox(height: compact ? 12 : 16),
                 Container(
-                  padding: const EdgeInsets.fromLTRB(16, 15, 16, 16),
-                  decoration: ShapeDecoration(
-                    color: AppColors.porcelain,
-                    shadows: const [
-                      BoxShadow(
-                        color: AppColors.coral,
-                        blurRadius: 0,
-                        offset: Offset(5, 6),
-                      ),
-                    ],
-                    shape: const SignalCutCornerBorder(
-                      side: BorderSide(color: AppColors.ink, width: 1.6),
-                      radius: 22,
-                      cut: 20,
-                    ),
+                  key: const ValueKey('pair-status-panel'),
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(AppRadii.surface),
+                    border: Border.all(color: AppColors.line),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2053,20 +2172,19 @@ class PairScreen extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Container(
-                            width: 42,
-                            height: 42,
+                            width: AppSizes.iconControl,
+                            height: AppSizes.iconControl,
                             decoration: BoxDecoration(
-                              color: AppColors.yellow,
-                              borderRadius: BorderRadius.circular(13),
-                              border: Border.all(
-                                color: AppColors.ink,
-                                width: 1.4,
+                              color: AppColors.control,
+                              borderRadius: BorderRadius.circular(
+                                AppRadii.control,
                               ),
                             ),
+                            alignment: Alignment.center,
                             child: const Icon(
-                              Icons.desktop_windows_rounded,
+                              Icons.qr_code_scanner_rounded,
                               size: 20,
-                              color: AppColors.ink,
+                              color: AppColors.terracottaDeep,
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -2075,98 +2193,129 @@ class PairScreen extends StatelessWidget {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 Text(
-                                  pairing ? '正在连接电脑' : '等待配对二维码',
+                                  widget.pairing ? '正在连接电脑' : '等待配对二维码',
                                   style: const TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w900,
-                                    letterSpacing: -0.3,
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: -0.2,
                                   ),
                                 ),
                                 const SizedBox(height: 3),
                                 Text(
-                                  error ??
-                                      (canResetScan
+                                  widget.error ??
+                                      (cameraPermission !=
+                                                  CameraPermissionState
+                                                      .granted &&
+                                              widget.enableCamera
+                                          ? '允许访问相机后即可扫描配对二维码'
+                                          : widget.canResetScan
                                           ? '已暂停扫描，点重新扫描可继续'
                                           : '扫到后会确认设备信息再连接'),
                                   style: TextStyle(
-                                    color: error == null
+                                    color: widget.error == null
                                         ? AppColors.muted
-                                        : AppColors.stop,
-                                    fontSize: 13,
+                                        : AppColors.danger,
+                                    fontSize: 12,
+                                    height: 1.35,
                                   ),
                                 ),
                               ],
                             ),
                           ),
-                          const SizedBox(width: 8),
-                          StatusPill(
-                            label: pairing
+                          const SizedBox(width: 10),
+                          StatusLabel(
+                            icon: widget.pairing
+                                ? Icons.sync_rounded
+                                : widget.error != null
+                                ? Icons.error_outline_rounded
+                                : cameraPermission !=
+                                          CameraPermissionState.granted &&
+                                      widget.enableCamera
+                                ? Icons.camera_alt_outlined
+                                : widget.canResetScan
+                                ? Icons.pause_circle_outline_rounded
+                                : Icons.camera_alt_outlined,
+                            label: widget.pairing
                                 ? '配对中'
-                                : error == null
-                                ? canResetScan
+                                : widget.error == null
+                                ? cameraPermission !=
+                                              CameraPermissionState.granted &&
+                                          widget.enableCamera
+                                      ? '等待相机权限'
+                                      : widget.canResetScan
                                       ? '等待确认'
                                       : '相机已就绪'
                                 : '需要重试',
-                            color: error == null
-                                ? AppColors.success
-                                : AppColors.stop,
+                            color: widget.error == null
+                                ? AppColors.muted
+                                : AppColors.danger,
                           ),
                         ],
                       ),
-                      if (pairing) ...[
+                      if (widget.pairing) ...[
                         const SizedBox(height: 14),
                         ClipRRect(
                           borderRadius: BorderRadius.circular(AppRadii.pill),
                           child: const LinearProgressIndicator(
-                            minHeight: 3,
-                            color: AppColors.accent,
-                            backgroundColor: Color(0xFFE8F3F6),
+                            minHeight: 2,
+                            color: AppColors.terracotta,
+                            backgroundColor: AppColors.line,
                           ),
                         ),
                       ],
-                      if (onDemoConnect != null) ...[
+                      if (widget.onDemoConnect != null) ...[
                         const SizedBox(height: 14),
                         SizedBox(
                           width: double.infinity,
                           child: SignalPressEffect(
                             child: FilledButton.icon(
-                              onPressed: onDemoConnect,
+                              onPressed: widget.onDemoConnect,
                               icon: const Icon(Icons.link_rounded),
                               label: const Text('连接这台电脑'),
                               style: FilledButton.styleFrom(
-                                backgroundColor: AppColors.ink,
-                                foregroundColor: AppColors.porcelain,
-                                minimumSize: const Size.fromHeight(48),
+                                backgroundColor: AppColors.terracotta,
+                                foregroundColor: AppColors.surfaceElevated,
+                                minimumSize: const Size.fromHeight(52),
                               ),
                             ),
                           ),
                         ),
-                      ] else if (!pairing &&
-                          error == null &&
-                          !canResetScan) ...[
+                      ] else if (!widget.pairing &&
+                          widget.error == null &&
+                          !widget.canResetScan) ...[
                         const SizedBox(height: 14),
-                        const SignalTrack(color: AppColors.mint, active: true),
+                        const Row(
+                          children: [
+                            Icon(
+                              Icons.center_focus_strong_rounded,
+                              size: 18,
+                              color: AppColors.inactive,
+                            ),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                '保持二维码完整可见，识别后会先确认设备信息',
+                                style: TextStyle(
+                                  color: AppColors.muted,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ],
-                      if (canResetScan || error != null) ...[
+                      if (widget.canResetScan || widget.error != null) ...[
                         const SizedBox(height: 10),
                         SizedBox(
                           width: double.infinity,
                           child: OutlinedButton.icon(
-                            onPressed: onClearError,
+                            onPressed: widget.onClearError,
                             icon: const Icon(Icons.refresh_rounded, size: 18),
                             label: const Text('重新扫描'),
                             style: OutlinedButton.styleFrom(
                               foregroundColor: AppColors.ink,
-                              minimumSize: const Size.fromHeight(46),
-                              side: const BorderSide(
-                                color: AppColors.ink,
-                                width: 1.3,
-                              ),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(
-                                  AppRadii.control,
-                                ),
-                              ),
+                              backgroundColor: AppColors.surfaceElevated,
+                              minimumSize: const Size.fromHeight(48),
                             ),
                           ),
                         ),
@@ -2179,6 +2328,75 @@ class PairScreen extends StatelessWidget {
           );
           return compact ? SingleChildScrollView(child: content) : content;
         },
+      ),
+    );
+  }
+}
+
+class CameraPermissionPlaceholder extends StatelessWidget {
+  const CameraPermissionPlaceholder({
+    super.key,
+    required this.onPressed,
+    this.compact = false,
+    this.checking = false,
+    this.needsSettings = false,
+  });
+
+  final Future<void> Function() onPressed;
+  final bool compact;
+  final bool checking;
+  final bool needsSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: AppColors.surface,
+      child: Center(
+        child: Padding(
+          padding: EdgeInsets.all(compact ? 10 : 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.camera_alt_outlined,
+                size: compact ? 26 : 34,
+                color: AppColors.terracottaDeep,
+              ),
+              SizedBox(height: compact ? 6 : 10),
+              Text(
+                needsSettings ? '相机权限已关闭' : '需要相机权限',
+                style: const TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              if (!compact) ...[
+                const SizedBox(height: 4),
+                Text(
+                  needsSettings ? '请在系统设置中允许后返回' : '用于扫描电脑端的配对二维码',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                ),
+              ],
+              SizedBox(height: compact ? 6 : 12),
+              FilledButton.tonalIcon(
+                key: const ValueKey('camera-permission-action'),
+                onPressed: checking ? null : () => unawaited(onPressed()),
+                icon: checking
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Icon(
+                        needsSettings
+                            ? Icons.settings_outlined
+                            : Icons.camera_alt_outlined,
+                      ),
+                label: Text(needsSettings ? '打开设置' : '允许使用相机'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2198,19 +2416,20 @@ class ScanPlaceholder extends StatelessWidget {
           width: compact ? 46 : 68,
           height: compact ? 46 : 68,
           decoration: BoxDecoration(
-            color: AppColors.ink,
-            borderRadius: BorderRadius.circular(compact ? 14 : 20),
+            color: AppColors.control,
+            borderRadius: BorderRadius.circular(AppRadii.surface),
+            border: Border.all(color: AppColors.line),
           ),
           child: Icon(
             Icons.qr_code_2_rounded,
             size: compact ? 28 : 42,
-            color: AppColors.porcelain,
+            color: AppColors.terracottaDeep,
           ),
         ),
         SizedBox(height: compact ? 6 : 14),
         const Text(
           '把二维码放进取景框',
-          style: TextStyle(color: AppColors.ink, fontWeight: FontWeight.w800),
+          style: TextStyle(color: AppColors.ink, fontWeight: FontWeight.w700),
         ),
         if (!compact) ...[
           const SizedBox(height: 4),
@@ -2246,7 +2465,7 @@ class PairReviewSheet extends StatelessWidget {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-        child: GlassPanel(
+        child: WarmSheetSurface(
           padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -2255,16 +2474,17 @@ class PairReviewSheet extends StatelessWidget {
               Row(
                 children: [
                   Container(
-                    width: 38,
-                    height: 38,
+                    width: AppSizes.iconControl,
+                    height: AppSizes.iconControl,
                     decoration: BoxDecoration(
-                      color: AppColors.accent.withValues(alpha: 0.10),
-                      borderRadius: BorderRadius.circular(12),
+                      color: AppColors.control,
+                      borderRadius: BorderRadius.circular(AppRadii.control),
                     ),
+                    alignment: Alignment.center,
                     child: const Icon(
-                      Icons.desktop_windows_rounded,
-                      size: 19,
-                      color: AppColors.accent,
+                      Icons.computer_rounded,
+                      size: 20,
+                      color: AppColors.terracottaDeep,
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -2275,7 +2495,7 @@ class PairReviewSheet extends StatelessWidget {
                         Text(
                           payload.deviceName,
                           style: const TextStyle(
-                            fontSize: 18,
+                            fontSize: 16,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -2286,7 +2506,9 @@ class PairReviewSheet extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             color: AppColors.muted,
-                            fontFamily: 'monospace',
+                            fontFamily: AppTypography.codeFontFamily,
+                            fontFamilyFallback:
+                                AppTypography.codeFontFamilyFallback,
                             fontSize: 12,
                           ),
                         ),
@@ -2296,9 +2518,12 @@ class PairReviewSheet extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 12),
-              StatusPill(
+              StatusLabel(
+                icon: expired
+                    ? Icons.event_busy_outlined
+                    : Icons.verified_outlined,
                 label: expired ? '二维码已过期' : '二维码有效',
-                color: expired ? AppColors.stop : AppColors.accent,
+                color: expired ? AppColors.danger : AppColors.muted,
               ),
               const SizedBox(height: 16),
               SizedBox(
@@ -2310,12 +2535,9 @@ class PairReviewSheet extends StatelessWidget {
                         ? null
                         : () => Navigator.pop(context, true),
                     style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.accent,
-                      foregroundColor: Colors.white,
-                      minimumSize: const Size.fromHeight(48),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(AppRadii.control),
-                      ),
+                      backgroundColor: AppColors.terracotta,
+                      foregroundColor: AppColors.surfaceElevated,
+                      minimumSize: const Size.fromHeight(52),
                     ),
                     child: const Text('连接这台电脑'),
                   ),
@@ -2327,14 +2549,9 @@ class PairReviewSheet extends StatelessWidget {
                 child: OutlinedButton(
                   onPressed: () => Navigator.pop(context, false),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.accent,
-                    minimumSize: const Size.fromHeight(46),
-                    side: BorderSide(
-                      color: AppColors.accent.withValues(alpha: 0.22),
-                    ),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(AppRadii.control),
-                    ),
+                    foregroundColor: AppColors.ink,
+                    backgroundColor: AppColors.surface,
+                    minimumSize: const Size.fromHeight(48),
                   ),
                   child: const Text('重新扫描'),
                 ),
@@ -2359,6 +2576,7 @@ class ChatScreen extends StatelessWidget {
     required this.connected,
     required this.offline,
     required this.modelName,
+    this.selectedModel = ClaudeModelPreference.followComputer,
     required this.contextWindow,
     required this.remainingContext,
     required this.messages,
@@ -2372,6 +2590,7 @@ class ChatScreen extends StatelessWidget {
     required this.onFillPrompt,
     required this.onReconnect,
     required this.onOpenSettings,
+    required this.onOpenModelPicker,
     required this.onNewConversation,
     required this.onOpenSessions,
     required this.onOpenWorkspace,
@@ -2393,6 +2612,7 @@ class ChatScreen extends StatelessWidget {
   final bool connected;
   final bool offline;
   final String? modelName;
+  final ClaudeModelPreference selectedModel;
   final int? contextWindow;
   final int? remainingContext;
   final List<TranscriptMessage> messages;
@@ -2406,6 +2626,7 @@ class ChatScreen extends StatelessWidget {
   final ValueChanged<String> onFillPrompt;
   final VoidCallback onReconnect;
   final VoidCallback onOpenSettings;
+  final VoidCallback onOpenModelPicker;
   final VoidCallback onNewConversation;
   final VoidCallback onOpenSessions;
   final VoidCallback onOpenWorkspace;
@@ -2463,7 +2684,7 @@ class ChatScreen extends StatelessWidget {
         return SafeArea(
           key: const ValueKey('chat'),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
+            padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
             child: Column(
               children: [
                 header,
@@ -2484,11 +2705,14 @@ class ChatScreen extends StatelessWidget {
                     offline: offline,
                     permissionMode: permissionMode,
                     allowBypassPermissions: allowBypassPermissions,
+                    modelName: modelName,
+                    selectedModel: selectedModel,
                     suggestionMaxHeight: suggestionMaxHeight,
                     onPermissionModeSelected: onPermissionModeSelected,
                     onCommandSelected: (command) => onFillPrompt('/$command '),
                     onAddAttachment: onAddAttachment,
                     onRemoveAttachment: onRemoveAttachment,
+                    onModelPressed: onOpenModelPicker,
                     onReconnect: onReconnect,
                     onSend: onSend,
                     onStop: onStop,
@@ -2540,390 +2764,6 @@ class ConnectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final statusLabel = stopping
-        ? '正在停止任务'
-        : running
-        ? '任务运行中'
-        : uploadingAttachments
-        ? '正在收附件'
-        : connected
-        ? '已连接'
-        : offline
-        ? '电脑走丢了'
-        : '正在找电脑';
-    final title = offline
-        ? '等电脑回来'
-        : running
-        ? '正在处理这件事'
-        : '已经准备好了';
-    final workspace = session?.workspaceName ?? 'cc-remote';
-    final device = session?.deviceName ?? 'My PC';
-    final compact = MediaQuery.sizeOf(context).height < 720;
-
-    if (compact) {
-      return MediaQuery(
-        data: MediaQuery.of(context).copyWith(
-          textScaler: MediaQuery.textScalerOf(
-            context,
-          ).clamp(minScaleFactor: 1, maxScaleFactor: 1.2),
-        ),
-        child: Container(
-          height: 84,
-          padding: const EdgeInsets.fromLTRB(11, 8, 9, 8),
-          decoration: BoxDecoration(
-            color: offline ? AppColors.porcelainMuted : AppColors.mint,
-            borderRadius: BorderRadius.circular(24),
-            border: Border.all(color: AppColors.ink, width: 1.6),
-            boxShadow: const [
-              BoxShadow(
-                color: AppColors.yellow,
-                blurRadius: 0,
-                offset: Offset(4, 5),
-              ),
-            ],
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      statusLabel,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: -0.25,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    if (modelName == null && remainingContext == null)
-                      Text(
-                        '$workspace · $device',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      )
-                    else
-                      Row(
-                        children: [
-                          if (modelName != null)
-                            Flexible(
-                              child: Text(
-                                formatModelName(modelName!),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w800,
-                                ),
-                              ),
-                            ),
-                          if (modelName != null && remainingContext != null)
-                            const Padding(
-                              padding: EdgeInsets.symmetric(horizontal: 4),
-                              child: Text('·'),
-                            ),
-                          if (remainingContext != null)
-                            Flexible(
-                              child: Text(
-                                contextWindow == null
-                                    ? '剩余 ${formatTokens(remainingContext!)}'
-                                    : '剩余 ${formatTokens(remainingContext!)} / ${formatTokens(contextWindow!)}',
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 9.5,
-                                  fontWeight: FontWeight.w700,
-                                  fontFeatures: [FontFeature.tabularFigures()],
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 6),
-              Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Row(
-                    children: [
-                      _HeroIconButton(
-                        tooltip: '项目与会话',
-                        icon: Icons.dashboard_customize_outlined,
-                        dimension: 31,
-                        onPressed: uploadingAttachments ? null : onOpenSessions,
-                      ),
-                      const SizedBox(width: 5),
-                      _HeroIconButton(
-                        tooltip: '工作区',
-                        icon: Icons.folder_open_rounded,
-                        dimension: 31,
-                        onPressed: onOpenWorkspace,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 2),
-                  Row(
-                    children: [
-                      _HeroIconButton(
-                        tooltip: '新对话',
-                        icon: Icons.add_rounded,
-                        dimension: 31,
-                        onPressed:
-                            connected && !running && !uploadingAttachments
-                            ? onNewConversation
-                            : null,
-                      ),
-                      const SizedBox(width: 5),
-                      _HeroIconButton(
-                        tooltip: '设置',
-                        icon: Icons.auto_awesome_rounded,
-                        color: AppColors.yellow,
-                        dimension: 31,
-                        onPressed: onOpenSettings,
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    return MediaQuery(
-      data: MediaQuery.of(context).copyWith(
-        textScaler: MediaQuery.textScalerOf(
-          context,
-        ).clamp(minScaleFactor: 1, maxScaleFactor: 1.35),
-      ),
-      child: Container(
-        constraints: const BoxConstraints(minHeight: 84),
-        decoration: BoxDecoration(
-          color: offline ? AppColors.porcelainMuted : AppColors.mint,
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(color: AppColors.ink, width: 1.8),
-          boxShadow: const [
-            BoxShadow(
-              color: AppColors.yellow,
-              blurRadius: 0,
-              offset: Offset(5, 6),
-            ),
-          ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(13, 8, 11, 9),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    StatusPill(label: statusLabel, color: AppColors.ink),
-                    const SizedBox(height: 5),
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 23,
-                        height: 1,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: -0.7,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 8),
-              SizedBox(
-                width: 154,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        _HeroIconButton(
-                          tooltip: '项目与会话',
-                          icon: Icons.dashboard_customize_outlined,
-                          dimension: 32,
-                          onPressed: uploadingAttachments
-                              ? null
-                              : onOpenSessions,
-                        ),
-                        const SizedBox(width: 5),
-                        _HeroIconButton(
-                          tooltip: '工作区',
-                          icon: Icons.folder_open_rounded,
-                          dimension: 32,
-                          onPressed: onOpenWorkspace,
-                        ),
-                        const SizedBox(width: 5),
-                        _HeroIconButton(
-                          tooltip: '新对话',
-                          icon: Icons.add_rounded,
-                          dimension: 32,
-                          onPressed:
-                              connected && !running && !uploadingAttachments
-                              ? onNewConversation
-                              : null,
-                        ),
-                        const SizedBox(width: 5),
-                        _HeroIconButton(
-                          tooltip: '设置',
-                          icon: Icons.auto_awesome_rounded,
-                          color: AppColors.yellow,
-                          dimension: 32,
-                          onPressed: onOpenSettings,
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '$workspace · $device',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.right,
-                      style: const TextStyle(
-                        fontSize: 9.5,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    if (modelName != null || remainingContext != null) ...[
-                      const SizedBox(height: 1),
-                      SizedBox(
-                        width: 154,
-                        child: FittedBox(
-                          fit: BoxFit.scaleDown,
-                          alignment: Alignment.centerRight,
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (modelName != null)
-                                Text(
-                                  formatModelName(modelName!),
-                                  style: const TextStyle(
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              if (modelName != null && remainingContext != null)
-                                const SizedBox(width: 6),
-                              if (remainingContext != null)
-                                Text(
-                                  contextWindow == null
-                                      ? '剩余 ${formatTokens(remainingContext!)}'
-                                      : '剩余 ${formatTokens(remainingContext!)} / ${formatTokens(contextWindow!)}',
-                                  style: const TextStyle(
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.w700,
-                                    fontFeatures: [
-                                      FontFeature.tabularFigures(),
-                                    ],
-                                  ),
-                                ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _HeroIconButton extends StatelessWidget {
-  const _HeroIconButton({
-    required this.tooltip,
-    required this.icon,
-    required this.onPressed,
-    this.color = AppColors.porcelain,
-    this.dimension = 34,
-  });
-
-  final String tooltip;
-  final IconData icon;
-  final VoidCallback? onPressed;
-  final Color color;
-  final double dimension;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox.square(
-      dimension: dimension,
-      child: IconButton(
-        onPressed: onPressed,
-        tooltip: tooltip,
-        padding: EdgeInsets.zero,
-        icon: Icon(icon, size: 17),
-        style: IconButton.styleFrom(
-          backgroundColor: color,
-          disabledBackgroundColor: color.withValues(alpha: 0.5),
-          foregroundColor: AppColors.ink,
-          disabledForegroundColor: AppColors.ink.withValues(alpha: 0.32),
-          side: const BorderSide(color: AppColors.ink, width: 1.4),
-        ),
-      ),
-    );
-  }
-}
-
-class LegacyConnectionHeader extends StatelessWidget {
-  const LegacyConnectionHeader({
-    super.key,
-    required this.session,
-    required this.running,
-    this.stopping = false,
-    required this.uploadingAttachments,
-    required this.connected,
-    required this.offline,
-    required this.modelName,
-    required this.contextWindow,
-    required this.remainingContext,
-    required this.onReconnect,
-    required this.onOpenSettings,
-    required this.onNewConversation,
-    required this.onOpenSessions,
-    required this.onOpenWorkspace,
-  });
-
-  final SavedSession? session;
-  final bool running;
-  final bool stopping;
-  final bool uploadingAttachments;
-  final bool connected;
-  final bool offline;
-  final String? modelName;
-  final int? contextWindow;
-  final int? remainingContext;
-  final VoidCallback onReconnect;
-  final VoidCallback onOpenSettings;
-  final VoidCallback onNewConversation;
-  final VoidCallback onOpenSessions;
-  final VoidCallback onOpenWorkspace;
-
-  @override
-  Widget build(BuildContext context) {
-    final statusLabel = stopping
         ? '正在停止'
         : running
         ? '运行中'
@@ -2932,230 +2772,248 @@ class LegacyConnectionHeader extends StatelessWidget {
         : connected
         ? '已连接'
         : offline
-        ? '电脑端离线'
+        ? '连接已断开'
         : '正在连接';
-    final statusColor = stopping
-        ? AppColors.warning
-        : running || connected
-        ? AppColors.accent
-        : offline
-        ? AppColors.stop
-        : AppColors.warning;
     final workspace = session?.workspaceName ?? 'cc-remote';
     final device = session?.deviceName ?? 'My PC';
-
-    return GlassPanel(
-      radius: AppRadii.panel,
-      padding: const EdgeInsets.fromLTRB(6, 5, 6, 8),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Row(
-            children: [
-              SizedBox(
-                width: 96,
-                child: Row(
-                  children: [
-                    IconButton(
-                      onPressed: uploadingAttachments ? null : onOpenSessions,
-                      constraints: const BoxConstraints.tightFor(
-                        width: 44,
-                        height: 44,
-                      ),
-                      padding: EdgeInsets.zero,
-                      icon: const Icon(Icons.view_quilt_outlined, size: 20),
-                      tooltip: '项目与会话',
-                      style: IconButton.styleFrom(
-                        backgroundColor: AppColors.porcelainMuted,
-                        foregroundColor: AppColors.accent,
-                        side: const BorderSide(color: AppColors.line),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: onOpenWorkspace,
-                      constraints: const BoxConstraints.tightFor(
-                        width: 44,
-                        height: 44,
-                      ),
-                      padding: EdgeInsets.zero,
-                      icon: const Icon(Icons.folder_open_outlined, size: 20),
-                      tooltip: '工作区',
-                      style: IconButton.styleFrom(
-                        backgroundColor: AppColors.porcelainMuted,
-                        foregroundColor: AppColors.accent,
-                        side: const BorderSide(color: AppColors.line),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      workspace,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 17,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.35,
-                      ),
-                    ),
-                    const SizedBox(height: 1),
-                    Row(
-                      children: [
-                        Container(
-                          width: 7,
-                          height: 7,
-                          decoration: BoxDecoration(
-                            color: statusColor,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 5),
-                        Flexible(
-                          child: Text(
-                            '$device · $statusLabel',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: AppColors.muted,
-                              fontSize: 11.5,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-              SizedBox(
-                width: 96,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    IconButton(
-                      onPressed: connected && !running && !uploadingAttachments
-                          ? onNewConversation
-                          : null,
-                      constraints: const BoxConstraints.tightFor(
-                        width: 44,
-                        height: 44,
-                      ),
-                      padding: EdgeInsets.zero,
-                      icon: const Icon(Icons.add_comment_rounded, size: 20),
-                      tooltip: '新对话',
-                      style: IconButton.styleFrom(
-                        backgroundColor: AppColors.porcelainMuted,
-                        side: const BorderSide(color: AppColors.line),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: onOpenSettings,
-                      icon: const Icon(Icons.tune_rounded, size: 21),
-                      tooltip: '设置',
-                      style: IconButton.styleFrom(
-                        backgroundColor: AppColors.porcelainMuted,
-                        side: const BorderSide(color: AppColors.line),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-            child: SignalTrack(
-              color: statusColor,
-              active: (running && !stopping) || uploadingAttachments,
-              broken: offline,
+    return MediaQuery(
+      data: MediaQuery.of(context).copyWith(
+        textScaler: MediaQuery.textScalerOf(
+          context,
+        ).clamp(minScaleFactor: 1, maxScaleFactor: 1.2),
+      ),
+      child: Container(
+        key: const ValueKey('session-header'),
+        height: AppSizes.sessionHeader,
+        padding: const EdgeInsets.fromLTRB(8, 8, 4, 8),
+        decoration: BoxDecoration(
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(AppRadii.header),
+          border: Border.all(color: AppColors.line),
+        ),
+        child: Row(
+          children: [
+            _HeroIconButton(
+              tooltip: '项目与会话',
+              icon: Icons.menu_rounded,
+              dimension: AppSizes.iconControl,
+              onPressed: uploadingAttachments ? null : onOpenSessions,
             ),
-          ),
-          if (modelName != null || remainingContext != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(44, 0, 44, 1),
-              child: Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 7,
-                runSpacing: 5,
+            const SizedBox(width: 4),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  if (modelName != null)
-                    SessionMetric(
-                      key: const ValueKey('model-metric'),
-                      icon: Icons.smart_toy_outlined,
-                      label: formatModelName(modelName!),
+                  const Text(
+                    'CC Remote',
+                    maxLines: 1,
+                    style: TextStyle(
+                      color: AppColors.terracottaDeep,
+                      fontSize: 12,
+                      height: 1,
+                      fontWeight: FontWeight.w700,
                     ),
-                  if (remainingContext != null)
-                    Row(
-                      key: const ValueKey('context-metric'),
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        ContextDial(
-                          remaining: remainingContext!,
-                          total: contextWindow,
-                        ),
-                        const SizedBox(width: 7),
-                        Flexible(
-                          child: Text(
-                            contextWindow == null
-                                ? '剩余 ${formatTokens(remainingContext!)}'
-                                : '剩余 ${formatTokens(remainingContext!)} / ${formatTokens(contextWindow!)}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: AppColors.muted,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w700,
-                              fontFeatures: [FontFeature.tabularFigures()],
-                            ),
-                          ),
-                        ),
-                      ],
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    workspace,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.ink,
+                      fontSize: 16,
+                      height: 1.1,
+                      fontWeight: FontWeight.w700,
                     ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '$statusLabel  $device',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: offline
+                          ? AppColors.danger
+                          : running || uploadingAttachments
+                          ? AppColors.terracottaDeep
+                          : AppColors.muted,
+                      fontSize: 12,
+                      height: 1.1,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
                 ],
               ),
             ),
-        ],
+            const SizedBox(width: 6),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _HeroIconButton(
+                  key: const ValueKey('session-new-button'),
+                  tooltip: '新对话',
+                  icon: Icons.add_rounded,
+                  dimension: AppSizes.iconControl,
+                  onPressed: connected && !running && !uploadingAttachments
+                      ? onNewConversation
+                      : null,
+                ),
+                _SessionMoreButton(
+                  offline: offline,
+                  modelName: modelName,
+                  contextWindow: contextWindow,
+                  remainingContext: remainingContext,
+                  onReconnect: onReconnect,
+                  onOpenWorkspace: onOpenWorkspace,
+                  onOpenSettings: onOpenSettings,
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class SessionMetric extends StatelessWidget {
-  const SessionMetric({super.key, required this.icon, required this.label});
+class _HeroIconButton extends StatelessWidget {
+  const _HeroIconButton({
+    super.key,
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+    this.dimension = AppSizes.iconControl,
+  });
 
+  final String tooltip;
   final IconData icon;
-  final String label;
+  final VoidCallback? onPressed;
+  final double dimension;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
-      decoration: BoxDecoration(
-        color: AppColors.accentSoft.withValues(alpha: 0.62),
-        borderRadius: BorderRadius.circular(AppRadii.pill),
-        border: Border.all(color: AppColors.accent.withValues(alpha: 0.16)),
+    return SizedBox.square(
+      dimension: AppSizes.touchTarget,
+      child: IconButton(
+        onPressed: onPressed,
+        tooltip: tooltip,
+        padding: EdgeInsets.zero,
+        icon: Container(
+          width: dimension,
+          height: dimension,
+          decoration: BoxDecoration(
+            color: onPressed == null ? AppColors.paper : AppColors.control,
+            borderRadius: BorderRadius.circular(AppRadii.control),
+          ),
+          alignment: Alignment.center,
+          child: Icon(icon, size: 20),
+        ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 14, color: AppColors.accent),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: const TextStyle(
-              color: AppColors.ink,
-              fontSize: 11,
-              fontWeight: FontWeight.w700,
-              fontFeatures: [FontFeature.tabularFigures()],
+    );
+  }
+}
+
+enum _SessionHeaderAction { workspace, reconnect, settings }
+
+class _SessionMoreButton extends StatelessWidget {
+  const _SessionMoreButton({
+    required this.offline,
+    required this.modelName,
+    required this.contextWindow,
+    required this.remainingContext,
+    required this.onReconnect,
+    required this.onOpenWorkspace,
+    required this.onOpenSettings,
+  });
+
+  final bool offline;
+  final String? modelName;
+  final int? contextWindow;
+  final int? remainingContext;
+  final VoidCallback onReconnect;
+  final VoidCallback onOpenWorkspace;
+  final VoidCallback onOpenSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final contextLabel = remainingContext == null
+        ? null
+        : contextWindow == null
+        ? '上下文剩余 ${formatTokens(remainingContext!)}'
+        : '上下文剩余 ${formatTokens(remainingContext!)} / ${formatTokens(contextWindow!)}';
+    return SizedBox.square(
+      dimension: AppSizes.touchTarget,
+      child: PopupMenuButton<_SessionHeaderAction>(
+        key: const ValueKey('session-more-button'),
+        tooltip: '更多',
+        padding: EdgeInsets.zero,
+        position: PopupMenuPosition.under,
+        onSelected: (action) {
+          switch (action) {
+            case _SessionHeaderAction.workspace:
+              onOpenWorkspace();
+            case _SessionHeaderAction.reconnect:
+              onReconnect();
+            case _SessionHeaderAction.settings:
+              onOpenSettings();
+          }
+        },
+        itemBuilder: (context) => [
+          const PopupMenuItem(
+            value: _SessionHeaderAction.workspace,
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.folder_open_outlined),
+              title: Text('工作区'),
+            ),
+          ),
+          if (offline)
+            const PopupMenuItem(
+              value: _SessionHeaderAction.reconnect,
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.refresh_rounded),
+                title: Text('重新连接'),
+              ),
+            ),
+          if (modelName != null)
+            PopupMenuItem(
+              enabled: false,
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.memory_outlined),
+                title: Text(formatModelName(modelName!)),
+              ),
+            ),
+          if (contextLabel != null)
+            PopupMenuItem(
+              enabled: false,
+              child: ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.data_usage_outlined),
+                title: Text(contextLabel),
+              ),
+            ),
+          const PopupMenuItem(
+            value: _SessionHeaderAction.settings,
+            child: ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.settings_outlined),
+              title: Text('设置'),
             ),
           ),
         ],
+        icon: Container(
+          width: AppSizes.iconControl,
+          height: AppSizes.iconControl,
+          decoration: BoxDecoration(
+            color: AppColors.control,
+            borderRadius: BorderRadius.circular(AppRadii.control),
+          ),
+          alignment: Alignment.center,
+          child: const Icon(Icons.more_horiz_rounded, size: 20),
+        ),
       ),
     );
   }
@@ -3188,7 +3046,6 @@ Future<void> showSettingsSheet(
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: Colors.transparent,
     builder: (context) => SettingsSheet(
       session: session,
       notificationsEnabled: notificationsEnabled,
@@ -3569,15 +3426,14 @@ class _SettingsSheetState extends State<SettingsSheet> {
 
   @override
   Widget build(BuildContext context) {
-    final sectionLabelStyle = Theme.of(context).textTheme.labelSmall?.copyWith(
+    final sectionLabelStyle = Theme.of(context).textTheme.titleSmall?.copyWith(
       color: AppColors.muted,
-      fontWeight: FontWeight.w800,
-      letterSpacing: 0.55,
+      fontWeight: FontWeight.w700,
     );
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-        child: GlassPanel(
+        child: WarmSheetSurface(
           padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
           child: ConstrainedBox(
             constraints: BoxConstraints(
@@ -3595,7 +3451,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
                           '设置',
                           style: TextStyle(
                             fontSize: 20,
-                            fontWeight: FontWeight.w800,
+                            fontWeight: FontWeight.w700,
                           ),
                         ),
                       ),
@@ -3635,7 +3491,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
                     key: const ValueKey('model-setting'),
                     contentPadding: EdgeInsets.zero,
                     minVerticalPadding: 8,
-                    leading: const Icon(Icons.auto_awesome_rounded),
+                    leading: const Icon(Icons.tune_rounded),
                     title: const Text('模型'),
                     subtitle: Text(
                       modelPreferenceDescription(
@@ -3699,14 +3555,9 @@ class _SettingsSheetState extends State<SettingsSheet> {
                       icon: const Icon(Icons.refresh_rounded),
                       label: const Text('重新连接'),
                       style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.accent,
-                        minimumSize: const Size.fromHeight(46),
-                        side: BorderSide(
-                          color: AppColors.accent.withValues(alpha: 0.22),
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(AppRadii.control),
-                        ),
+                        foregroundColor: AppColors.ink,
+                        backgroundColor: AppColors.surface,
+                        minimumSize: const Size.fromHeight(48),
                       ),
                     ),
                   ),
@@ -3720,14 +3571,9 @@ class _SettingsSheetState extends State<SettingsSheet> {
                         icon: const Icon(Icons.link_off_rounded),
                         label: const Text('退出配对'),
                         style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.stop,
-                          foregroundColor: Colors.white,
-                          minimumSize: const Size.fromHeight(48),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(
-                              AppRadii.control,
-                            ),
-                          ),
+                          backgroundColor: AppColors.danger,
+                          foregroundColor: AppColors.surfaceElevated,
+                          minimumSize: const Size.fromHeight(52),
                         ),
                       ),
                     ),
@@ -3748,50 +3594,111 @@ Future<ClaudeModelPreference?> showClaudeModelPicker(
 }) {
   return showModalBottomSheet<ClaudeModelPreference>(
     context: context,
-    showDragHandle: true,
+    backgroundColor: Colors.transparent,
     isScrollControlled: true,
     builder: (context) => SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(4, 0, 4, 8),
-              child: Text(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 20, 14, 14),
+        child: WarmSheetSurface(
+          radius: 28,
+          padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
                 '选择模型',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
               ),
-            ),
-            for (final preference in ClaudeModelPreference.values)
-              ListTile(
-                key: ValueKey(
-                  'model-option-${preference.wireName ?? 'follow'}',
-                ),
-                minTileHeight: 52,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 8),
-                leading: Icon(
-                  preference == ClaudeModelPreference.followComputer
-                      ? Icons.computer_rounded
-                      : Icons.psychology_alt_rounded,
-                ),
-                title: Text(preference.label),
-                subtitle: Text(
-                  preference == ClaudeModelPreference.followComputer
-                      ? '使用电脑端或 Claude Code 的默认配置'
-                      : '用于后续消息',
-                ),
-                selected: preference == selected,
-                trailing: preference == selected
-                    ? const Icon(
-                        Icons.check_circle_rounded,
-                        color: AppColors.accent,
-                      )
-                    : null,
-                onTap: () => Navigator.pop(context, preference),
+              const SizedBox(height: 4),
+              const Text(
+                '应用于之后发送的消息',
+                style: TextStyle(color: AppColors.muted, fontSize: 12),
               ),
-          ],
+              const SizedBox(height: 14),
+              for (final preference in ClaudeModelPreference.values)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Material(
+                    color: preference == selected
+                        ? AppColors.control
+                        : AppColors.surface,
+                    borderRadius: BorderRadius.circular(AppRadii.surface),
+                    child: InkWell(
+                      key: ValueKey(
+                        'model-option-${preference.wireName ?? 'follow'}',
+                      ),
+                      onTap: () => Navigator.pop(context, preference),
+                      borderRadius: BorderRadius.circular(AppRadii.surface),
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
+                        child: Row(
+                          children: [
+                            SizedBox.square(
+                              dimension: AppSizes.iconControl,
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  color: AppColors.surfaceElevated,
+                                  borderRadius: BorderRadius.circular(
+                                    AppRadii.control,
+                                  ),
+                                  border: Border.all(color: AppColors.line),
+                                ),
+                                child: Icon(
+                                  preference ==
+                                          ClaudeModelPreference.followComputer
+                                      ? Icons.computer_outlined
+                                      : Icons.memory_outlined,
+                                  size: 19,
+                                  color: preference == selected
+                                      ? AppColors.terracottaDeep
+                                      : AppColors.ink,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    preference.label,
+                                    style: const TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    modelPreferenceOptionDescription(
+                                      preference,
+                                    ),
+                                    style: const TextStyle(
+                                      color: AppColors.muted,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Icon(
+                              preference == selected
+                                  ? Icons.check_circle_rounded
+                                  : Icons.circle_outlined,
+                              color: preference == selected
+                                  ? AppColors.terracottaDeep
+                                  : AppColors.inactiveLight,
+                              size: 22,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     ),
@@ -3808,7 +3715,6 @@ Future<void> showChatBackgroundSheet(
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
-    backgroundColor: Colors.transparent,
     builder: (context) => ChatBackgroundSheet(
       preference: preference,
       onChanged: onChanged,
@@ -3890,18 +3796,18 @@ class _ChatBackgroundSheetState extends State<ChatBackgroundSheet> {
   @override
   Widget build(BuildContext context) {
     final options = <(String, ChatBackgroundPreference)>[
-      ('默认', ChatBackgroundPreference.defaultValue),
-      ('薄荷', const ChatBackgroundPreference.preset(ChatBackgroundPreset.mint)),
+      ('暖纸', ChatBackgroundPreference.defaultValue),
+      ('亚麻', const ChatBackgroundPreference.preset(ChatBackgroundPreset.mint)),
       (
-        '晨光',
+        '陶纸',
         const ChatBackgroundPreference.preset(ChatBackgroundPreset.sunrise),
       ),
-      ('陶粉', const ChatBackgroundPreference.preset(ChatBackgroundPreset.rose)),
+      ('砂岩', const ChatBackgroundPreference.preset(ChatBackgroundPreset.rose)),
     ];
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 24, 14, 14),
-        child: GlassPanel(
+        child: WarmSheetSurface(
           padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
           child: SizedBox(
             height: MediaQuery.sizeOf(context).height * 0.72,
@@ -3915,7 +3821,7 @@ class _ChatBackgroundSheetState extends State<ChatBackgroundSheet> {
                         '聊天背景',
                         style: TextStyle(
                           fontSize: 20,
-                          fontWeight: FontWeight.w800,
+                          fontWeight: FontWeight.w700,
                         ),
                       ),
                     ),
@@ -3936,7 +3842,7 @@ class _ChatBackgroundSheetState extends State<ChatBackgroundSheet> {
                         const SizedBox(height: 18),
                         const Text(
                           '内置背景',
-                          style: TextStyle(fontWeight: FontWeight.w800),
+                          style: TextStyle(fontWeight: FontWeight.w700),
                         ),
                         const SizedBox(height: 10),
                         LayoutBuilder(
@@ -4002,7 +3908,7 @@ class _ChatBackgroundSheetState extends State<ChatBackgroundSheet> {
                               const Expanded(
                                 child: Text(
                                   '图片淡化',
-                                  style: TextStyle(fontWeight: FontWeight.w800),
+                                  style: TextStyle(fontWeight: FontWeight.w700),
                                 ),
                               ),
                               Text(
@@ -4119,8 +4025,10 @@ class ChatBackgroundChoice extends StatelessWidget {
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
-                      color: selected ? AppColors.accent : AppColors.line,
-                      width: selected ? 2.5 : 1.25,
+                      color: selected
+                          ? AppColors.terracottaDeep
+                          : AppColors.line,
+                      width: selected ? 2 : 1,
                     ),
                   ),
                   child: _ChatBackgroundLayer(
@@ -4133,7 +4041,7 @@ class ChatBackgroundChoice extends StatelessWidget {
                   label,
                   style: TextStyle(
                     fontSize: 12,
-                    fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                   ),
                 ),
               ],
@@ -4160,7 +4068,7 @@ class ChatBackgroundPreview extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: AppColors.ink, width: 1.25),
+          border: Border.all(color: AppColors.line),
         ),
         child: Stack(
           fit: StackFit.expand,
@@ -4173,16 +4081,13 @@ class ChatBackgroundPreview extends StatelessWidget {
                 children: [
                   Align(
                     alignment: Alignment.centerRight,
-                    child: _PreviewBubble(
-                      color: AppColors.yellowSoft,
-                      width: 138,
-                    ),
+                    child: _PreviewBubble(color: AppColors.control, width: 138),
                   ),
                   SizedBox(height: 12),
                   Align(
                     alignment: Alignment.centerLeft,
                     child: _PreviewBubble(
-                      color: AppColors.porcelain,
+                      color: AppColors.surfaceElevated,
                       width: 188,
                     ),
                   ),
@@ -4210,7 +4115,7 @@ class _PreviewBubble extends StatelessWidget {
       decoration: BoxDecoration(
         color: color,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.ink, width: 1.1),
+        border: Border.all(color: AppColors.line),
       ),
     );
   }
@@ -4229,7 +4134,7 @@ class ChatBackgroundThumbnail extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.ink, width: 1.2),
+        border: Border.all(color: AppColors.line),
       ),
       child: _ChatBackgroundLayer(preference: preference, cacheWidth: 160),
     );
@@ -4241,9 +4146,9 @@ String chatBackgroundLabel(ChatBackgroundPreference preference) {
     ChatBackgroundKind.defaultStyle => '默认纸感',
     ChatBackgroundKind.localImage => '自定义图片',
     ChatBackgroundKind.preset => switch (preference.preset) {
-      ChatBackgroundPreset.mint => '薄荷纸感',
-      ChatBackgroundPreset.sunrise => '晨光纸感',
-      ChatBackgroundPreset.rose => '陶粉纸感',
+      ChatBackgroundPreset.mint => '亚麻纸感',
+      ChatBackgroundPreset.sunrise => '陶纸纸感',
+      ChatBackgroundPreset.rose => '砂岩纸感',
       null => '内置背景',
     },
   };
@@ -4388,26 +4293,22 @@ class TranscriptView extends StatelessWidget {
                       const Text(
                         '下一件事',
                         style: TextStyle(
-                          fontSize: 21,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: -0.65,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.2,
                         ),
                       ),
-                      const SizedBox(height: 6),
+                      const SizedBox(height: 4),
                       const Text(
                         '从下方输入，或先点一个快捷任务',
-                        style: TextStyle(
-                          color: AppColors.muted,
-                          fontSize: 11.5,
-                        ),
+                        style: TextStyle(color: AppColors.muted, fontSize: 14),
                       ),
-                      const SizedBox(height: 14),
+                      const SizedBox(height: 12),
                       Row(
                         children: [
                           Expanded(
                             flex: 7,
                             child: PromptChip(
-                              tone: AppColors.yellow,
                               icon: Icons.arrow_outward_rounded,
                               label: '检查项目',
                               caption: '看看哪里需要处理',
@@ -4418,8 +4319,7 @@ class TranscriptView extends StatelessWidget {
                           Expanded(
                             flex: 5,
                             child: PromptChip(
-                              tone: AppColors.coralSoft,
-                              icon: Icons.bolt_rounded,
+                              icon: Icons.play_arrow_outlined,
                               label: '运行测试',
                               caption: '跑完告诉我结果',
                               onTap: () => onFillPrompt('运行测试并总结结果'),
@@ -4485,88 +4385,55 @@ class _OfflineReconnectCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Material(
-      color: Colors.transparent,
+      key: const ValueKey('offline-reconnect-card'),
+      color: AppColors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadii.surface),
+        side: const BorderSide(color: AppColors.line),
+      ),
       child: InkWell(
         onTap: onReconnect,
-        borderRadius: BorderRadius.circular(26),
-        child: Ink(
-          width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(17, 16, 15, 15),
-          decoration: BoxDecoration(
-            color: AppColors.coralSoft,
-            borderRadius: BorderRadius.circular(26),
-            border: Border.all(color: AppColors.ink, width: 1.6),
-            boxShadow: const [
-              BoxShadow(
-                color: AppColors.mint,
-                blurRadius: 0,
-                offset: Offset(4, 5),
-              ),
-            ],
-          ),
+        borderRadius: BorderRadius.circular(AppRadii.surface),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.md),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: 46,
-                    height: 46,
-                    decoration: BoxDecoration(
-                      color: AppColors.yellow,
-                      borderRadius: BorderRadius.circular(15),
-                      border: Border.all(color: AppColors.ink, width: 1.4),
-                    ),
-                    alignment: Alignment.center,
-                    child: const Icon(Icons.power_rounded, size: 24),
-                  ),
-                  const Spacer(),
-                  Transform.rotate(
-                    angle: 0.045,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.porcelain,
-                        borderRadius: BorderRadius.circular(9),
-                        border: Border.all(color: AppColors.ink, width: 1.2),
-                      ),
-                      child: const Text(
-                        '连接任务',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+              Container(
+                width: AppSizes.iconControl,
+                height: AppSizes.iconControl,
+                decoration: BoxDecoration(
+                  color: AppColors.control,
+                  borderRadius: BorderRadius.circular(AppRadii.control),
+                ),
+                alignment: Alignment.center,
+                child: const Icon(
+                  Icons.link_off_rounded,
+                  size: 20,
+                  color: AppColors.danger,
+                ),
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 16),
               const Text(
                 '让电脑重新上线',
                 style: TextStyle(
-                  fontSize: 22,
-                  height: 1.05,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: -0.7,
+                  fontSize: 18,
+                  height: 1.25,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.28,
                 ),
               ),
-              const SizedBox(height: 7),
+              const SizedBox(height: 6),
               const Text(
                 '在电脑端重新运行 CC Remote，手机会自动接回这次会话。',
                 style: TextStyle(
-                  color: AppColors.ink,
-                  fontSize: 12.5,
-                  height: 1.45,
-                  fontWeight: FontWeight.w600,
+                  color: AppColors.muted,
+                  fontSize: 14,
+                  height: 1.5,
                 ),
               ),
               const Spacer(),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
               Row(
                 children: [
                   const Expanded(
@@ -4575,40 +4442,31 @@ class _OfflineReconnectCard extends StatelessWidget {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
+                        color: AppColors.muted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 14,
-                      vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: AppColors.ink,
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          '重新连接',
-                          style: TextStyle(
-                            color: AppColors.porcelain,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w900,
-                          ),
+                  const SizedBox(width: 12),
+                  const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.refresh_rounded,
+                        size: 18,
+                        color: AppColors.terracottaDeep,
+                      ),
+                      SizedBox(width: 5),
+                      Text(
+                        '立即重连',
+                        style: TextStyle(
+                          color: AppColors.terracottaDeep,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
                         ),
-                        SizedBox(width: 5),
-                        Icon(
-                          Icons.arrow_forward_rounded,
-                          size: 16,
-                          color: AppColors.mint,
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -4641,39 +4499,36 @@ class PermissionRequestCard extends StatelessWidget {
     final enabled = connected && !responding;
     final tool = request.toolName.toLowerCase();
     final riskTone = tool.contains('write') || tool.contains('edit')
-        ? AppColors.stop
+        ? AppColors.danger
         : tool.contains('bash') || tool.contains('shell')
-        ? AppColors.warning
-        : AppColors.accent;
+        ? AppColors.terracottaDeep
+        : AppColors.terracotta;
     return Container(
       key: ValueKey('permission-request-${request.requestId}'),
       decoration: BoxDecoration(
-        color: AppColors.coral,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: AppColors.ink, width: 1.8),
-        boxShadow: const [
-          BoxShadow(color: AppColors.ink, blurRadius: 0, offset: Offset(4, 5)),
-        ],
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(AppRadii.surface),
+        border: Border.all(color: AppColors.line),
       ),
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 15, 16, 16),
+        padding: const EdgeInsets.all(AppSpacing.md),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
                 Container(
-                  width: 40,
-                  height: 40,
+                  width: AppSizes.iconControl,
+                  height: AppSizes.iconControl,
                   decoration: BoxDecoration(
-                    color: AppColors.yellow,
-                    shape: BoxShape.circle,
-                    border: Border.all(color: AppColors.ink, width: 1.5),
+                    color: AppColors.control,
+                    borderRadius: BorderRadius.circular(AppRadii.control),
                   ),
-                  child: const Icon(
-                    Icons.auto_awesome_rounded,
-                    size: 19,
-                    color: AppColors.ink,
+                  alignment: Alignment.center,
+                  child: Icon(
+                    Icons.admin_panel_settings_outlined,
+                    size: 20,
+                    color: riskTone,
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -4682,12 +4537,12 @@ class PermissionRequestCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        '需要你的小小确认',
+                        '需要权限确认',
                         style: TextStyle(
-                          fontSize: 18,
-                          height: 1,
-                          fontWeight: FontWeight.w900,
-                          letterSpacing: -0.5,
+                          fontSize: 16,
+                          height: 1.25,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: -0.2,
                         ),
                       ),
                       const SizedBox(height: 2),
@@ -4696,17 +4551,17 @@ class PermissionRequestCard extends StatelessWidget {
                           const Text(
                             '等待权限确认',
                             style: TextStyle(
-                              color: AppColors.ink,
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w700,
+                              color: AppColors.muted,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
                           const Text(
                             ' · ',
                             style: TextStyle(
-                              color: AppColors.ink,
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w700,
+                              color: AppColors.muted,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
                           Flexible(
@@ -4716,8 +4571,8 @@ class PermissionRequestCard extends StatelessWidget {
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 color: riskTone,
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w900,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
                               ),
                             ),
                           ),
@@ -4746,15 +4601,16 @@ class PermissionRequestCard extends StatelessWidget {
                   vertical: 9,
                 ),
                 decoration: BoxDecoration(
-                  color: AppColors.code,
+                  color: AppColors.control,
                   borderRadius: BorderRadius.circular(AppRadii.compact),
-                  border: Border.all(color: const Color(0xFF2B3A3F)),
+                  border: Border.all(color: AppColors.line),
                 ),
                 child: SelectableText(
                   request.detail!,
                   style: const TextStyle(
-                    color: Colors.white,
-                    fontFamily: 'monospace',
+                    color: AppColors.ink,
+                    fontFamily: AppTypography.codeFontFamily,
+                    fontFamilyFallback: AppTypography.codeFontFamilyFallback,
                     fontSize: 12,
                     height: 1.45,
                   ),
@@ -4771,11 +4627,8 @@ class PermissionRequestCard extends StatelessWidget {
                       onPressed: enabled ? onDeny : null,
                       style: OutlinedButton.styleFrom(
                         foregroundColor: AppColors.ink,
-                        backgroundColor: AppColors.porcelain,
-                        side: const BorderSide(
-                          color: AppColors.ink,
-                          width: 1.4,
-                        ),
+                        backgroundColor: AppColors.surfaceElevated,
+                        side: const BorderSide(color: AppColors.lineStrong),
                       ),
                       child: const Text('拒绝'),
                     ),
@@ -4788,8 +4641,8 @@ class PermissionRequestCard extends StatelessWidget {
                     child: FilledButton(
                       onPressed: enabled ? onAllow : null,
                       style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.ink,
-                        foregroundColor: AppColors.porcelain,
+                        backgroundColor: AppColors.terracotta,
+                        foregroundColor: AppColors.surfaceElevated,
                       ),
                       child: const Text('允许一次'),
                     ),
@@ -4842,7 +4695,9 @@ class MessageBlock extends StatelessWidget {
           ? SelectableText(
               message.text,
               style: const TextStyle(
-                height: 1.55,
+                fontFamily: AppTypography.assistantFontFamily,
+                fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
+                height: 1.65,
                 fontSize: 15,
                 color: AppColors.ink,
               ),
@@ -4854,14 +4709,19 @@ class MessageBlock extends StatelessWidget {
               styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
                   .copyWith(
                     p: const TextStyle(
-                      height: 1.55,
+                      fontFamily: AppTypography.assistantFontFamily,
+                      fontFamilyFallback:
+                          AppTypography.assistantFontFamilyFallback,
+                      height: 1.65,
                       fontSize: 15,
                       color: AppColors.ink,
                     ),
-                    a: const TextStyle(color: AppColors.accent),
+                    a: const TextStyle(color: AppColors.terracottaDeep),
                     code: const TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 13,
+                      fontFamily: AppTypography.codeFontFamily,
+                      fontFamilyFallback: AppTypography.codeFontFamilyFallback,
+                      fontSize: 12,
+                      height: 1.45,
                       color: AppColors.ink,
                     ),
                     h1: const TextStyle(
@@ -4888,14 +4748,14 @@ class MessageBlock extends StatelessWidget {
                     ),
                     codeblockPadding: const EdgeInsets.all(12),
                     codeblockDecoration: BoxDecoration(
-                      color: AppColors.porcelainMuted,
+                      color: AppColors.control,
                       borderRadius: BorderRadius.circular(AppRadii.compact),
                       border: Border.all(color: AppColors.line),
                     ),
                     blockquotePadding: const EdgeInsets.fromLTRB(12, 6, 10, 6),
                     blockquoteDecoration: const BoxDecoration(
                       border: Border(
-                        left: BorderSide(color: AppColors.accent, width: 2),
+                        left: BorderSide(color: AppColors.terracotta, width: 1),
                       ),
                     ),
                   ),
@@ -4915,14 +4775,14 @@ class MessageBlock extends StatelessWidget {
           key: const ValueKey('user-message'),
           padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
           decoration: BoxDecoration(
-            color: AppColors.accentSoft.withValues(alpha: 0.76),
+            color: AppColors.control,
             borderRadius: const BorderRadius.only(
               topLeft: Radius.circular(AppRadii.bubble),
               topRight: Radius.circular(AppRadii.bubble),
               bottomLeft: Radius.circular(AppRadii.bubble),
               bottomRight: Radius.circular(6),
             ),
-            border: Border.all(color: AppColors.accent.withValues(alpha: 0.14)),
+            border: Border.all(color: AppColors.line),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -4941,8 +4801,9 @@ class MessageBlock extends StatelessWidget {
                   message.text,
                   style: const TextStyle(
                     height: 1.45,
+                    fontSize: 15,
                     color: AppColors.ink,
-                    fontWeight: FontWeight.w500,
+                    fontWeight: FontWeight.w400,
                   ),
                 ),
             ],
@@ -5068,14 +4929,14 @@ class AttachmentFileTile extends StatelessWidget {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    fontSize: 13,
+                    fontSize: 14,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   formatAttachmentSize(size),
-                  style: const TextStyle(color: AppColors.muted, fontSize: 11),
+                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
                 ),
               ],
             ),
@@ -5100,79 +4961,24 @@ class AssistantBubbleFrame extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final maxWidth = MediaQuery.sizeOf(context).width * 0.82;
+    final maxWidth = MediaQuery.sizeOf(context).width * 0.88;
     return Align(
       alignment: Alignment.centerLeft,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const AssistantAvatar(),
-          const SizedBox(width: 9),
-          Flexible(
-            child: ConstrainedBox(
-              constraints: BoxConstraints(maxWidth: maxWidth),
-              child: Container(
-                key: bubbleKey,
-                padding: compact
-                    ? const EdgeInsets.fromLTRB(13, 10, 14, 10)
-                    : const EdgeInsets.fromLTRB(15, 12, 16, 13),
-                decoration: BoxDecoration(
-                  color: AppColors.porcelainMuted,
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(7),
-                    topRight: Radius.circular(AppRadii.bubble),
-                    bottomLeft: Radius.circular(AppRadii.bubble),
-                    bottomRight: Radius.circular(AppRadii.bubble),
-                  ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: Container(
+          key: bubbleKey,
+          padding: compact
+              ? const EdgeInsets.fromLTRB(12, 10, 14, 10)
+              : const EdgeInsets.symmetric(horizontal: 2, vertical: 4),
+          decoration: compact
+              ? BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(AppRadii.surface),
                   border: Border.all(color: AppColors.line),
-                  boxShadow: compact
-                      ? [
-                          BoxShadow(
-                            color: AppColors.shadow.withValues(alpha: 0.035),
-                            blurRadius: 10,
-                            offset: const Offset(0, 4),
-                          ),
-                        ]
-                      : null,
-                ),
-                child: child,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class AssistantAvatar extends StatelessWidget {
-  const AssistantAvatar({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      key: const ValueKey('assistant-avatar'),
-      width: 32,
-      height: 32,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(11),
-        border: Border.all(color: AppColors.ink, width: 1.2),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.coral.withValues(alpha: 0.9),
-            blurRadius: 0,
-            offset: const Offset(2, 2),
-          ),
-        ],
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(10),
-        child: Image.asset(
-          'assets/claude_mascot.png',
-          fit: BoxFit.cover,
-          filterQuality: FilterQuality.none,
-          semanticLabel: 'Claude 吉祥物',
+                )
+              : null,
+          child: child,
         ),
       ),
     );
@@ -5218,7 +5024,7 @@ class ActivityBlock extends StatelessWidget {
     if (message.activityKind == ActivityKind.thinking) {
       if (message.activityState == ActivityState.running) {
         return TaskRailFrame(
-          color: AppColors.accent,
+          color: AppColors.terracotta,
           active: true,
           compact: true,
           child: AssistantBubbleFrame(
@@ -5231,8 +5037,8 @@ class ActivityBlock extends StatelessWidget {
         );
       }
       final thinkingTone = message.activityState == ActivityState.error
-          ? AppColors.stop
-          : AppColors.success;
+          ? AppColors.danger
+          : AppColors.inactive;
       return TaskRailFrame(
         color: thinkingTone,
         compact: true,
@@ -5265,9 +5071,9 @@ class ActivityBlock extends StatelessWidget {
     }
 
     final railTone = switch (message.activityState) {
-      ActivityState.running => AppColors.accent,
-      ActivityState.done => AppColors.success,
-      ActivityState.error => AppColors.stop,
+      ActivityState.running => AppColors.terracotta,
+      ActivityState.done => AppColors.inactive,
+      ActivityState.error => AppColors.danger,
       ActivityState.stopped => AppColors.muted,
       null => AppColors.muted,
     };
@@ -5277,7 +5083,7 @@ class ActivityBlock extends StatelessWidget {
       message.text,
       style: TextStyle(
         color: message.activityState == ActivityState.error
-            ? AppColors.stop
+            ? AppColors.danger
             : AppColors.muted,
         fontSize: 13,
         fontWeight: FontWeight.w600,
@@ -5288,7 +5094,7 @@ class ActivityBlock extends StatelessWidget {
         dimension: 16,
         child: CircularProgressIndicator(
           strokeWidth: 1.8,
-          color: AppColors.accent,
+          color: AppColors.terracotta,
         ),
       ),
       ActivityState.done => const Icon(
@@ -5299,7 +5105,7 @@ class ActivityBlock extends StatelessWidget {
       ActivityState.error => const Icon(
         Icons.error_outline_rounded,
         size: 17,
-        color: AppColors.stop,
+        color: AppColors.danger,
       ),
       ActivityState.stopped => const Icon(
         Icons.stop_rounded,
@@ -5314,8 +5120,11 @@ class ActivityBlock extends StatelessWidget {
         color: railTone,
         active: message.activityState == ActivityState.running,
         child: Material(
-          color: AppColors.porcelain,
-          shape: const SignalCutCornerBorder(),
+          color: AppColors.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadii.surface),
+            side: const BorderSide(color: AppColors.line),
+          ),
           clipBehavior: Clip.antiAlias,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 13, 10),
@@ -5372,8 +5181,11 @@ class ActivityBlock extends StatelessWidget {
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: Material(
-          color: AppColors.porcelain,
-          shape: const SignalCutCornerBorder(),
+          color: AppColors.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadii.surface),
+            side: const BorderSide(color: AppColors.line),
+          ),
           clipBehavior: Clip.antiAlias,
           child: ExpansionTile(
             dense: true,
@@ -5397,7 +5209,8 @@ class ActivityBlock extends StatelessWidget {
                   detail,
                   style: const TextStyle(
                     color: AppColors.ink,
-                    fontFamily: 'monospace',
+                    fontFamily: AppTypography.codeFontFamily,
+                    fontFamilyFallback: AppTypography.codeFontFamilyFallback,
                     fontSize: 12,
                     height: 1.45,
                   ),
@@ -5494,10 +5307,10 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
               );
             },
             child: const Icon(
-              Icons.auto_awesome_rounded,
+              Icons.psychology_alt_outlined,
               key: ValueKey('thinking-icon'),
               size: 18,
-              color: AppColors.accent,
+              color: AppColors.terracotta,
             ),
           ),
           const SizedBox(width: 9),
@@ -5544,11 +5357,14 @@ class PromptBar extends StatelessWidget {
     required this.offline,
     required this.permissionMode,
     required this.allowBypassPermissions,
+    this.modelName,
+    this.selectedModel = ClaudeModelPreference.followComputer,
     this.suggestionMaxHeight = 292,
     required this.onPermissionModeSelected,
     required this.onCommandSelected,
     this.onAddAttachment,
     this.onRemoveAttachment,
+    this.onModelPressed,
     required this.onReconnect,
     required this.onSend,
     required this.onStop,
@@ -5564,11 +5380,14 @@ class PromptBar extends StatelessWidget {
   final bool offline;
   final PermissionMode permissionMode;
   final bool allowBypassPermissions;
+  final String? modelName;
+  final ClaudeModelPreference selectedModel;
   final double suggestionMaxHeight;
   final ValueChanged<PermissionMode> onPermissionModeSelected;
   final ValueChanged<String> onCommandSelected;
   final VoidCallback? onAddAttachment;
   final ValueChanged<AttachmentDraft>? onRemoveAttachment;
+  final VoidCallback? onModelPressed;
   final VoidCallback onReconnect;
   final VoidCallback onSend;
   final VoidCallback onStop;
@@ -5583,30 +5402,25 @@ class PromptBar extends StatelessWidget {
           color: Colors.transparent,
           child: InkWell(
             onTap: onReconnect,
-            borderRadius: BorderRadius.circular(20),
+            borderRadius: BorderRadius.circular(AppRadii.surface),
             child: Ink(
+              key: const ValueKey('composer'),
               width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(10, 10, 12, 10),
+              height: 64,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
               decoration: BoxDecoration(
-                color: AppColors.ink,
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: AppColors.ink, width: 1.5),
-                boxShadow: const [
-                  BoxShadow(
-                    color: AppColors.coral,
-                    blurRadius: 0,
-                    offset: Offset(4, 5),
-                  ),
-                ],
+                color: AppColors.surfaceElevated,
+                borderRadius: BorderRadius.circular(AppRadii.surface),
+                border: Border.all(color: AppColors.line),
               ),
               child: Row(
                 children: [
                   Container(
-                    width: 44,
-                    height: 44,
+                    width: AppSizes.iconControl,
+                    height: AppSizes.iconControl,
                     decoration: BoxDecoration(
-                      color: AppColors.yellow,
-                      borderRadius: BorderRadius.circular(13),
+                      color: AppColors.control,
+                      borderRadius: BorderRadius.circular(AppRadii.control),
                     ),
                     alignment: Alignment.center,
                     child: const Icon(
@@ -5620,16 +5434,16 @@ class PromptBar extends StatelessWidget {
                     child: Text(
                       '重新连接',
                       style: TextStyle(
-                        color: AppColors.porcelain,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
+                        color: AppColors.ink,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                   ),
                   const Icon(
-                    Icons.arrow_forward_rounded,
+                    Icons.chevron_right_rounded,
                     size: 20,
-                    color: AppColors.mint,
+                    color: AppColors.muted,
                   ),
                 ],
               ),
@@ -5673,177 +5487,116 @@ class PromptBar extends StatelessWidget {
                 const SizedBox(height: 6),
               ],
               Container(
-                padding: const EdgeInsets.fromLTRB(9, 7, 8, 7),
+                key: const ValueKey('composer'),
+                constraints: const BoxConstraints(minHeight: AppSizes.composer),
+                padding: const EdgeInsets.fromLTRB(12, 10, 10, 10),
                 decoration: BoxDecoration(
-                  color: AppColors.ink,
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: AppColors.ink, width: 1.5),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: AppColors.coral,
-                      blurRadius: 0,
-                      offset: Offset(4, 5),
-                    ),
-                  ],
+                  color: AppColors.surfaceElevated,
+                  borderRadius: BorderRadius.circular(AppRadii.surface),
+                  border: Border.all(color: AppColors.line),
                 ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Row(
-                      children: [
-                        PermissionModeChip(
-                          mode: permissionMode,
-                          enabled: !running && !uploading,
-                          inverted: true,
-                          onPressed: () => showPermissionModePicker(
-                            context,
-                            selected: permissionMode,
-                            allowBypassPermissions: allowBypassPermissions,
-                            onSelected: onPermissionModeSelected,
-                          ),
-                        ),
-                        const Spacer(),
-                        Text(
-                          stopping
-                              ? '正在停止任务'
-                              : running
-                              ? '信号传输中'
-                              : uploading
-                              ? '正在上传'
-                              : connected
-                              ? '命令就绪'
-                              : offline
-                              ? '连接已中断'
-                              : '正在握手',
-                          style: TextStyle(
-                            color: stopping
-                                ? AppColors.warning
-                                : running || connected
-                                ? AppColors.accent
-                                : offline
-                                ? AppColors.stop
-                                : AppColors.muted,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                        const SizedBox(width: 7),
-                      ],
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.only(top: 1),
-                      child: SignalTrack(
-                        color: stopping
-                            ? AppColors.warning
-                            : running || connected
-                            ? AppColors.accent
-                            : offline
-                            ? AppColors.stop
-                            : AppColors.warning,
-                        active: (running && !stopping) || uploading,
-                        broken: offline,
-                      ),
-                    ),
                     if (attachments.isNotEmpty) ...[
-                      const SizedBox(height: 4),
                       PendingAttachmentStrip(
                         attachments: attachments,
                         uploading: uploading,
                         onRemove: (attachment) =>
                             onRemoveAttachment?.call(attachment),
                       ),
-                      const SizedBox(height: 4),
+                      const SizedBox(height: 6),
                     ],
+                    TextField(
+                      controller: controller,
+                      enabled: !running && !uploading,
+                      cursorColor: AppColors.terracotta,
+                      style: const TextStyle(
+                        color: AppColors.ink,
+                        fontSize: 15,
+                        height: 1.45,
+                        fontWeight: FontWeight.w400,
+                      ),
+                      minLines: 1,
+                      maxLines: 3,
+                      decoration: InputDecoration(
+                        filled: false,
+                        hintText: uploading
+                            ? '正在上传附件…'
+                            : stopping
+                            ? '等待主机确认停止'
+                            : running
+                            ? 'Claude 正在输出…'
+                            : connected
+                            ? '输入要发给 Claude Code 的内容'
+                            : '正在连接电脑端',
+                        hintStyle: const TextStyle(
+                          color: AppColors.inactive,
+                          fontSize: 14,
+                        ),
+                        border: InputBorder.none,
+                        enabledBorder: InputBorder.none,
+                        focusedBorder: InputBorder.none,
+                        isDense: true,
+                        contentPadding: const EdgeInsets.fromLTRB(2, 2, 2, 8),
+                      ),
+                    ),
                     Row(
-                      crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        SizedBox(
-                          width: 40,
-                          height: 40,
-                          child: IconButton(
-                            onPressed: running || uploading || !connected
-                                ? null
-                                : onAddAttachment,
-                            icon: const Icon(
-                              Icons.add_circle_outline_rounded,
-                              size: 20,
-                            ),
-                            tooltip: '添加附件',
-                            color: AppColors.accent,
-                          ),
-                        ),
-                        Expanded(
-                          child: TextField(
-                            controller: controller,
-                            enabled: !running && !uploading,
-                            cursorColor: AppColors.mint,
-                            style: const TextStyle(
-                              color: AppColors.porcelain,
-                              fontSize: 15,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            minLines: 1,
-                            maxLines: 3,
-                            decoration: InputDecoration(
-                              filled: false,
-                              hintText: uploading
-                                  ? '正在上传附件…'
-                                  : running
-                                  ? 'Claude 正在输出…'
-                                  : connected
-                                  ? '输入要发给 Claude Code 的内容'
-                                  : offline
-                                  ? '电脑端离线，请先重连'
-                                  : '正在连接电脑端',
-                              hintStyle: TextStyle(
-                                color: AppColors.codeMuted.withValues(
-                                  alpha: 0.92,
+                        _ComposerIconButton(
+                          key: const ValueKey('composer-expand-button'),
+                          tooltip: '添加内容和设置权限',
+                          icon: Icons.add_rounded,
+                          onPressed: running || uploading || !connected
+                              ? null
+                              : () => showComposerToolsSheet(
+                                  context,
+                                  permissionMode: permissionMode,
+                                  allowBypassPermissions:
+                                      allowBypassPermissions,
+                                  onPermissionModeSelected:
+                                      onPermissionModeSelected,
+                                  onAddAttachment: onAddAttachment,
                                 ),
-                                fontSize: 14,
-                              ),
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                              isDense: true,
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 10,
-                              ),
-                            ),
-                          ),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 4),
+                        _ComposerModelButton(
+                          modelName: modelName,
+                          selectedModel: selectedModel,
+                          onPressed: onModelPressed,
+                        ),
+                        const Spacer(),
                         if (running)
                           SignalPressEffect(
                             enabled: !stopping,
-                            child: SizedBox(
-                              height: 40,
-                              child: FilledButton.icon(
+                            child: SizedBox.square(
+                              dimension: AppSizes.touchTarget,
+                              child: IconButton(
+                                key: const ValueKey('composer-primary-action'),
                                 onPressed: stopping ? null : onStop,
-                                icon: stopping
-                                    ? const SizedBox.square(
-                                        dimension: 16,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          color: Colors.white,
-                                        ),
-                                      )
-                                    : const Icon(Icons.stop_rounded, size: 18),
-                                label: Text(stopping ? '停止中' : '停止'),
-                                style: FilledButton.styleFrom(
-                                  backgroundColor: stopping
-                                      ? AppColors.warning
-                                      : AppColors.stop,
-                                  disabledBackgroundColor: AppColors.warning,
-                                  disabledForegroundColor: Colors.white,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 14,
+                                tooltip: stopping ? '等待主机确认停止' : '停止',
+                                padding: EdgeInsets.zero,
+                                icon: Container(
+                                  key: const ValueKey(
+                                    'composer-primary-visual',
                                   ),
-                                  shape: RoundedRectangleBorder(
+                                  width: AppSizes.iconControl,
+                                  height: AppSizes.iconControl,
+                                  decoration: BoxDecoration(
+                                    color: stopping
+                                        ? AppColors.control
+                                        : AppColors.danger,
                                     borderRadius: BorderRadius.circular(
                                       AppRadii.control,
                                     ),
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: Icon(
+                                    Icons.stop_rounded,
+                                    size: 20,
+                                    color: stopping
+                                        ? AppColors.inactive
+                                        : AppColors.surfaceElevated,
                                   ),
                                 ),
                               ),
@@ -5851,37 +5604,48 @@ class PromptBar extends StatelessWidget {
                           )
                         else if (uploading)
                           const SizedBox(
-                            width: 40,
-                            height: 40,
-                            child: Padding(
-                              padding: EdgeInsets.all(10),
+                            width: AppSizes.touchTarget,
+                            height: AppSizes.touchTarget,
+                            child: Center(
                               child: CircularProgressIndicator(
                                 strokeWidth: 2.2,
+                                color: AppColors.terracotta,
                               ),
                             ),
                           )
                         else
                           SignalPressEffect(
                             enabled: canSend,
-                            child: SizedBox(
-                              width: 40,
-                              height: 40,
-                              child: IconButton.filled(
+                            child: SizedBox.square(
+                              dimension: AppSizes.touchTarget,
+                              child: IconButton(
+                                key: const ValueKey('composer-primary-action'),
                                 onPressed: canSend ? onSend : null,
-                                icon: const Icon(
-                                  Icons.arrow_upward_rounded,
-                                  size: 19,
-                                ),
-                                tooltip: '发送',
-                                style: IconButton.styleFrom(
-                                  backgroundColor: AppColors.accent,
-                                  disabledBackgroundColor: AppColors.line,
-                                  foregroundColor: AppColors.ink,
-                                  fixedSize: const Size.square(40),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(13),
+                                padding: EdgeInsets.zero,
+                                icon: Container(
+                                  key: const ValueKey(
+                                    'composer-primary-visual',
+                                  ),
+                                  width: AppSizes.iconControl,
+                                  height: AppSizes.iconControl,
+                                  decoration: BoxDecoration(
+                                    color: canSend
+                                        ? AppColors.terracotta
+                                        : AppColors.control,
+                                    borderRadius: BorderRadius.circular(
+                                      AppRadii.control,
+                                    ),
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: Icon(
+                                    Icons.arrow_upward_rounded,
+                                    size: 20,
+                                    color: canSend
+                                        ? AppColors.surfaceElevated
+                                        : AppColors.inactive,
                                   ),
                                 ),
+                                tooltip: '发送',
                               ),
                             ),
                           ),
@@ -5896,6 +5660,142 @@ class PromptBar extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ComposerIconButton extends StatelessWidget {
+  const _ComposerIconButton({
+    super.key,
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.square(
+      dimension: AppSizes.touchTarget,
+      child: IconButton(
+        onPressed: onPressed,
+        tooltip: tooltip,
+        padding: EdgeInsets.zero,
+        icon: Container(
+          key: const ValueKey('composer-expand-visual'),
+          width: AppSizes.iconControl,
+          height: AppSizes.iconControl,
+          decoration: BoxDecoration(
+            color: onPressed == null ? AppColors.paper : AppColors.control,
+            borderRadius: BorderRadius.circular(AppRadii.control),
+          ),
+          alignment: Alignment.center,
+          child: Icon(icon, size: 20),
+        ),
+      ),
+    );
+  }
+}
+
+class _ComposerModelButton extends StatelessWidget {
+  const _ComposerModelButton({
+    required this.modelName,
+    required this.selectedModel,
+    this.onPressed,
+  });
+
+  final String? modelName;
+  final ClaudeModelPreference selectedModel;
+  final VoidCallback? onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final label = selectedModel == ClaudeModelPreference.followComputer
+        ? modelName == null
+              ? '模型'
+              : formatModelName(modelName!)
+        : selectedModel.label;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(minHeight: AppSizes.touchTarget),
+      child: TextButton.icon(
+        key: const ValueKey('composer-model-button'),
+        onPressed: onPressed,
+        icon: const Icon(Icons.memory_outlined, size: 17),
+        label: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+        style: TextButton.styleFrom(
+          foregroundColor: AppColors.ink,
+          backgroundColor: AppColors.control,
+          minimumSize: const Size(72, AppSizes.iconControl),
+          maximumSize: const Size(142, AppSizes.touchTarget),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(AppRadii.pill),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Future<void> showComposerToolsSheet(
+  BuildContext context, {
+  required PermissionMode permissionMode,
+  required bool allowBypassPermissions,
+  required ValueChanged<PermissionMode> onPermissionModeSelected,
+  VoidCallback? onAddAttachment,
+}) async {
+  final action = await showModalBottomSheet<String>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetContext) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '输入选项',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            ListTile(
+              key: const ValueKey('composer-add-attachment'),
+              contentPadding: EdgeInsets.zero,
+              enabled: onAddAttachment != null,
+              leading: const Icon(Icons.attach_file_rounded),
+              title: const Text('添加附件'),
+              onTap: onAddAttachment == null
+                  ? null
+                  : () => Navigator.pop(sheetContext, 'attachment'),
+            ),
+            ListTile(
+              key: const ValueKey('permission-mode-chip'),
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(permissionMode.icon),
+              title: const Text('权限模式'),
+              subtitle: Text(permissionMode.label),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => Navigator.pop(sheetContext, 'permission'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+  if (!context.mounted || action == null) return;
+  if (action == 'attachment') {
+    onAddAttachment?.call();
+    return;
+  }
+  await showPermissionModePicker(
+    context,
+    selected: permissionMode,
+    allowBypassPermissions: allowBypassPermissions,
+    onSelected: onPermissionModeSelected,
+  );
 }
 
 class PendingAttachmentStrip extends StatelessWidget {
@@ -5965,6 +5865,7 @@ class PendingAttachmentStrip extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           fontSize: 12,
+                          height: 1.2,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
@@ -5975,7 +5876,8 @@ class PendingAttachmentStrip extends StatelessWidget {
                             : formatAttachmentSize(attachment.size),
                         style: const TextStyle(
                           color: AppColors.muted,
-                          fontSize: 11,
+                          fontSize: 12,
+                          height: 1.2,
                         ),
                       ),
                     ],
@@ -6213,10 +6115,14 @@ class CommandSuggestions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GlassPanel(
+    return Container(
       key: const ValueKey('command-suggestions'),
-      radius: AppRadii.control,
       padding: const EdgeInsets.symmetric(vertical: 6),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceElevated,
+        borderRadius: BorderRadius.circular(AppRadii.control),
+        border: Border.all(color: AppColors.line),
+      ),
       child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: maxHeight),
         child: loading
@@ -6283,19 +6189,16 @@ class ScanFrame extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: AppColors.porcelain,
-        borderRadius: BorderRadius.circular(compact ? 20 : 30),
-        border: Border.all(color: AppColors.ink, width: 1.8),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.yellow,
-            blurRadius: 0,
-            offset: Offset(compact ? 5 : 7, compact ? 6 : 8),
-          ),
-        ],
+        color: AppColors.surfaceElevated,
+        borderRadius: BorderRadius.circular(
+          compact ? AppRadii.surface : AppRadii.header,
+        ),
+        border: Border.all(color: AppColors.line),
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(compact ? 18 : 28),
+        borderRadius: BorderRadius.circular(
+          compact ? AppRadii.surface - 1 : AppRadii.header - 1,
+        ),
         child: Stack(
           children: [
             Center(child: child),
@@ -6308,15 +6211,16 @@ class ScanFrame extends StatelessWidget {
                   vertical: compact ? 4 : 6,
                 ),
                 decoration: BoxDecoration(
-                  color: AppColors.mintSoft,
-                  borderRadius: BorderRadius.circular(AppRadii.pill),
-                  border: Border.all(color: AppColors.ink, width: 1.2),
+                  color: AppColors.surfaceElevated,
+                  borderRadius: BorderRadius.circular(AppRadii.compact),
+                  border: Border.all(color: AppColors.line),
                 ),
                 child: Text(
                   '对准二维码',
                   style: TextStyle(
-                    fontSize: compact ? 10 : 12,
-                    fontWeight: FontWeight.w800,
+                    color: AppColors.muted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ),
@@ -6411,6 +6315,9 @@ class _ChatBackgroundLayer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (preference.kind == ChatBackgroundKind.defaultStyle) {
+      return const ColoredBox(color: AppColors.paper);
+    }
     if (preference.kind == ChatBackgroundKind.localImage &&
         preference.imagePath != null) {
       final width =
@@ -6423,11 +6330,7 @@ class _ChatBackgroundLayer extends StatelessWidget {
       return Stack(
         fit: StackFit.expand,
         children: [
-          const _DecorativeBackground(
-            backgroundColor: AppColors.bgMid,
-            topColor: AppColors.mintSoft,
-            bottomColor: AppColors.yellowSoft,
-          ),
+          const ColoredBox(color: AppColors.paper),
           Semantics(
             excludeSemantics: true,
             child: Image.file(
@@ -6437,11 +6340,8 @@ class _ChatBackgroundLayer extends StatelessWidget {
               cacheWidth: width,
               filterQuality: FilterQuality.low,
               gaplessPlayback: true,
-              errorBuilder: (_, _, _) => const _DecorativeBackground(
-                backgroundColor: AppColors.bgMid,
-                topColor: AppColors.mintSoft,
-                bottomColor: AppColors.yellowSoft,
-              ),
+              errorBuilder: (_, _, _) =>
+                  const ColoredBox(color: AppColors.paper),
             ),
           ),
           ColoredBox(
@@ -6450,76 +6350,13 @@ class _ChatBackgroundLayer extends StatelessWidget {
         ],
       );
     }
-    final colors = switch (preference.preset) {
-      ChatBackgroundPreset.mint => const (
-        background: Color(0xFFE8F7EF),
-        top: Color(0xFFC8F3DF),
-        bottom: Color(0xFFFFF0B8),
-      ),
-      ChatBackgroundPreset.sunrise => const (
-        background: Color(0xFFFFF4DE),
-        top: Color(0xFFFFD8C8),
-        bottom: Color(0xFFFFE99A),
-      ),
-      ChatBackgroundPreset.rose => const (
-        background: Color(0xFFF7E9E4),
-        top: Color(0xFFFFD2C4),
-        bottom: Color(0xFFD9F1E6),
-      ),
-      null => const (
-        background: AppColors.bgMid,
-        top: AppColors.mintSoft,
-        bottom: AppColors.yellowSoft,
-      ),
+    final color = switch (preference.preset) {
+      ChatBackgroundPreset.mint => const Color(0xFFF0EEE6),
+      ChatBackgroundPreset.sunrise => const Color(0xFFF3E7E0),
+      ChatBackgroundPreset.rose => const Color(0xFFE9E4DA),
+      null => AppColors.paper,
     };
-    return _DecorativeBackground(
-      backgroundColor: colors.background,
-      topColor: colors.top,
-      bottomColor: colors.bottom,
-    );
-  }
-}
-
-class _DecorativeBackground extends StatelessWidget {
-  const _DecorativeBackground({
-    required this.backgroundColor,
-    required this.topColor,
-    required this.bottomColor,
-  });
-
-  final Color backgroundColor;
-  final Color topColor;
-  final Color bottomColor;
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        ColoredBox(color: backgroundColor),
-        Positioned(
-          right: -74,
-          top: -86,
-          child: Container(
-            width: 210,
-            height: 210,
-            decoration: BoxDecoration(color: topColor, shape: BoxShape.circle),
-          ),
-        ),
-        Positioned(
-          left: -92,
-          bottom: 54,
-          child: Container(
-            width: 190,
-            height: 190,
-            decoration: BoxDecoration(
-              color: bottomColor,
-              shape: BoxShape.circle,
-            ),
-          ),
-        ),
-      ],
-    );
+    return ColoredBox(color: color);
   }
 }
 
@@ -6542,8 +6379,8 @@ class _KeyboardResizeBody extends StatelessWidget {
   }
 }
 
-class GlassPanel extends StatelessWidget {
-  const GlassPanel({
+class WarmSheetSurface extends StatelessWidget {
+  const WarmSheetSurface({
     super.key,
     required this.child,
     this.padding = const EdgeInsets.all(16),
@@ -6558,26 +6395,14 @@ class GlassPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: AppColors.porcelain,
+        color: AppColors.surfaceElevated,
         borderRadius: BorderRadius.circular(radius),
-        border: Border.all(color: AppColors.ink, width: 1.25),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.ink.withValues(alpha: 0.09),
-            blurRadius: 0,
-            offset: const Offset(3, 4),
-          ),
-          BoxShadow(
-            color: AppColors.ink.withValues(alpha: 0.055),
-            blurRadius: 24,
-            offset: const Offset(0, 12),
-          ),
-        ],
+        border: Border.all(color: AppColors.line),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(radius - 1),
         child: ColoredBox(
-          color: AppColors.porcelain,
+          color: AppColors.surfaceElevated,
           child: Padding(
             padding: padding,
             child: SizedBox(width: double.infinity, child: child),
@@ -6613,40 +6438,34 @@ class ScreenTitle extends StatelessWidget {
   }
 }
 
-class StatusPill extends StatelessWidget {
-  const StatusPill({super.key, required this.label, required this.color});
+class StatusLabel extends StatelessWidget {
+  const StatusLabel({
+    super.key,
+    required this.icon,
+    required this.label,
+    required this.color,
+  });
 
+  final IconData icon;
   final String label;
   final Color color;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.10),
-        borderRadius: BorderRadius.circular(AppRadii.pill),
-        border: Border.all(color: color.withValues(alpha: 0.14)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 7,
-            height: 7,
-            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 17, color: color),
+        const SizedBox(width: 5),
+        Text(
+          label,
+          style: TextStyle(
+            color: color,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
           ),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -6691,14 +6510,12 @@ class PromptChip extends StatelessWidget {
     required this.onTap,
     this.icon,
     this.caption,
-    this.tone = AppColors.porcelain,
   });
 
   final String label;
   final VoidCallback onTap;
   final IconData? icon;
   final String? caption;
-  final Color tone;
 
   @override
   Widget build(BuildContext context) {
@@ -6706,21 +6523,14 @@ class PromptChip extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(22),
+        borderRadius: BorderRadius.circular(AppRadii.control),
         child: Ink(
           width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(14, 13, 12, 13),
+          padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-            color: tone,
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: AppColors.ink, width: 1.4),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.ink.withValues(alpha: 0.12),
-                blurRadius: 0,
-                offset: const Offset(3, 4),
-              ),
-            ],
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(AppRadii.control),
+            border: Border.all(color: AppColors.line),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -6729,33 +6539,23 @@ class PromptChip extends StatelessWidget {
               Row(
                 children: [
                   if (icon != null)
-                    Container(
-                      width: 31,
-                      height: 31,
-                      decoration: BoxDecoration(
-                        color: AppColors.porcelain,
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: AppColors.ink, width: 1.2),
-                      ),
-                      alignment: Alignment.center,
-                      child: Icon(icon, size: 17, color: AppColors.ink),
-                    ),
+                    Icon(icon, size: 20, color: AppColors.terracottaDeep),
                   const Spacer(),
                   const Icon(
                     Icons.north_east_rounded,
-                    size: 17,
-                    color: AppColors.ink,
+                    size: 18,
+                    color: AppColors.inactive,
                   ),
                 ],
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 10),
               Text(
                 label,
                 style: const TextStyle(
                   color: AppColors.ink,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: -0.25,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.1,
                 ),
               ),
               if (caption != null) ...[
@@ -6765,9 +6565,9 @@ class PromptChip extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
-                    color: AppColors.ink,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w600,
+                    color: AppColors.muted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
               ],
@@ -6791,7 +6591,8 @@ class MonoText extends StatelessWidget {
       overflow: TextOverflow.ellipsis,
       style: const TextStyle(
         color: AppColors.muted,
-        fontFamily: 'monospace',
+        fontFamily: AppTypography.codeFontFamily,
+        fontFamilyFallback: AppTypography.codeFontFamilyFallback,
         fontSize: 13,
       ),
     );
