@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -500,7 +501,7 @@ void main() {
     final pairDecoration = pairPanel.decoration! as BoxDecoration;
     expect(pairDecoration.color, AppColors.surface);
     expect(pairDecoration.boxShadow, isNull);
-    expect(find.byIcon(Icons.computer_rounded), findsOneWidget);
+    expect(find.byIcon(LucideIcons.monitor), findsOneWidget);
     expect(find.text('相机已就绪'), findsOneWidget);
   });
 
@@ -526,7 +527,11 @@ void main() {
       ),
     );
 
-    await openSettingsFromHeader(tester);
+    await openSessionMenu(tester);
+    expect(find.bySemanticsLabel('当前模型 Opus 4.8'), findsOneWidget);
+    expect(find.textContaining('上下文'), findsNothing);
+    await tester.tap(find.text('设置').last);
+    await tester.pumpAndSettle();
     expect(find.text('退出配对'), findsOneWidget);
     expect(find.text('重新连接'), findsOneWidget);
     expect(find.text('后台通知'), findsOneWidget);
@@ -1515,6 +1520,97 @@ void main() {
     expect(messages.last.activityState, ActivityState.running);
   });
 
+  test('console presentation prioritizes offline over stale run facts', () {
+    final presentation = ConsolePresentation.resolve(
+      connected: false,
+      offline: true,
+      running: true,
+      stopping: false,
+      uploading: false,
+    );
+
+    expect(presentation.phase, ConsolePhase.offline);
+    expect(presentation.statusLabel, '连接已断开');
+    expect(presentation.showsReconnect, isTrue);
+    expect(presentation.showsStop, isFalse);
+    expect(presentation.canCompose, isFalse);
+  });
+
+  test('terminal evidence only applies to the current turn', () {
+    final messages = <TranscriptMessage>[
+      TranscriptMessage.user('第一轮'),
+      TranscriptMessage.system('已停止'),
+      TranscriptMessage.user('第二轮'),
+      TranscriptMessage.system('停止请求未确认，任务仍在运行'),
+    ];
+
+    expect(hasConfirmedStopEvidence(messages), isFalse);
+    expect(hasStopTimeoutEvidence(messages), isTrue);
+    expect(hasCurrentFailureEvidence(messages), isFalse);
+
+    messages.add(TranscriptMessage.system('错误：命令失败'));
+    expect(hasCurrentFailureEvidence(messages), isTrue);
+  });
+
+  testWidgets('stop timeout remains actionable with the minimal header', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    var stopCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: AppBackground(
+          child: ChatScreen(
+            session: SavedSession(
+              origin: Uri.parse('https://cc-remote.example.com'),
+              token: 'demo',
+              deviceName: 'My PC',
+              workspaceDir: 'cc-remote',
+            ),
+            running: true,
+            connected: true,
+            offline: false,
+            modelName: 'claude-opus-4-8',
+            contextWindow: 200000,
+            remainingContext: 174919,
+            messages: [
+              TranscriptMessage.user('停止当前任务'),
+              TranscriptMessage.system('停止请求未确认，任务仍在运行'),
+            ],
+            commands: const [],
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: false,
+            pendingPermissions: const [],
+            respondingPermissionIds: const {},
+            promptController: controller,
+            onFillPrompt: (_) {},
+            onReconnect: () {},
+            onOpenSettings: () {},
+            onOpenModelPicker: () {},
+            onNewConversation: () {},
+            onOpenSessions: () {},
+            onOpenWorkspace: () {},
+            onPermissionModeSelected: (_) {},
+            onPermissionAllow: (_) {},
+            onPermissionDeny: (_) {},
+            onSend: () {},
+            onStop: () => stopCount += 1,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.textContaining('My PC'), findsNothing);
+    expect(find.text('主机未确认停止，可再次尝试'), findsOneWidget);
+    expect(find.byTooltip('再次停止'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('composer-primary-action')));
+    expect(stopCount, 1);
+  });
+
   testWidgets('running state does not show a chat progress bar', (
     tester,
   ) async {
@@ -1561,7 +1657,9 @@ void main() {
       ),
     );
 
-    expect(find.text('运行中  My PC'), findsOneWidget);
+    expect(find.text('CC Remote'), findsNothing);
+    expect(find.text('cc-remote'), findsNothing);
+    expect(find.textContaining('My PC'), findsNothing);
     expect(find.byKey(const ValueKey('session-header')), findsOneWidget);
     expect(find.byKey(const ValueKey('composer-model-button')), findsOneWidget);
     final newConversation = tester.widget<IconButton>(
@@ -1574,7 +1672,7 @@ void main() {
     expect(find.byType(LinearProgressIndicator), findsNothing);
   });
 
-  testWidgets('idle connection state does not imply the task was stopped', (
+  testWidgets('minimal header omits redundant identity and status copy', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -1605,7 +1703,10 @@ void main() {
       ),
     );
 
-    expect(find.text('已连接  My PC'), findsOneWidget);
+    expect(find.text('CC Remote'), findsNothing);
+    expect(find.text('cc-remote'), findsNothing);
+    expect(find.textContaining('My PC'), findsNothing);
+    expect(find.textContaining('已连接'), findsNothing);
     expect(find.textContaining('已停止'), findsNothing);
   });
 
@@ -1733,7 +1834,7 @@ void main() {
   });
 
   testWidgets(
-    'compact session header does not overflow with scaled device text',
+    'minimal session controls keep Claude-style geometry with large text',
     (tester) async {
       tester.view.physicalSize = const Size(393, 852);
       tester.view.devicePixelRatio = 1;
@@ -1783,6 +1884,17 @@ void main() {
         tester.getSize(find.byKey(const ValueKey('session-header'))).height,
         AppSizes.sessionHeader,
       );
+      expect(
+        tester.getSize(find.byKey(const ValueKey('session-menu-surface'))),
+        const Size.square(AppSizes.touchTarget),
+      );
+      expect(
+        tester.getSize(find.byKey(const ValueKey('session-actions-surface'))),
+        const Size(AppSizes.touchTarget * 2, AppSizes.touchTarget),
+      );
+      expect(find.byTooltip('项目与会话'), findsOneWidget);
+      expect(find.byTooltip('新对话'), findsOneWidget);
+      expect(find.byTooltip('更多'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );

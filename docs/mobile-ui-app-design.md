@@ -2,9 +2,9 @@
 
 ## 文档状态
 
-本文定义下一轮 Flutter UI 重构目标，视觉依据是当前 Penpot 的 11 张 `CCR / 01` 至 `CCR / 11` 画板。根目录 [`DESIGN.md`](../DESIGN.md) 是颜色、排版、圆角、间距和共享组件的规范源；本文负责页面流程、状态映射和工程验收。
+本文记录 Flutter Warm Console 的当前实现规格与后续验收目标，视觉依据是 Penpot 的 11 张 `CCR / 01` 至 `CCR / 11` 画板和已落地的 Flutter 组件。根目录 [`DESIGN.md`](../DESIGN.md) 是颜色、排版、圆角、间距和共享组件的规范源；本文负责页面流程、状态映射和工程验收。
 
-截至本文更新，`mobile/lib/main.dart` 与 `mobile/lib/signal_console_theme.dart` 仍实现上一版 Signal Console。旧代码可以复用网络、会话、附件、权限和 transcript 行为，但旧的薄荷绿、亮黄、黑色 Command Dock、偏移阴影、大黑描边、角色插画和卡片几何不是下一版视觉依据。
+截至 2026-08-14，`mobile/lib/main.dart`、`mobile/lib/signal_console_theme.dart` 与 `mobile/lib/workspace_drawer.dart` 已完成 Warm Console 主界面、设置/菜单、Composer 和 Lucide 图标迁移，并保持原有网络、会话、附件、权限和 transcript 行为。公开的 `v1.1.0` APK 仍使用上一版界面；当前开发版本尚待 Android 真机视觉验收和恢复终态的继续补齐。
 
 ## 目标与非目标
 
@@ -33,7 +33,7 @@
 - 视觉图标按钮可为 36×36，实际命中区至少 44×44。
 - 图标统一为 20/24px 线性风格，不能混用 Unicode、Material 实心图标和自绘字符。
 
-完整 token 见 [`DESIGN.md`](../DESIGN.md)。
+完整设计 token 见 [`DESIGN.md`](../DESIGN.md)。
 
 ## 页面与画板映射
 
@@ -63,12 +63,12 @@
 
 页面从上到下只有四层：
 
-1. 紧凑会话头。
+1. 分离式浮动会话控制。
 2. transcript 正文。
 3. 当前活动与已完成证据。
 4. 底部 Composer。
 
-会话头将菜单、产品名、会话名、连接状态、设备名、新建和更多融合在一个 350px 表面。会话名是主信息，状态和设备是次级信息；模型移入 Composer，路径与上下文移入菜单或 sheet，不再撑高顶部。
+顶部参考 Claude 手机端：左侧仅保留圆形菜单，右侧是新建与更多组成的短胶囊，中间不显示产品名、会话名、连接状态或设备名。模型留在 Composer，路径和设备信息进入设置或 sheet，剩余上下文 token 不显示。
 
 用户消息使用暖灰气泡；Claude 连续回复优先直接排在纸面上，并使用衬线阅读字体。当前活动可展开，已完成活动折叠为一行。运行中必须始终能看到停止入口。
 
@@ -159,10 +159,11 @@
 
 ### CompactSessionHeader
 
-- 建议由现有 `ConnectionHeader` 重构，不保留 `LegacyConnectionHeader`。
-- 高度约 76px，单一暖纸表面，无偏移阴影。
-- 左侧菜单，中间会话身份与状态，右侧新建和更多。
-- 设备、路径、模型和上下文按重要性分流到菜单、sheet 或 Composer。
+- 当前实现由 `ConnectionHeader` 承担，不保留 `LegacyConnectionHeader`。
+- 高度 44px，不再使用整宽暖纸表面。
+- 左侧是独立圆形菜单；右侧是 88×44px 的新建/更多胶囊；中间透明留空。
+- 不重复显示产品名、会话名、连接状态和设备名；恢复事实在 transcript / Composer 等任务相关位置表达。
+- 设备与路径分流到设置或 sheet；模型保留在 Composer，“···”菜单底栏最多显示模型名，不显示剩余上下文 token。
 
 ### TranscriptView
 
@@ -174,14 +175,16 @@
 
 - 复用现有 `ActivityKind` 与 `ActivityState`。
 - 当前 running 事件为完整卡；done/stopped 事件默认折叠；error 事件保留错误摘要。
+- thinking running 使用 brain 图标与原生脉冲；其他活动 running 使用 `CircularProgressIndicator`。
 - 任务轨只在活动局部出现，不贯穿整屏。
 
 ### Composer
 
 - 标准视觉尺寸 350×110，16px 圆角。
-- 上方是可增长文本区；下方依次为扩展、模型、发送或停止。
+- 上方是可增长文本区；下方工具行贴底，依次为圆形扩展、暖色模型胶囊、陶土色圆形发送或停止。
 - 扩展按钮打开附件和权限模式；权限模式不再常驻一整行。
 - 模型选择使用紧凑胶囊。
+- 模型旁不显示剩余上下文 token，上下文数据不改变指令建议区高度。
 - 视觉控制为 36px，命中区为 44px。
 - 附件预览显示在输入台上方或输入台内部的可滚动短条，不改变核心控制顺序。
 - 斜杠指令建议限制在最多三个首选项，完整结果可继续滚动。
@@ -212,21 +215,19 @@
 | 等待权限 | `pendingPermissions.isNotEmpty` | 允许一次或拒绝 | 一次处理一个请求 |
 | 上传中 | `uploadingAttachments` | 取消或等待 | 禁止切换会话与发送 |
 
-UI 可以把这些事实映射为视图模型，但第一轮不必引入新的全局状态机对象。只有当 `main.dart` 的布尔组合持续产生冲突，才拆出独立 controller。
+UI 直接把这些事实映射为当前视图，不引入新的全局状态机对象。只有当 `main.dart` 的布尔组合持续产生冲突，才拆出独立 controller。
 
 ## 图标规范
 
-第一轮实现优先选择一种方案并全局统一：
+当前实现已全局统一使用 `lucide_icons_flutter` 3.1.15。主界面与工作区不再混用 Material Icons；本轮未引入 `flutter_svg` 或额外图标资产。
 
-1. 使用单一 Flutter 线性图标包，并锁定版本。
-2. 将 Penpot 同源的 SVG 作为本地资产，通过 `flutter_svg` 渲染。
-3. 若继续使用 Material Icons，只选 outline/rounded 中同一风格，并补齐尺寸与描边差异。
-
-开始实现前需要在 pub.dev 或官方仓库验证包的维护状态、许可证和当前版本。本文不锁定未经验证的第三方依赖。
+思考态使用 Lucide `brain`，普通活动 running 继续使用 Flutter 原生 `CircularProgressIndicator`。不使用 `flutter_animate`；入场动效被移除，保留思考脉冲、`SignalPressEffect` 和其他已有原生反馈。
 
 必须统一的首批图标：menu、more-horizontal、plus、chevron-left/right/down、arrow-up、stop-square、rotate-cw、monitor、monitor-off、terminal、file-diff、check、alert-circle。
 
-## 建议代码改造顺序
+## 实现进度与后续顺序
+
+截至 2026-08-14，Phase 1 的主题、会话头、活动展示、Composer、设置/菜单与 Lucide 图标迁移已落地。Phase 3 已先用共享 `ConsolePresentation` 统一 Header 与 Composer 的状态语义；后续工作主要是恢复信息面板、重连失败事实和逐屏真机验收。
 
 ### Phase 1：设计基础与主控制台
 
@@ -244,7 +245,8 @@ UI 可以把这些事实映射为视图模型，但第一轮不必引入新的�
 
 ### Phase 3：恢复与终态
 
-- 用共享 RecoveryState 覆盖离线、失败、停止中、已停止和停止超时。
+- 已用纯展示映射覆盖离线、失败、停止中、已停止和停止超时；停止/失败终态从当前轮权威 transcript 证据推导，不新增第二套全局状态源。
+- 待补共享恢复信息面板，统一事实说明、保留内容和单一主动作的位置。
 - 仅在有真实连接失败事实时增加 11 重连失败状态。
 - 对本地草稿、未确认 prompt 与重连信息建立可测试的显示规则。
 
@@ -268,6 +270,8 @@ flutter test
 
 - 紧凑会话头在 390×844、小屏和大字体下不溢出。
 - Composer 视觉控制 36px、语义命中区至少 44px，键盘出现不遮挡。
+- “···”菜单不显示上下文 token，保留模型名时具有“当前模型”屏读语义。
+- 思考态使用 brain 图标，其他活动 running 仍使用原生进度指示器，测试结束无 pending Timer。
 - 权限页仅允许一次或拒绝，处理中禁用重复点击。
 - 离线保留 transcript、草稿与附件，重连动作可达。
 - stopping、stopped 和 stop-timeout 三态互不混淆。

@@ -4,9 +4,11 @@ Flutter 手机 App，用于扫码配对本机 CC Remote daemon，并远程控制
 
 ## 当前能力
 
-App 已支持扫码确认、Secure Storage、启动恢复、WebSocket 自动重连、活动任务恢复、流式对话、停止任务、斜杠指令、Markdown、模型与剩余上下文、六种权限模式、一次性工具审批、多项目与多会话、只读工作区、Git diff、图片与文件附件，以及 Android 后台本地通知。
+App 已支持扫码确认、Secure Storage、启动恢复、WebSocket 自动重连、活动任务恢复、流式对话、停止任务、斜杠指令、Markdown、模型选择与上下文状态同步、六种权限模式、一次性工具审批、多项目与多会话、只读工作区、Git diff、图片与文件附件，以及 Android 后台本地通知。
 
-当前发布代码仍是浅色活力 Signal Console。下一轮已在 Penpot 和根目录 `DESIGN.md` 确定为“暖纸控制台 / Warm Console”：紧凑会话头、内容优先 transcript、单行活动状态和 110px 暖白 Composer，并补齐配对、会话选择、权限、Diff、断线、失败、停止中、已停止、停止超时和重连失败状态。改造将保持现有协议与可靠性行为。
+当前开发代码已实现“暖纸控制台 / Warm Console”主界面：Claude 风格的分离式顶部浮动控制、内容优先 transcript、分层活动状态、Warm Console 设置与菜单，以及贴底的暖白 Composer。公开的 `v1.1.0` APK 仍是上一版界面。
+
+Composer 底栏使用圆形扩展按钮、暖色模型胶囊和陶土色圆形发送/停止按钮，不显示剩余上下文 token。“···”菜单底栏最多保留当前模型名，并提供对应屏读语义。主界面和工作区统一使用 `lucide_icons_flutter`；思考态是原生脉冲 brain 图标，活动 running 状态仍使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`。
 
 ## 开发运行
 
@@ -104,4 +106,4 @@ App 在后台或锁屏时可以发送任务完成、失败、停止和等待权�
 
 ## 当前验证状态
 
-当前 `master` 通过 `flutter analyze` 和 75 项 Flutter 测试，并已安装过 `v1.1.0` 到 Android 真机确认版本与主界面。第二轮 session resume 与 Stop 长任务均已完成真机验证；Stop 后 daemon 没有残留 Claude 子进程。自动重连、Prompt 确认去重、活动任务恢复和 Stop 中间态已由 Flutter 与 daemon 端到端测试覆盖。
+当前开发代码通过 `flutter analyze` 和 83 项 Flutter 测试，包括 Composer 触控尺寸、菜单模型语义、不显示上下文 token、思考计时和活动 running 指示器。`v1.1.0` 已安装到 Android 真机确认版本与主界面；本轮 Warm Console 改动尚待真机视觉验收。第二轮 session resume 与 Stop 长任务均已完成真机验证，Stop 后 daemon 没有残留 Claude 子进程。

@@ -44,6 +44,7 @@ dependencies:
   file_picker: 11.0.2
   http_parser: ^4.1.2
   path_provider: ^2.1.6
+  lucide_icons_flutter: ^3.1.15
 
 dev_dependencies:
   flutter_test:

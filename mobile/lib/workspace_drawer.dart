@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:http/http.dart' as http;
 
 import 'signal_console_theme.dart';
@@ -188,7 +189,7 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
                 ? () => Navigator.pop(context)
                 : () => setState(() => document = null),
             icon: Icon(
-              document == null ? Icons.close_rounded : Icons.arrow_back_rounded,
+              document == null ? LucideIcons.x : LucideIcons.arrowLeft,
             ),
             tooltip: document == null ? '关闭' : '返回文件列表',
           ),
@@ -224,7 +225,7 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
           if (document == null)
             IconButton(
               onPressed: loading ? null : refresh,
-              icon: const Icon(Icons.refresh_rounded),
+              icon: const Icon(LucideIcons.refreshCw),
               tooltip: '刷新工作区',
             ),
         ],
@@ -254,10 +255,10 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
             ),
             child: Row(
               children: [
-                _tabButton(0, Icons.folder_outlined, '文件'),
+                _tabButton(0, LucideIcons.folder, '文件'),
                 _tabButton(
                   1,
-                  Icons.difference_outlined,
+                  LucideIcons.gitCompare,
                   '修改${snapshot == null ? '' : ' ${snapshot!.changes.length}'}',
                 ),
               ],
@@ -316,7 +317,7 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
     }
     if (failed || snapshot == null) {
       return _EmptyState(
-        icon: Icons.cloud_off_outlined,
+        icon: LucideIcons.cloudOff,
         title: '无法读取工作区',
         detail: '检查电脑端连接后再刷新',
         action: refresh,
@@ -328,7 +329,7 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
   Widget _files(WorkspaceSnapshot data) {
     if (data.files.isEmpty) {
       return const _EmptyState(
-        icon: Icons.folder_off_outlined,
+        icon: LucideIcons.folderX,
         title: '当前目录没有可查看的文件',
         detail: '忽略项和构建产物不会显示',
       );
@@ -346,14 +347,14 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
   Widget _changes(WorkspaceSnapshot data) {
     if (!data.gitAvailable) {
       return const _EmptyState(
-        icon: Icons.source_outlined,
+        icon: LucideIcons.fileCode,
         title: '当前目录不是 Git 仓库',
         detail: '文件仍然可以正常查看',
       );
     }
     if (data.changes.isEmpty) {
       return const _EmptyState(
-        icon: Icons.check_circle_outline_rounded,
+        icon: LucideIcons.circleCheck,
         title: '工作区没有修改',
         detail: '当前内容和 Git 记录一致',
       );
@@ -424,7 +425,7 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
     }
     if (current.failed) {
       return const _EmptyState(
-        icon: Icons.description_outlined,
+        icon: LucideIcons.fileText,
         title: '无法显示这个文件',
         detail: '文件可能过大、是二进制内容或已经被删除',
       );
@@ -683,7 +684,7 @@ class _TreeNodeTile extends StatelessWidget {
       shape: const Border(),
       collapsedShape: const Border(),
       leading: const Icon(
-        Icons.folder_rounded,
+        LucideIcons.folder,
         size: 19,
         color: Color(0xFF5E9CAF),
       ),
@@ -955,7 +956,7 @@ class _EmptyState extends StatelessWidget {
               const SizedBox(height: 14),
               TextButton.icon(
                 onPressed: action,
-                icon: const Icon(Icons.refresh_rounded),
+                icon: const Icon(LucideIcons.refreshCw),
                 label: const Text('重新读取'),
               ),
             ],
@@ -976,11 +977,11 @@ IconData _fileIcon(String name) {
       ? name.split('.').last.toLowerCase()
       : '';
   return switch (extension) {
-    'md' => Icons.article_outlined,
-    'json' || 'yaml' || 'yml' => Icons.data_object_rounded,
-    'png' || 'jpg' || 'jpeg' || 'webp' => Icons.image_outlined,
-    'dart' || 'ts' || 'js' || 'tsx' || 'jsx' => Icons.code_rounded,
-    _ => Icons.description_outlined,
+    'md' => LucideIcons.fileText,
+    'json' || 'yaml' || 'yml' => LucideIcons.braces,
+    'png' || 'jpg' || 'jpeg' || 'webp' => LucideIcons.image,
+    'dart' || 'ts' || 'js' || 'tsx' || 'jsx' => LucideIcons.fileCode,
+    _ => LucideIcons.fileText,
   };
 }
 

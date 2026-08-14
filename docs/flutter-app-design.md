@@ -4,7 +4,7 @@
 
 Flutter App 是产品主入口。当前实现集中在少量文件中，优先保证状态一致、断线可恢复和真机布局稳定。
 
-当前代码仍是上一版 Signal Console；下一轮 UI 目标以根目录 `DESIGN.md` 和 `docs/mobile-ui-app-design.md` 为准。改造必须保持本节描述的协议与状态行为，不把 Penpot 草案中尚无数据来源的文案写成事实。
+当前开发代码已实现 Warm Console 主界面，视觉规范以根目录 `DESIGN.md` 和 `docs/mobile-ui-app-design.md` 为准。界面改造保持本节描述的协议与状态行为，不把尚无数据来源的文案写成事实。
 
 ## 入口与路由
 
@@ -14,19 +14,21 @@ Flutter App 是产品主入口。当前实现集中在少量文件中，优先�
 
 ## 主要文件
 
-`main.dart` 包含配对、HTTP、WebSocket、项目与会话、transcript、权限模式、主要页面和组件。`signal_console_theme.dart` 包含颜色、字体、圆角、动效和视觉基础部件；下一轮先在这里建立 Warm Console tokens。`workspace_drawer.dart` 实现文件树、文件阅读和 Git diff。`attachments.dart` 实现相机、相册、文件选择与 multipart 上传。`notification_service.dart` 封装 Android 本地通知和偏好保存。
+`main.dart` 包含配对、HTTP、WebSocket、项目与会话、transcript、权限模式、主要页面和组件。`signal_console_theme.dart` 包含 Warm Console 的颜色、字体、圆角、弹层主题、动效和视觉基础部件。`workspace_drawer.dart` 实现文件树、文件阅读和 Git diff。`attachments.dart` 实现相机、相册、文件选择与 multipart 上传。`notification_service.dart` 封装 Android 本地通知和偏好保存。
 
 ## 页面与组件
 
 `BootstrapScreen` 只显示恢复状态。`PairScreen` 负责相机扫描、紧凑横屏布局和错误恢复。`PairReviewSheet` 在换 token 前确认设备、origin 和二维码有效期。
 
-`ChatScreen` 由 `ConnectionHeader`、`TranscriptView` 和 `PromptBar` 组成。下一轮保留这三个职责，但将连接头重构为单一紧凑会话头：会话身份与连接事实居中，项目、工作区、设置等次级入口进入菜单；模型选择移入输入台。
+`ChatScreen` 由 `ConnectionHeader`、`TranscriptView` 和 `PromptBar` 组成。`ConnectionHeader` 是单一紧凑会话头：会话身份与连接事实居中，项目、工作区和设置等次级入口进入菜单；模型选择位于输入台。“···”菜单不显示剩余上下文 token，底栏最多保留具有屏读语义的当前模型名。
 
 `TranscriptView` 展示用户消息、Claude Markdown 回复、活动状态、审批卡和离线重连卡。`MessageBlock` 与附件组件负责历史内容。`ActivityBlock` 合并思考和工具活动，任务结束后清理临时活动。
 
-`PromptBar` 处理权限模式、附件预览、多行输入、模型选择、发送和停止。下一轮改为 110px 暖白 Composer：上方输入，下方依次为扩展、模型和发送/停止。权限模式进入扩展 sheet，不再常驻一行。输入以 `/` 开头且没有空格时，`CommandSuggestions` 继续按前缀优先规则筛选 daemon 同步的 Claude Code 指令。
+`PromptBar` 处理权限模式、附件预览、多行输入、模型选择、发送和停止。当前为暖白 Composer：上方输入，下方贴底工具行依次为圆形扩展、暖色模型胶囊和陶土色圆形发送/停止。权限模式进入扩展 sheet，不再常驻一行；剩余上下文 token 不再显示，也不影响指令建议区高度。输入以 `/` 开头且没有空格时，`CommandSuggestions` 继续按前缀优先规则筛选 daemon 同步的 Claude Code 指令。
 
-`SessionNavigatorSheet` 展示项目和各自会话，允许切换或创建会话。`SettingsSheet` 管理通知、重连和退出配对。`WorkspaceDrawer` 只读显示活动项目文件与 Git diff。
+`SessionNavigatorSheet` 展示项目和各自会话，允许切换或创建会话。`SettingsSheet` 按 Warm Console 分组管理设备信息、模型、背景、通知、重连和退出配对。`WorkspaceDrawer` 只读显示活动项目文件与 Git diff。
+
+主界面与工作区图标统一来自 `lucide_icons_flutter` 3.1.15。思考态使用 `brain` 和 `AnimationController` 做原生脉冲，普通活动 running 继续使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`，保留 `SignalPressEffect` 等已有原生交互效果。
 
 ## 核心状态
 
@@ -34,7 +36,7 @@ Flutter App 是产品主入口。当前实现集中在少量文件中，优先�
 
 transcript 使用 `TranscriptMessage`，角色分为 user、assistant、system 和 activity。daemon 快照由 `RemoteTranscriptSnapshot` 解析，包含消息、运行状态、权限模式、审批请求、Claude session id 和 session info。
 
-运行状态由 `connected`、`remoteOffline`、`running`、`stopping` 和 `uploadingAttachments` 等字段共同表达。第一轮 UI 改造继续直接映射这些事实，不另设重复状态机对象；停止超时是“仍在运行但最近停止请求未确认”的视图状态，不能当成已停止。
+运行状态由 `connected`、`remoteOffline`、`running`、`stopping` 和 `uploadingAttachments` 等字段共同表达。Warm Console 直接映射这些事实，不另设重复状态机对象；停止超时是“仍在运行但最近停止请求未确认”的视图状态，不能当成已停止。
 
 ## 网络行为
 
@@ -72,7 +74,7 @@ App 支持 `manual`、`acceptEdits`、`auto`、`dontAsk`、`plan` 和 `bypassPer
 
 ## 测试范围
 
-`mobile/test/widget_test.dart` 覆盖启动、配对、设置确认、会话导航、工作区、指令筛选、权限模式、审批卡、运行和停止状态、减少动态效果、小屏大字体、双栏连接舱溢出、横屏扫码、离线重连、Markdown 回复和活动展示。
+`mobile/test/widget_test.dart` 覆盖启动、配对、Warm Console 设置与菜单、当前模型屏读语义、菜单去上下文 token、会话导航、工作区、指令筛选、Composer 44/36px 尺寸、权限模式、审批卡、运行和停止状态、思考计时、原生进度指示器、减少动态效果、小屏大字体、横屏扫码、离线重连、Markdown 回复和活动展示。当前 Flutter 测试总数为 83 项。
 
 `mobile/test/attachments_test.dart` 覆盖附件上传、限制和错误清理。提交前运行：
 

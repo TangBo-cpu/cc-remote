@@ -1,6 +1,6 @@
 # TODO
 
-本文同步到 `master` 当前版本。Signal Console 手机端主链路、工作区冷启动对齐、流式性能合批和可靠性自动化已经完成；Warm Console 设计规范已补齐，代码迁移尚未开始。
+本文同步到当前开发版本。手机端主链路、工作区冷启动对齐、流式性能合批和可靠性自动化已经完成；Warm Console 主界面已进入代码实现和真机验收阶段。
 
 ## 已完成
 
@@ -45,22 +45,28 @@
 - [x] Claude 普通回复使用瓷白实体气泡、边框和正常留白
 - [x] 最新调试版真机安装和主界面检查
 
-### Warm Console 设计准备
+### Warm Console 实现
 
 - [x] 建立根目录 `DESIGN.md` 与 Impeccable 设计 sidecar
 - [x] Penpot 补齐配对、会话选择、运行控制、权限、Diff 与恢复终态
 - [x] UI 实现文档同步到最新 Warm Console
-- [ ] 迁移主题 tokens、字体与统一线性图标
-- [ ] 重构紧凑会话头、transcript、活动事件和 Composer
-- [ ] 重构配对、会话选择、权限决策与 Diff
-- [ ] 实现离线、失败、停止中、已停止、停止超时和重连失败视图
-- [ ] 更新组件测试并完成 Android 真机视觉验收
+- [x] 迁移主题 tokens 并将主界面、工作区统一为 Lucide 线性图标
+- [x] 重构紧凑会话头、transcript 活动展示和贴底 Composer
+- [x] 完成 Composer 圆形扩展/发送/停止、暖色模型胶囊和上下文 token 隐藏
+- [x] 按 Warm Console 整理设置与“···”菜单，菜单底栏最多保留模型名
+- [x] 思考态改为 brain 脉冲，活动 running 保留原生进度指示器
+- [x] 移除 `flutter_animate`，仅保留 `lucide_icons_flutter` 作为本轮新增视觉依赖
+- [ ] 继续逐屏验收配对、会话选择、权限决策与 Diff
+- [x] 用共享 `ConsolePresentation` 统一 Header / Composer 的离线、失败、停止中、已停止和停止超时语义
+- [ ] 补齐共享恢复信息面板与有明确失败事实的重连失败视图
+- [x] 更新组件测试，覆盖 Composer 尺寸、模型语义、菜单去 token 和活动状态
+- [ ] 完成 Android 真机 Warm Console 视觉验收
 
 ### 文档
 
 - [x] 根 README 与当前启动、安装和协议一致
 - [x] 移动端 README 与当前 UI 和调试流程一致
-- [x] UI 设计文档更新为下一版 Warm Console 实现规格
+- [x] UI 设计文档更新为当前 Warm Console 实现与验收规格
 - [x] 系统架构与 Flutter 实现文档去掉初版假设
 
 ## 待专项验证

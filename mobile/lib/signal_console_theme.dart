@@ -69,7 +69,7 @@ class AppSpacing {
 class AppSizes {
   static const touchTarget = 44.0;
   static const iconControl = 36.0;
-  static const sessionHeader = 76.0;
+  static const sessionHeader = 44.0;
   static const composer = 110.0;
 }
 
@@ -375,6 +375,20 @@ ThemeData buildSignalConsoleTheme() {
           top: Radius.circular(AppRadii.header),
         ),
       ),
+    ),
+    popupMenuTheme: PopupMenuThemeData(
+      color: AppColors.surfaceElevated,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      shadowColor: Colors.transparent,
+      textStyle: textTheme.bodyMedium,
+      labelTextStyle: WidgetStatePropertyAll(textTheme.bodyMedium),
+      position: PopupMenuPosition.under,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadii.surface),
+        side: const BorderSide(color: AppColors.line),
+      ),
+      menuPadding: const EdgeInsets.symmetric(vertical: 8),
     ),
     dialogTheme: const DialogThemeData(
       backgroundColor: AppColors.surfaceElevated,

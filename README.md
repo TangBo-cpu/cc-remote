@@ -15,9 +15,11 @@ Flutter App
 
 当前公开版本是 [`v1.1.0`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.1.0)。Android 用户可以从 Release 页面下载 APK；当前安装包使用测试签名，适合个人测试，不应作为应用商店正式包分发。
 
-当前主分支已经完成手机端主链路，发布代码仍使用上一版浅色活力界面。下一轮 UI 已收敛为“暖纸控制台 / Warm Console”：暖白连续背景、陶土动作色、紧凑会话头、内容优先 transcript、单行活动状态和暖白 Composer；不再使用绿色状态、大黑色 Dock、玻璃或彩色偏移阴影。实现规格见 `DESIGN.md` 与 `docs/mobile-ui-app-design.md`。
+当前开发版本已将手机端主界面迁移到“暖纸控制台 / Warm Console”：暖白连续背景、陶土动作色、紧凑会话头、内容优先 transcript、分层活动状态和贴底 Composer；不再使用绿色状态、大黑色 Dock、玻璃或彩色偏移阴影。公开的 `v1.1.0` APK 仍是上一版界面。实现规格见 `DESIGN.md` 与 `docs/mobile-ui-app-design.md`。
 
-已经支持扫码配对、Bearer token、WebSocket 首包鉴权、流式输出、停止任务、六种权限模式、手机端一次性工具审批、斜杠指令、多项目与多会话、transcript 恢复、模型与上下文显示、只读工作区、Git diff、图片与文件附件、Android 后台本地通知、WebSocket 自动重连和活动任务恢复。
+已经支持扫码配对、Bearer token、WebSocket 首包鉴权、流式输出、停止任务、六种权限模式、手机端一次性工具审批、斜杠指令、多项目与多会话、transcript 恢复、模型选择与上下文状态同步、只读工作区、Git diff、图片与文件附件、Android 后台本地通知、WebSocket 自动重连和活动任务恢复。Composer 和“···”菜单不再显示剩余上下文 token，菜单底栏最多保留当前模型名。
+
+主界面与工作区已统一使用 Lucide 线性图标。思考态使用原生脉冲的 brain 图标，活动执行中仍使用 `CircularProgressIndicator`；交互保留 `SignalPressEffect` 等 Flutter 原生效果，不引入 `flutter_animate`。
 
 最近补齐了工作区冷启动对齐：daemon 启动时会按 `WORKSPACE_DIR` / 启动目录注册并激活项目，和“daemon 已在跑时再执行 `cc-remote`”语义一致。手机「项目与会话」面板与设置页会显示完整项目路径。流式回复做了文本合批、流式轻渲染和本地落盘节流，减轻手机经隧道时的卡顿体感。历史 Claude session 已失效时，daemon 会识别 CLI 的原始错误、清除旧 session ID，并自动以新会话重试本轮请求。
 
