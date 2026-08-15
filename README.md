@@ -13,7 +13,7 @@
 ```
 
 <p align="center">
-  <img src="docs/images/01-chat.png" alt="Warm Console 主界面" width="280" />
+  <img src="docs/images/warm-console-home.png" alt="Warm Console 主界面" width="280" />
 </p>
 
 <p align="center"><sub>Warm Console · 已连接空状态：快捷任务 + 贴底 Composer</sub></p>
@@ -44,7 +44,7 @@
 
 | 主控制台 | 项目与会话 | 更多菜单 |
 | :---: | :---: | :---: |
-| <img src="docs/images/01-chat.png" width="220" alt="主控制台" /> | <img src="docs/images/06-sessions.png" width="220" alt="项目与会话" /> | <img src="docs/images/02-more-menu.png" width="220" alt="更多菜单" /> |
+| <img src="docs/images/warm-console-home.png" width="220" alt="主控制台" /> | <img src="docs/images/06-sessions.png" width="220" alt="项目与会话" /> | <img src="docs/images/02-more-menu.png" width="220" alt="更多菜单" /> |
 
 | 设置（字号滑杆） | 工作区文件 | Git 修改 |
 | :---: | :---: | :---: |
