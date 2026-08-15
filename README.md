@@ -56,25 +56,55 @@
 
 ## 三分钟上手
 
-### 1. 电脑端
+### 前提
 
-在要交给 Claude 的项目目录：
+| 需要 | 说明 |
+| --- | --- |
+| Node.js 20+ | 跑 daemon（`npm install` / `npm run dev`） |
+| [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) | 本机已能执行 `claude` |
+| [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/) | 默认公网隧道；仅本机调试可加 `-NoTunnel` |
+| Android 手机 | 安装下方 APK（测试签名） |
+
+当前**没有** npm 全局包：电脑端 = 克隆本仓库 + 本地依赖。`cc-remote` 是仓库根目录的启动脚本，不是 `npm i -g` 装出来的命令。
+
+### 1. 电脑端（首次）
 
 ```powershell
-cc-remote
+git clone https://github.com/TangBo-cpu/cc-remote.git
+cd cc-remote
+npm install
 ```
 
-会启动 daemon + Cloudflare Tunnel，并在终端打印**手机配对二维码**。`Ctrl+C` 结束本次服务。
+可选：把仓库根目录加入 PATH，之后在任意项目目录都能直接敲 `cc-remote`（Windows 下实际执行的是根目录 `cc-remote.cmd` → `scripts/cc-remote.ps1`）。
 
-daemon 已在跑时，换目录再执行一次 `cc-remote`，只注册并切换项目，不重复起服务。
+### 2. 电脑端（日常）
 
-### 2. 手机端
+在**要交给 Claude 的项目目录**启动（工作区默认 = 当前目录）：
+
+```powershell
+# PATH 已包含本仓库根目录时：
+cc-remote
+
+# 或未改 PATH，从任意目录显式调用：
+& C:\path\to\cc-remote\cc-remote.cmd
+
+# 或在仓库根指定工作区：
+npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
+```
+
+会启动 daemon + Cloudflare Tunnel，并在终端打印**手机配对二维码**。`Ctrl+C` 结束本次服务（隧道一并停）。
+
+- daemon **已在跑**时，换到另一项目目录再执行一次，只注册并切换工作区，不重复起服务。
+- 仅本机联调、不要隧道：`cc-remote -NoTunnel`（手机需能访问你的电脑，或自行做端口转发）。
+- 固定隧道域名：配置 `.run/cloudflared-cc-remote.yml`，或设环境变量 / 传参 `-PublicOrigin https://your-host.example.com`。
+
+### 3. 手机端
 
 1. 安装 [v1.2.0 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.2.0/cc-remote-v1.2.0-android.apk)（测试签名，个人使用）
 2. 允许「未知来源」安装
 3. 打开 App → 扫终端二维码 → 确认电脑名与服务地址 → 进入控制台
 
-### 3. 开始对话
+### 4. 开始对话
 
 在 Composer 输入任务，或点空状态快捷芯片。运行中可随时停止；需要权限时在手机上点一次「仅本次允许」或拒绝。
 
