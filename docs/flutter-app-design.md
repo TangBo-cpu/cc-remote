@@ -30,7 +30,7 @@ Flutter App 是产品主入口。当前实现集中在少量文件中，优先�
 
 `SessionNavigatorSheet` 展示项目和各自会话，允许切换或创建会话。`SettingsSheet` 按 Warm Console 分组管理设备信息、模型、背景、通知、重连和退出配对。`WorkspaceDrawer` 只读显示活动项目文件与 Git diff。
 
-主界面与工作区图标统一来自 `lucide_icons_flutter` 3.1.15。主题打包 `NotoSansSC` / `NotoSerifSC`。思考态使用 `brain` 和 `AnimationController` 做原生脉冲，普通活动 running 继续使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`，保留 `SignalPressEffect` 等已有原生交互效果。
+主界面与工作区图标统一来自 `lucide_icons_flutter` 3.1.15。主题打包 `NotoSerifSC`（UI 与助手统一衬线）。思考态使用 `brain` 和 `AnimationController` 做原生脉冲，普通活动 running 继续使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`，保留 `SignalPressEffect` 等已有原生交互效果。
 
 ## 核心状态
 

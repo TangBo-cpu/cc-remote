@@ -72,12 +72,6 @@ flutter:
     - assets/claude_mascot.png
 
   fonts:
-    - family: NotoSansSC
-      fonts:
-        - asset: fonts/NotoSansSC-Regular.otf
-          weight: 400
-        - asset: fonts/NotoSansSC-Bold.otf
-          weight: 700
     - family: NotoSerifSC
       fonts:
         - asset: fonts/NotoSerifSC-Regular.otf

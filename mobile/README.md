@@ -8,7 +8,7 @@ App 已支持扫码确认、Secure Storage、启动恢复、WebSocket 自动重�
 
 当前开发代码已实现“暖纸控制台 / Warm Console”主界面：Claude 风格的分离式顶部浮动控制、非已连接相位的 `ConsoleStatusStrip`、内容优先 transcript（助手 elevated 气泡 + 衬线）、连接中/离线分空状态、权限卡工作目录、分层活动状态、Warm Console 设置与菜单，以及贴底的暖白 Composer（`terracotta-deep` 发送/停止）。公开的 `v1.1.0` APK 仍是上一版界面。
 
-Composer 底栏使用圆形扩展按钮、暖色模型胶囊和 `terracotta-deep` 圆形发送/停止按钮，不显示剩余上下文 token。“···”菜单底栏最多保留当前模型名，并提供对应屏读语义。主界面和工作区统一使用 `lucide_icons_flutter`；字体打包 `NotoSansSC` / `NotoSerifSC` 于 `fonts/`。思考态是原生脉冲 brain 图标，活动 running 状态仍使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`。
+Composer 底栏使用圆形扩展按钮、暖色模型胶囊和 `terracotta-deep` 圆形发送/停止按钮，不显示剩余上下文 token。“···”菜单底栏最多保留当前模型名，并提供对应屏读语义。主界面和工作区统一使用 `lucide_icons_flutter`；字体打包 `NotoSerifSC` 于 `fonts/`（UI 与助手统一衬线）。思考态是原生脉冲 brain 图标，活动 running 状态仍使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`。
 
 ## 开发运行
 

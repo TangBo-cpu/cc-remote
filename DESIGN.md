@@ -15,28 +15,28 @@ colors:
   danger: "#9E4D35"
 typography:
   headline:
-    fontFamily: "Noto Sans SC, PingFang SC, Microsoft YaHei, sans-serif"
+    fontFamily: "Noto Serif SC, Source Han Serif SC, Songti SC, serif"
     fontSize: "21px"
     fontWeight: 700
     lineHeight: 1.25
     letterSpacing: "-0.02em"
   title:
-    fontFamily: "Noto Sans SC, PingFang SC, Microsoft YaHei, sans-serif"
+    fontFamily: "Noto Serif SC, Source Han Serif SC, Songti SC, serif"
     fontSize: "16px"
     fontWeight: 700
     lineHeight: 1.35
   body:
-    fontFamily: "Noto Sans SC, PingFang SC, Microsoft YaHei, sans-serif"
-    fontSize: "15px"
+    fontFamily: "Noto Serif SC, Source Han Serif SC, Songti SC, serif"
+    fontSize: "15.5px"
     fontWeight: 400
-    lineHeight: 1.55
+    lineHeight: 1.58
   assistant-body:
-    fontFamily: "Noto Serif SC, Source Han Serif SC, serif"
-    fontSize: "15px"
+    fontFamily: "Noto Serif SC, Source Han Serif SC, Songti SC, serif"
+    fontSize: "15.5px"
     fontWeight: 400
-    lineHeight: 1.65
+    lineHeight: 1.7
   label:
-    fontFamily: "Noto Sans SC, PingFang SC, Microsoft YaHei, sans-serif"
+    fontFamily: "Noto Serif SC, Source Han Serif SC, Songti SC, serif"
     fontSize: "12px"
     fontWeight: 500
     lineHeight: 1.35
@@ -138,26 +138,28 @@ CC Remote 是桌面 Claude Code 的手机控制面，不是缩小的终端，也
 
 ## Typography
 
-**Display Font:** Noto Sans SC
+**Display Font:** Noto Serif SC
 
-**Body Font:** Noto Sans SC
+**Body Font:** Noto Serif SC
 
 **Assistant Reading Font:** Noto Serif SC
 
-**Label/Mono Font:** Noto Sans SC / JetBrains Mono
+**Label/Mono Font:** Noto Serif SC / JetBrains Mono
 
-无衬线字体负责导航、状态与控制；衬线字体仅用于 Claude 的连续叙述，使正文具有阅读感；等宽字体只用于命令、路径、代码和数值证据。实现时必须打包或明确加载字体，不假设所有 Android 设备已安装 Noto 字体。Flutter 已打包 `NotoSansSC`（Regular/Bold）与 `NotoSerifSC`（Regular）子集字体到 `mobile/fonts/`。
+UI 与助手叙述统一使用中文衬线 `NotoSerifSC`；等宽字体只用于命令、路径、代码和数值证据。实现时必须打包或明确加载字体，不假设所有 Android 设备已安装 Noto 字体。Flutter 已打包 `NotoSerifSC`（Regular）到 `mobile/fonts/`；加粗由引擎合成（当前未单独打包 Bold 字重）。
+
+默认阅读尺寸贴近 Claude 手机端：UI 正文约 15.5px / 1.58，助手正文 15.5px / 1.7，轻微字距；用户可在设置中选择较小 / 标准 / 较大 / 最大四级缩放（约 0.9×–1.3×），并与系统文字缩放相乘后夹在 0.85–1.6。
 
 ### Hierarchy
 
 - **Headline:** 页面标题与关键决策，通常 21px、700。
 - **Title:** 会话名、活动标题、文件名与状态标题，通常 16px、700。
-- **Body:** 普通说明和用户消息，15px、1.55 行高。
-- **Assistant Body:** Claude 连续回复，15px、1.65 行高。
+- **Body:** 普通说明约 15.5px、1.58 行高；用户消息约 15px、1.5 行高。
+- **Assistant Body:** Claude 连续回复，15.5px、1.7 行高。
 - **Label:** 状态、元信息和按钮文字，最低 12px。
 - **Code:** 命令和 Diff，12–13px，行高不低于 1.45。
 
-**The Reading Voice Rule.** 衬线字体只出现在助手的叙述内容；按钮、状态、用户输入和系统提示始终使用无衬线字体。
+**The Reading Voice Rule.** 中文 UI 与助手叙述统一衬线；命令、路径、代码与 Diff 仍用等宽。
 
 ## Layout
 
@@ -193,7 +195,7 @@ CC Remote 是桌面 Claude Code 的手机控制面，不是缩小的终端，也
 
 - 用户消息靠右，使用略深于背景的暖灰气泡。
 - Claude 回复靠左，使用轻量暖白气泡（elevated paper + 1px line），与用户暖灰气泡成对，避免正文完全贴纸面时难扫视。
-- 回复正文使用衬线字体，系统说明与活动文字使用无衬线字体。
+- 回复正文与系统说明、活动文字统一使用衬线字体；命令与 Diff 使用等宽。
 - 空状态不做营销欢迎页：已连接给快捷下一步；离线给重连卡；连接中给独立「正在重新连接」状态卡（不复用离线卡）。
 
 ### Activity Event

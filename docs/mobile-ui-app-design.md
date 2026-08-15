@@ -28,9 +28,10 @@
 - 页面背景、消息区、活动区和输入台保持同一暖白色温。
 - 浅陶土（`terracotta`）只用于品牌大面积与执行节点；实心 CTA / 发送 /「仅本次允许」使用 `terracotta-deep` + elevated 字色。
 - 在线与完成不使用绿色；状态由图标、文案和色调共同表达。
-- Flutter 打包 `NotoSansSC`（Regular/Bold）与 `NotoSerifSC`（Regular）到 `mobile/fonts/`；助手正文用衬线。
+- Flutter 打包 `NotoSerifSC`（Regular）到 `mobile/fonts/`；UI 与助手正文统一衬线，默认约 15.5px / 1.7。
+- 设置「对话偏好 → 字体大小」提供较小 / 标准 / 较大 / 最大四级；缩放与系统文字缩放相乘，夹在 0.85–1.6。
 - 默认无玻璃、无渐变、无普通卡片阴影、无彩色偏移阴影。
-- 关键状态与按钮辅助文字最低 12px；正文 15px；Diff 代码 12–13px。
+- 关键状态与按钮辅助文字最低 12px；正文约 15–15.5px；Diff 代码 12–13px。
 - 视觉图标按钮可为 36×36，实际命中区至少 44×44。
 - 图标统一为 20/24px 线性风格，不能混用 Unicode、Material 实心图标和自绘字符。
 - 输入聚焦描边使用 `terracotta-deep`（约 1.4px）。

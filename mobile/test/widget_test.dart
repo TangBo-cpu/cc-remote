@@ -15,6 +15,7 @@ import 'package:cc_remote/data/permission_mode.dart';
 import 'package:cc_remote/data/remote_models.dart';
 import 'package:cc_remote/notification_service.dart';
 import 'package:cc_remote/model_preference.dart';
+import 'package:cc_remote/reading_font_size.dart';
 import 'package:cc_remote/signal_console_theme.dart';
 import 'package:cc_remote/workspace_drawer.dart';
 
@@ -36,6 +37,14 @@ Future<void> openWorkspaceFromHeader(WidgetTester tester) async {
 }
 
 void main() {
+  test('Warm Console theme uses packaged serif for UI and assistant', () {
+    expect(AppTypography.fontFamily, 'NotoSerifSC');
+    expect(AppTypography.assistantFontFamily, 'NotoSerifSC');
+    final theme = buildSignalConsoleTheme();
+    expect(theme.textTheme.bodyLarge?.fontFamily, 'NotoSerifSC');
+    expect(theme.textTheme.labelLarge?.fontFamily, 'NotoSerifSC');
+  });
+
   setUp(() {
     FlutterSecureStorage.setMockInitialValues({});
   });
@@ -537,7 +546,12 @@ void main() {
     expect(find.text('后台通知'), findsOneWidget);
     expect(find.text('开启新对话'), findsNothing);
     expect(find.text('扫描电脑终端里的二维码'), findsNothing);
+    expect(find.text('字体大小'), findsOneWidget);
 
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('background-notifications-toggle')),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(
       find.byKey(const ValueKey('background-notifications-toggle')),
     );
@@ -925,11 +939,13 @@ void main() {
             chatBackground: ChatBackgroundPreference.defaultValue,
             currentModel: 'claude-opus-4-8',
             selectedModel: ClaudeModelPreference.followComputer,
+            readingFontSize: ReadingFontSizePreference.medium,
             onReconnect: () {},
             onNotificationsChanged: (value) async => value,
             onModelChanged: (_) async {},
             onChatBackgroundChanged: (preference) async => preference,
             onPickChatBackgroundImage: (_) async => null,
+            onReadingFontSizeChanged: (_) async {},
             onLogout: () {},
           ),
         ),
@@ -2012,10 +2028,12 @@ void main() {
       markdown.styleSheet!.tableCellsPadding,
       const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
     );
+    expect(markdown.styleSheet!.p!.fontFamily, 'NotoSerifSC');
     expect(
-      markdown.styleSheet!.p!.fontFamily,
-      AppTypography.assistantFontFamily,
+      markdown.styleSheet!.p!.fontSize,
+      AppTypography.assistantBodySize,
     );
+    expect(markdown.styleSheet!.h1!.fontFamily, 'NotoSerifSC');
     final bubble = tester.widget<Container>(assistant);
     final decoration = bubble.decoration! as BoxDecoration;
     expect(decoration.color, AppColors.surfaceElevated);

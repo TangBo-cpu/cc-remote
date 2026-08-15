@@ -36,22 +36,18 @@ class AppColors {
 }
 
 class AppTypography {
-  static const fontFamily = 'NotoSansSC';
+  /// Warm Console CJK face: serif for UI chrome and reading text.
+  static const fontFamily = 'NotoSerifSC';
   static const fontFamilyFallback = <String>[
-    'Noto Sans SC',
-    'Noto Sans CJK SC',
-    'PingFang SC',
-    'Microsoft YaHei',
-    'Roboto',
-    'sans-serif',
-  ];
-  static const assistantFontFamily = 'NotoSerifSC';
-  static const assistantFontFamilyFallback = <String>[
     'Noto Serif SC',
     'Source Han Serif SC',
     'Songti SC',
     'serif',
   ];
+
+  /// Same serif face as UI; kept as a named alias for assistant markdown.
+  static const assistantFontFamily = fontFamily;
+  static const assistantFontFamilyFallback = fontFamilyFallback;
   static const codeFontFamily = 'monospace';
   static const codeFontFamilyFallback = <String>[
     'JetBrains Mono',
@@ -59,6 +55,12 @@ class AppTypography {
     'Consolas',
     'monospace',
   ];
+
+  /// Base assistant body before [ReadingFontSizePreference] scaling.
+  static const assistantBodySize = 15.5;
+  static const assistantBodyHeight = 1.7;
+  static const userBodySize = 15.0;
+  static const userBodyHeight = 1.5;
 }
 
 class AppSpacing {
@@ -211,17 +213,17 @@ ThemeData buildSignalConsoleTheme() {
     ),
     bodyLarge: signalText(
       materialText.bodyLarge,
-      size: 15,
+      size: 15.5,
       weight: FontWeight.w400,
-      height: 1.55,
-      letterSpacing: 0,
+      height: 1.58,
+      letterSpacing: 0.05,
     ),
     bodyMedium: signalText(
       materialText.bodyMedium,
       size: 14,
       weight: FontWeight.w400,
-      height: 1.5,
-      letterSpacing: 0,
+      height: 1.52,
+      letterSpacing: 0.02,
     ),
     bodySmall: signalText(
       materialText.bodySmall,
