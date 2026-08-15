@@ -1383,6 +1383,7 @@ void main() {
             request: request,
             responding: false,
             connected: true,
+            workspaceDir: r'E:\client\production',
             onAllow: () => allowed = true,
             onDeny: () {},
           ),
@@ -1390,9 +1391,11 @@ void main() {
       ),
     );
 
-    expect(find.text('等待权限确认'), findsOneWidget);
+    expect(find.text('允许 Claude 运行命令？'), findsOneWidget);
     expect(find.text('npm test'), findsOneWidget);
-    await tester.tap(find.text('允许一次'));
+    expect(find.text(r'E:\client\production'), findsOneWidget);
+    expect(find.text('仅本次请求'), findsOneWidget);
+    await tester.tap(find.text('仅本次允许'));
     expect(allowed, isTrue);
   });
 
@@ -1982,7 +1985,7 @@ void main() {
     expect(createdConversation, isFalse);
   });
 
-  testWidgets('assistant replies use a left aligned paper reading frame', (
+  testWidgets('assistant replies use a left aligned bubble frame', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -2013,6 +2016,10 @@ void main() {
       markdown.styleSheet!.p!.fontFamily,
       AppTypography.assistantFontFamily,
     );
+    final bubble = tester.widget<Container>(assistant);
+    final decoration = bubble.decoration! as BoxDecoration;
+    expect(decoration.color, AppColors.surfaceElevated);
+    expect(decoration.borderRadius, isNotNull);
     expect(find.byType(Image), findsNothing);
     expect(find.byKey(const ValueKey('user-message')), findsNothing);
   });
@@ -2137,6 +2144,7 @@ void main() {
             pendingPermissions: const [],
             respondingPermissionIds: const {},
             connected: false,
+            offline: true,
             onFillPrompt: (_) {},
             onReconnect: () => reconnectCount += 1,
             onPermissionAllow: (_) {},
@@ -2148,10 +2156,153 @@ void main() {
 
     expect(find.text('下一件事'), findsNothing);
     expect(find.text('让电脑重新上线'), findsOneWidget);
+    expect(find.text('立即重连'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
-    await tester.tap(find.text('让电脑重新上线'));
+    await tester.tap(find.text('立即重连'));
     expect(reconnectCount, 1);
+  });
+
+  testWidgets('connecting empty state does not reuse offline reconnect card', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: TranscriptView(
+            messages: const [],
+            pendingPermissions: const [],
+            respondingPermissionIds: const {},
+            connected: false,
+            offline: false,
+            onFillPrompt: (_) {},
+            onReconnect: () {},
+            onPermissionAllow: (_) {},
+            onPermissionDeny: (_) {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('connecting-status-card')), findsOneWidget);
+    expect(find.text('正在重新连接'), findsOneWidget);
+    expect(find.text('让电脑重新上线'), findsNothing);
+    expect(find.text('立即重连'), findsNothing);
+  });
+
+  testWidgets('connecting ChatScreen shows status strip', (tester) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: AppBackground(
+          child: ChatScreen(
+            session: SavedSession(
+              origin: Uri.parse('https://cc-remote.example.com'),
+              token: 'demo',
+              deviceName: 'My PC',
+              workspaceDir: 'cc-remote',
+            ),
+            running: false,
+            connected: false,
+            offline: false,
+            modelName: 'claude-opus-4-8',
+            contextWindow: 200000,
+            remainingContext: 174919,
+            messages: const [],
+            commands: const [],
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: false,
+            pendingPermissions: const [],
+            respondingPermissionIds: const {},
+            promptController: controller,
+            onFillPrompt: (_) {},
+            onReconnect: () {},
+            onOpenSettings: () {},
+            onOpenModelPicker: () {},
+            onNewConversation: () {},
+            onOpenSessions: () {},
+            onOpenWorkspace: () {},
+            onPermissionModeSelected: (_) {},
+            onPermissionAllow: (_) {},
+            onPermissionDeny: (_) {},
+            onSend: () {},
+            onStop: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('console-status-strip')), findsOneWidget);
+    expect(find.text('正在连接'), findsOneWidget);
+    expect(find.byKey(const ValueKey('connecting-status-card')), findsOneWidget);
+  });
+
+  testWidgets('TranscriptView forwards workspace path into permission card', (
+    tester,
+  ) async {
+    const request = RemotePermissionRequest(
+      requestId: 'permission-path-1',
+      toolName: 'Bash',
+      detail: 'ls',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: TranscriptView(
+            messages: const [],
+            session: SavedSession(
+              origin: Uri.parse('https://cc-remote.example.com'),
+              token: 'demo',
+              deviceName: 'My PC',
+              workspaceDir: r'E:\work\cc-remote',
+            ),
+            pendingPermissions: const [request],
+            respondingPermissionIds: const {},
+            connected: true,
+            offline: false,
+            onFillPrompt: (_) {},
+            onReconnect: () {},
+            onPermissionAllow: (_) {},
+            onPermissionDeny: (_) {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text(r'E:\work\cc-remote'), findsOneWidget);
+  });
+
+  testWidgets('permission card falls back when workspace path is missing', (
+    tester,
+  ) async {
+    const request = RemotePermissionRequest(
+      requestId: 'permission-path-2',
+      toolName: 'Bash',
+      detail: 'pwd',
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: PermissionRequestCard(
+            request: request,
+            responding: false,
+            connected: true,
+            onAllow: () {},
+            onDeny: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.textContaining('路径暂不可用'), findsOneWidget);
   });
 
   testWidgets('empty transcript does not overflow when keyboard is open', (

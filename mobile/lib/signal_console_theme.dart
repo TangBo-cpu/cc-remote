@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
 class AppColors {
@@ -11,13 +9,20 @@ class AppColors {
   static const muted = Color(0xFF65625C);
   static const inactive = Color(0xFF8B877F);
   static const inactiveLight = Color(0xFFB8B4AB);
+  /// Brand mark / large fills only — not body text or small labels.
   static const terracotta = Color(0xFFDA7756);
+  /// CTA fills and terracotta-on-paper text that must meet ~4.5:1.
   static const terracottaDeep = Color(0xFFA65338);
   static const danger = Color(0xFF9E4D35);
   static const line = Color(0xFFD8D5CD);
   static const lineStrong = inactiveLight;
+  /// Soft wash behind composer + / model controls.
+  static const composerControlFill = Color(0xFFF0E4DB);
+  static const composerControlInk = Color(0xFF8A5340);
 
   static const accent = terracotta;
+  static const cta = terracottaDeep;
+  static const onCta = surfaceElevated;
   static const accentSoft = control;
   static const warning = terracottaDeep;
   static const stop = danger;
@@ -31,7 +36,7 @@ class AppColors {
 }
 
 class AppTypography {
-  static const fontFamily = 'sans-serif';
+  static const fontFamily = 'NotoSansSC';
   static const fontFamilyFallback = <String>[
     'Noto Sans SC',
     'Noto Sans CJK SC',
@@ -40,7 +45,7 @@ class AppTypography {
     'Roboto',
     'sans-serif',
   ];
-  static const assistantFontFamily = 'serif';
+  static const assistantFontFamily = 'NotoSerifSC';
   static const assistantFontFamilyFallback = <String>[
     'Noto Serif SC',
     'Source Han Serif SC',
@@ -103,10 +108,10 @@ ThemeData buildSignalConsoleTheme() {
         seedColor: AppColors.accent,
         brightness: Brightness.light,
       ).copyWith(
-        primary: AppColors.terracotta,
-        onPrimary: AppColors.surfaceElevated,
+        primary: AppColors.cta,
+        onPrimary: AppColors.onCta,
         secondary: AppColors.terracottaDeep,
-        onSecondary: AppColors.surfaceElevated,
+        onSecondary: AppColors.onCta,
         surface: AppColors.surface,
         onSurface: AppColors.ink,
         error: AppColors.danger,
@@ -285,7 +290,10 @@ ThemeData buildSignalConsoleTheme() {
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(AppRadii.control),
-        borderSide: const BorderSide(color: AppColors.accent, width: 1.4),
+        borderSide: const BorderSide(
+          color: AppColors.terracottaDeep,
+          width: 1.4,
+        ),
       ),
     ),
     filledButtonTheme: FilledButtonThemeData(
@@ -458,48 +466,6 @@ class _SignalPressEffectState extends State<SignalPressEffect> {
   }
 }
 
-class ContextDial extends StatelessWidget {
-  const ContextDial({
-    super.key,
-    required this.remaining,
-    this.total,
-    this.size = 38,
-  });
-
-  final int remaining;
-  final int? total;
-  final double size;
-
-  @override
-  Widget build(BuildContext context) {
-    final fraction = total == null || total! <= 0
-        ? 1.0
-        : (remaining / total!).clamp(0.0, 1.0);
-    return Semantics(
-      label: total == null
-          ? '剩余上下文 $remaining'
-          : '剩余上下文 ${(fraction * 100).round()}%',
-      child: SizedBox.square(
-        dimension: size,
-        child: CustomPaint(
-          painter: _ContextDialPainter(fraction: fraction),
-          child: Center(
-            child: Text(
-              '${(fraction * 100).round()}',
-              style: TextStyle(
-                color: AppColors.ink,
-                fontSize: size * 0.25,
-                fontWeight: FontWeight.w800,
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class TaskRailFrame extends StatelessWidget {
   const TaskRailFrame({
     super.key,
@@ -554,35 +520,3 @@ class TaskRailFrame extends StatelessWidget {
   }
 }
 
-class _ContextDialPainter extends CustomPainter {
-  const _ContextDialPainter({required this.fraction});
-
-  final double fraction;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
-    final stroke = math.max(2.2, size.width * 0.075);
-    final inset = stroke / 2;
-    final arcRect = rect.deflate(inset);
-    final base = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeWidth = stroke
-      ..color = AppColors.line;
-    final active = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeWidth = stroke
-      ..color = AppColors.accent;
-    const start = -math.pi / 2 + 0.28;
-    const sweep = math.pi * 2 - 0.56;
-    canvas.drawArc(arcRect, start, sweep, false, base);
-    canvas.drawArc(arcRect, start, sweep * fraction, false, active);
-  }
-
-  @override
-  bool shouldRepaint(covariant _ContextDialPainter oldDelegate) {
-    return fraction != oldDelegate.fraction;
-  }
-}

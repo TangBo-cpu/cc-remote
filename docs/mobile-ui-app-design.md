@@ -4,7 +4,7 @@
 
 本文记录 Flutter Warm Console 的当前实现规格与后续验收目标，视觉依据是 Penpot 的 11 张 `CCR / 01` 至 `CCR / 11` 画板和已落地的 Flutter 组件。根目录 [`DESIGN.md`](../DESIGN.md) 是颜色、排版、圆角、间距和共享组件的规范源；本文负责页面流程、状态映射和工程验收。
 
-截至 2026-08-14，`mobile/lib/main.dart`、`mobile/lib/signal_console_theme.dart` 与 `mobile/lib/workspace_drawer.dart` 已完成 Warm Console 主界面、设置/菜单、Composer 和 Lucide 图标迁移，并保持原有网络、会话、附件、权限和 transcript 行为。公开的 `v1.1.0` APK 仍使用上一版界面；当前开发版本尚待 Android 真机视觉验收和恢复终态的继续补齐。
+截至 2026-08-15，`mobile/lib/main.dart`、`mobile/lib/signal_console_theme.dart` 与 `mobile/lib/workspace_drawer.dart` 已完成 Warm Console 主界面、设置/菜单、Composer 和 Lucide 图标迁移，并保持原有网络、会话、附件、权限和 transcript 行为。后续已落地：`terracotta-deep` CTA、打包 Noto 字体、助手 elevated 气泡、权限卡工作目录、`ConsoleStatusStrip`（含连接中）、连接中空状态卡与聚焦描边对比。公开的 `v1.1.0` APK 仍使用上一版界面；开发 release 已装真机，逐屏视觉验收与恢复终态面板仍待补齐。
 
 ## 目标与非目标
 
@@ -26,12 +26,14 @@
 
 - 基准画板为 390×844，页面水平安全边距 20px，主要内容宽度 350px。
 - 页面背景、消息区、活动区和输入台保持同一暖白色温。
-- 陶土色用于发送、允许、重试、当前执行节点和品牌小标记。
+- 浅陶土（`terracotta`）只用于品牌大面积与执行节点；实心 CTA / 发送 /「仅本次允许」使用 `terracotta-deep` + elevated 字色。
 - 在线与完成不使用绿色；状态由图标、文案和色调共同表达。
+- Flutter 打包 `NotoSansSC`（Regular/Bold）与 `NotoSerifSC`（Regular）到 `mobile/fonts/`；助手正文用衬线。
 - 默认无玻璃、无渐变、无普通卡片阴影、无彩色偏移阴影。
 - 关键状态与按钮辅助文字最低 12px；正文 15px；Diff 代码 12–13px。
 - 视觉图标按钮可为 36×36，实际命中区至少 44×44。
 - 图标统一为 20/24px 线性风格，不能混用 Unicode、Material 实心图标和自绘字符。
+- 输入聚焦描边使用 `terracotta-deep`（约 1.4px）。
 
 完整设计 token 见 [`DESIGN.md`](../DESIGN.md)。
 
@@ -68,9 +70,9 @@
 3. 当前活动与已完成证据。
 4. 底部 Composer。
 
-顶部参考 Claude 手机端：左侧仅保留圆形菜单，右侧是新建与更多组成的短胶囊，中间不显示产品名、会话名、连接状态或设备名。模型留在 Composer，路径和设备信息进入设置或 sheet，剩余上下文 token 不显示。
+顶部参考 Claude 手机端：左侧仅保留圆形菜单，右侧是新建与更多组成的短胶囊，中间不显示产品名、会话名、连接状态或设备名。非「已连接」相位时，会话头下方显示紧凑 `ConsoleStatusStrip`。模型留在 Composer，路径和设备信息进入设置或 sheet，剩余上下文 token 不显示。
 
-用户消息使用暖灰气泡；Claude 连续回复优先直接排在纸面上，并使用衬线阅读字体。当前活动可展开，已完成活动折叠为一行。运行中必须始终能看到停止入口。
+用户消息使用暖灰气泡；Claude 连续回复靠左使用 elevated paper 轻量气泡 + 衬线阅读字体。空 transcript：已连接给快捷下一步；离线给重连卡；连接中给独立状态卡。当前活动可展开，已完成活动折叠为一行。运行中必须始终能看到停止入口。
 
 ### 04 Permission Request
 
@@ -87,7 +89,7 @@
 
 默认授权范围是当前请求。不得把一次性审批包装成永久授权；更改权限模式进入单独 sheet。
 
-当前协议只稳定提供 `toolName`、`detail`、`title`、`displayName`、`description` 和 `decisionReason`。工作目录、风险分级和影响条目必须由可验证字段推导；如果信息不足，显示保守的工具说明，不虚构“不会访问密钥”等承诺。若产品确实需要结构化工作目录与风险项，应单独扩展协议并增加 daemon/Flutter 测试。
+当前协议只稳定提供 `toolName`、`detail`、`title`、`displayName`、`description` 和 `decisionReason`。工作目录优先取当前会话 `workspaceDir`；缺失时显示「以桌面主机当前工作区为准（路径暂不可用）」，不虚构绝对路径。风险分级和影响条目必须由可验证字段推导；信息不足时显示保守的工具说明，不虚构“不会访问密钥”等承诺。若产品需要更结构化的风险项，应单独扩展协议并增加 daemon/Flutter 测试。
 
 ### 05 Review Diff
 
@@ -162,14 +164,15 @@
 - 当前实现由 `ConnectionHeader` 承担，不保留 `LegacyConnectionHeader`。
 - 高度 44px，不再使用整宽暖纸表面。
 - 左侧是独立圆形菜单；右侧是 88×44px 的新建/更多胶囊；中间透明留空。
-- 不重复显示产品名、会话名、连接状态和设备名；恢复事实在 transcript / Composer 等任务相关位置表达。
+- 顶部 chrome 不重复显示产品名、会话名、连接状态和设备名；非 `ConsolePhase.connected` 时在头下方渲染 `ConsoleStatusStrip`。
 - 设备与路径分流到设置或 sheet；模型保留在 Composer，“···”菜单底栏最多显示模型名，不显示剩余上下文 token。
 
 ### TranscriptView
 
 - 保留现有本地缓存、snapshot 覆盖与流式轻渲染逻辑。
-- 用户消息靠右；助手回复降低容器感；系统消息不使用营销式卡片。
-- 权限请求应从普通 transcript 卡升级为可聚焦的决策页或全宽就地决策面。
+- 用户消息靠右暖灰气泡；助手回复靠左 elevated paper 气泡 + 衬线；系统消息不使用营销式卡片。
+- 空状态三分支：已连接快捷芯片 / 离线 `_OfflineReconnectCard` / 连接中 `_ConnectingStatusCard`。
+- 权限请求为全宽决策面，顺序为命令 → 工作目录 → 影响 → 范围 → 动作。
 
 ### ActivityEvent
 
@@ -204,15 +207,16 @@
 
 | UI 状态 | 现有事实来源 | 允许的主动作 | 关键约束 |
 |---|---|---|---|
-| 已连接 | `wsReady && !running` | 发送、新建、切换 | 不用绿色 |
+| 连接中 | `!wsReady && !remoteOffline` | 等待；空 transcript 显示连接卡 | 状态条显示「正在连接」；不与离线卡混用 |
+| 已连接 | `wsReady && !running` | 发送、新建、切换 | 不用绿色；状态条隐藏 |
 | 运行中 | `running && !stopping` | 停止 | 停止入口始终可见 |
 | 停止中 | `running && stopping` | 无，等待确认 | 禁止重复停止 |
 | 已停止 | WebSocket `stopped` 或权威 transcript 的明确停止证据 | 继续输入 | 普通 `running: false` 不足以判定 |
 | 停止超时 | `running && !stopping` 且最近停止请求超时 | 再次停止 | 仍视为运行中 |
-| 离线 | `remoteOffline` | 立即重连 | transcript 与草稿保留 |
+| 离线 | `remoteOffline` | 立即重连 | transcript 与草稿保留；状态条 + 离线空状态卡 |
 | 重连失败 | 明确的重连失败事实 | 再次重连 | 不与瞬时断线混淆 |
 | 失败 | WebSocket `error` 或失败终态 | 查看错误并重试 | 保留原始错误证据 |
-| 等待权限 | `pendingPermissions.isNotEmpty` | 允许一次或拒绝 | 一次处理一个请求 |
+| 等待权限 | `pendingPermissions.isNotEmpty` | 允许一次或拒绝 | 一次处理一个请求；权限卡展示 `workspaceDir` |
 | 上传中 | `uploadingAttachments` | 取消或等待 | 禁止切换会话与发送 |
 
 UI 直接把这些事实映射为当前视图，不引入新的全局状态机对象。只有当 `main.dart` 的布尔组合持续产生冲突，才拆出独立 controller。
@@ -227,7 +231,7 @@ UI 直接把这些事实映射为当前视图，不引入新的全局状态机�
 
 ## 实现进度与后续顺序
 
-截至 2026-08-14，Phase 1 的主题、会话头、活动展示、Composer、设置/菜单与 Lucide 图标迁移已落地。Phase 3 已先用共享 `ConsolePresentation` 统一 Header 与 Composer 的状态语义；后续工作主要是恢复信息面板、重连失败事实和逐屏真机验收。
+截至 2026-08-15，Phase 1 的主题、会话头、活动展示、Composer、设置/菜单与 Lucide 图标迁移已落地；a11y/UX 补强（`terracotta-deep` CTA、Noto 打包、助手气泡、权限工作目录、连接中状态条/空状态、聚焦描边）已合入开发代码并装真机。Phase 3 已用共享 `ConsolePresentation` 统一 Header / Composer / 状态条语义；后续工作主要是恢复信息面板、重连失败事实和逐屏真机视觉验收。
 
 ### Phase 1：设计基础与主控制台
 
@@ -272,10 +276,10 @@ flutter test
 - Composer 视觉控制 36px、语义命中区至少 44px，键盘出现不遮挡。
 - “···”菜单不显示上下文 token，保留模型名时具有“当前模型”屏读语义。
 - 思考态使用 brain 图标，其他活动 running 仍使用原生进度指示器，测试结束无 pending Timer。
-- 权限页仅允许一次或拒绝，处理中禁用重复点击。
-- 离线保留 transcript、草稿与附件，重连动作可达。
+- 权限页仅允许一次或拒绝，处理中禁用重复点击；有路径时展示工作目录，缺失时展示 fallback 文案。
+- 离线保留 transcript、草稿与附件，重连动作可达；连接中空状态不复用离线卡，且 ChatScreen 显示状态条。
 - stopping、stopped 和 stop-timeout 三态互不混淆。
-- error、offline、stopping 等状态不只靠颜色。
+- error、offline、connecting、stopping 等状态不只靠颜色。
 - Diff 在长路径、长代码行和大字体下仍可阅读。
 - 减少动态效果时关闭连续动画。
 
@@ -283,6 +287,6 @@ Penpot 对齐验收：
 
 - 390×844 参考尺寸下，页面左右边距、会话头、活动卡和 Composer 与画板节奏一致。
 - 单屏没有绿色状态、大黑色 Dock、玻璃、渐变或彩色偏移阴影。
-- 运行控制首屏能看到连接事实、当前动作、停止入口与输入上下文。
+- 运行控制首屏能看到连接事实（状态条或空状态）、当前动作、停止入口与输入上下文。
 
-真机验收至少覆盖 Android 一台窄屏设备；Flutter 测试中的 Ahem 字体只能验证几何，不能作为中文排版完成证据。
+真机验收至少覆盖 Android 一台窄屏设备（开发 release 已装多机，视觉清单仍待逐项勾选）；Flutter 测试中的 Ahem 字体只能验证几何，打包 Noto 后的中文观感应在真机确认。

@@ -1,6 +1,6 @@
 # TODO
 
-本文同步到当前开发版本。手机端主链路、工作区冷启动对齐、流式性能合批和可靠性自动化已经完成；Warm Console 主界面已进入代码实现和真机验收阶段。
+本文同步到当前开发版本。手机端主链路、工作区冷启动对齐、流式性能合批和可靠性自动化已经完成；Warm Console 主界面与 a11y/UX 补强已进入开发代码，并完成多机 release 安装；逐屏视觉清单与恢复终态面板仍待收尾。
 
 ## 已完成
 
@@ -40,10 +40,10 @@
 - [x] 工作区文件与 Git diff 抽屉
 - [x] 拍照、图片和文件附件
 - [x] Android 后台本地通知与通知开关
-- [x] 浅色活力主题、紧凑双栏连接舱和 Command Dock
+- [x] 浅色活力主题、紧凑双栏连接舱和 Command Dock（历史里程碑；现已被 Warm Console 取代）
 - [x] 小屏、横屏、键盘、大字体和缩放溢出回归测试
-- [x] Claude 普通回复使用瓷白实体气泡、边框和正常留白
-- [x] 最新调试版真机安装和主界面检查
+- [x] Claude 普通回复使用 elevated paper 实体气泡、边框和衬线正文
+- [x] 最新调试/release 版真机安装和主界面检查
 
 ### Warm Console 实现
 
@@ -56,17 +56,21 @@
 - [x] 按 Warm Console 整理设置与“···”菜单，菜单底栏最多保留模型名
 - [x] 思考态改为 brain 脉冲，活动 running 保留原生进度指示器
 - [x] 移除 `flutter_animate`，仅保留 `lucide_icons_flutter` 作为本轮新增视觉依赖
+- [x] `terracotta-deep` CTA、打包 Noto 字体、助手 elevated 气泡
+- [x] 权限决策展示 `workspaceDir`（缺失时 fallback 文案）
+- [x] `ConsoleStatusStrip` 覆盖连接中等非已连接相位；连接中空状态独立于离线卡
+- [x] 输入聚焦描边使用 `terracotta-deep`
 - [ ] 继续逐屏验收配对、会话选择、权限决策与 Diff
-- [x] 用共享 `ConsolePresentation` 统一 Header / Composer 的离线、失败、停止中、已停止和停止超时语义
+- [x] 用共享 `ConsolePresentation` 统一 Header / Composer / 状态条的离线、失败、停止中、已停止和停止超时语义
 - [ ] 补齐共享恢复信息面板与有明确失败事实的重连失败视图
-- [x] 更新组件测试，覆盖 Composer 尺寸、模型语义、菜单去 token 和活动状态
-- [ ] 完成 Android 真机 Warm Console 视觉验收
+- [x] 更新组件测试，覆盖 Composer 尺寸、模型语义、菜单去 token、活动状态、连接中状态条/空状态与权限工作目录
+- [ ] 完成 Android 真机 Warm Console 逐屏视觉验收清单
 
 ### 文档
 
 - [x] 根 README 与当前启动、安装和协议一致
 - [x] 移动端 README 与当前 UI 和调试流程一致
-- [x] UI 设计文档更新为当前 Warm Console 实现与验收规格
+- [x] UI 设计文档更新为当前 Warm Console 实现与验收规格（含 2026-08-15 a11y/UX 补强）
 - [x] 系统架构与 Flutter 实现文档去掉初版假设
 
 ## 待专项验证

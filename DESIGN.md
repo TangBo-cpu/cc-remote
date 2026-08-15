@@ -61,7 +61,7 @@ spacing:
   xxl: "32px"
 components:
   button-primary:
-    backgroundColor: "{colors.terracotta}"
+    backgroundColor: "{colors.terracotta-deep}"
     textColor: "{colors.surface-elevated}"
     typography: "{typography.label}"
     rounded: "{rounded.control}"
@@ -117,8 +117,9 @@ CC Remote 是桌面 Claude Code 的手机控制面，不是缩小的终端，也
 
 ### Primary
 
-- **Terracotta Action:** 只用于发送、允许、重试、当前执行节点和少量品牌标记。
-- **Terracotta Deep:** 用于陶土色上的强调文字、按压态及低面积警示。
+- **Terracotta Action:** 浅陶土，只用于大面积品牌标记、当前执行节点和装饰性色条，不承担小字或 CTA 文字。
+- **Terracotta Deep:** 主按钮填充、陶土语义文字与按压态；保证浅色纸面上的文字/按钮对比度。
+- **CTA pair:** 主按钮使用 `terracotta-deep` 底 + `surface-elevated` 字；浅 `terracotta` 不直接做实心 CTA 字色。
 
 ### Neutral
 
@@ -145,7 +146,7 @@ CC Remote 是桌面 Claude Code 的手机控制面，不是缩小的终端，也
 
 **Label/Mono Font:** Noto Sans SC / JetBrains Mono
 
-无衬线字体负责导航、状态与控制；衬线字体仅用于 Claude 的连续叙述，使正文具有阅读感；等宽字体只用于命令、路径、代码和数值证据。实现时必须打包或明确加载字体，不假设所有 Android 设备已安装 Noto 字体。
+无衬线字体负责导航、状态与控制；衬线字体仅用于 Claude 的连续叙述，使正文具有阅读感；等宽字体只用于命令、路径、代码和数值证据。实现时必须打包或明确加载字体，不假设所有 Android 设备已安装 Noto 字体。Flutter 已打包 `NotoSansSC`（Regular/Bold）与 `NotoSerifSC`（Regular）子集字体到 `mobile/fonts/`。
 
 ### Hierarchy
 
@@ -183,7 +184,7 @@ CC Remote 是桌面 Claude Code 的手机控制面，不是缩小的终端，也
 ### Compact Session Header
 
 - 参考 Claude 手机端，拆成左侧 44px 圆形菜单与右侧 88×44px 新建/更多胶囊，中间保持透明。
-- 顶部不重复显示产品名、工作区、设备或连接状态；这些事实由 transcript、恢复信息面与 Composer 在需要时表达。
+- 顶部 chrome 不重复显示产品名、工作区、设备或连接状态；非「已连接」相位时，在会话头下方显示紧凑 `ConsoleStatusStrip`（图标 + 文案，必要时附主机名）。
 - 新建使用小型深色圆形 plus 标记；更多保持线性 ellipsis，两个动作仍有独立 44px 命中区。
 - “···”菜单底栏不显示剩余上下文 token，最多保留带屏读语义的当前模型名。
 - 顶部不再使用整宽会话表面或独立大状态卡。
@@ -191,9 +192,9 @@ CC Remote 是桌面 Claude Code 的手机控制面，不是缩小的终端，也
 ### Transcript
 
 - 用户消息靠右，使用略深于背景的暖灰气泡。
-- Claude 回复靠左，优先直接排在纸面上；仅在必须形成对象边界时使用轻量表面。
+- Claude 回复靠左，使用轻量暖白气泡（elevated paper + 1px line），与用户暖灰气泡成对，避免正文完全贴纸面时难扫视。
 - 回复正文使用衬线字体，系统说明与活动文字使用无衬线字体。
-- 空状态不做营销欢迎页，只给与当前会话相关的下一步。
+- 空状态不做营销欢迎页：已连接给快捷下一步；离线给重连卡；连接中给独立「正在重新连接」状态卡（不复用离线卡）。
 
 ### Activity Event
 
@@ -206,7 +207,8 @@ CC Remote 是桌面 Claude Code 的手机控制面，不是缩小的终端，也
 ### Composer
 
 - 标准尺寸为 350×110、16px 圆角、暖白抬升纸面。
-- 上半区保留输入文字与多行增长空间；工具行贴底，依次放暖色圆形扩展按钮、暖色模型胶囊和陶土色圆形发送或停止按钮。
+- 上半区保留输入文字与多行增长空间；工具行贴底，依次放暖色圆形扩展按钮、暖色模型胶囊和 `terracotta-deep` 圆形发送或停止按钮。
+- 输入框聚焦描边使用 `terracotta-deep`（约 1.4px），保证控制底上的焦点对比。
 - 权限模式进入扩展按钮的 sheet，不常驻占用一行；模型选择保留为紧凑胶囊。
 - Composer 旁不显示剩余上下文 token，token 数据不影响指令建议区高度。
 - 空闲显示发送；运行中显示停止；停止中显示禁用 stop 与明确文案；离线显示待发送数量和重连入口。
@@ -215,12 +217,14 @@ CC Remote 是桌面 Claude Code 的手机控制面，不是缩小的终端，也
 ### Permission Decision
 
 - 使用独立决策页，按“命令 → 工作目录 → 风险与影响 → 授权范围 → 动作”排序。
-- 首要动作是“仅本次允许”，次要动作是“拒绝并返回”。
+- 工作目录优先显示当前会话 `workspaceDir`；路径暂不可用时写「以桌面主机当前工作区为准（路径暂不可用）」，不虚构绝对路径。
+- 首要动作是“仅本次允许”（`terracotta-deep` CTA），次要动作是“拒绝并返回”。
 - 单次审批不能被视觉上暗示为永久授权；更改授权范围只进入产品已支持的权限模式。
 
 ### Recovery and Terminal States
 
-- 离线、重连失败、任务失败、停止中、已停止和停止超时复用同一信息骨架。
+- `ConsolePresentation` 统一相位：连接中、已连接、上传中、运行中、等待审批、停止中、停止未确认、已停止、执行失败、连接已断开。
+- 离线、重连失败、任务失败、停止中、已停止和停止超时复用同一信息骨架；连接中与离线必须可区分。
 - 每屏只保留一个主状态、一个事实说明和一个下一步动作。
 - “停止超时”不等于“已停止”；只有主机 `stopped` 事件或权威 transcript 中明确的停止证据可以进入已停止终态。
 - transcript、工作区和待发送内容在恢复页面中必须明确标注为已保留。

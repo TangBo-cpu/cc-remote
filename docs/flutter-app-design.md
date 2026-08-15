@@ -20,15 +20,17 @@ Flutter App 是产品主入口。当前实现集中在少量文件中，优先�
 
 `BootstrapScreen` 只显示恢复状态。`PairScreen` 负责相机扫描、紧凑横屏布局和错误恢复。`PairReviewSheet` 在换 token 前确认设备、origin 和二维码有效期。
 
-`ChatScreen` 由 `ConnectionHeader`、`TranscriptView` 和 `PromptBar` 组成。`ConnectionHeader` 是单一紧凑会话头：会话身份与连接事实居中，项目、工作区和设置等次级入口进入菜单；模型选择位于输入台。“···”菜单不显示剩余上下文 token，底栏最多保留具有屏读语义的当前模型名。
+`ChatScreen` 由 `ConnectionHeader`、可选 `ConsoleStatusStrip`、`TranscriptView` 和 `PromptBar` 组成。`ConnectionHeader` 是分离式紧凑会话头（菜单 + 新建/更多），不在 chrome 内堆连接文案；非 `connected` 相位时在头下方显示 `ConsoleStatusStrip`。模型选择位于输入台。“···”菜单不显示剩余上下文 token，底栏最多保留具有屏读语义的当前模型名。
 
-`TranscriptView` 展示用户消息、Claude Markdown 回复、活动状态、审批卡和离线重连卡。`MessageBlock` 与附件组件负责历史内容。`ActivityBlock` 合并思考和工具活动，任务结束后清理临时活动。
+`TranscriptView` 展示用户消息、Claude Markdown 回复（`AssistantBubbleFrame` elevated 气泡 + 衬线）、活动状态、审批卡，以及空状态下的连接中卡 / 离线重连卡 / 已连接快捷芯片。`MessageBlock` 与附件组件负责历史内容。`ActivityBlock` 合并思考和工具活动，任务结束后清理临时活动。
 
-`PromptBar` 处理权限模式、附件预览、多行输入、模型选择、发送和停止。当前为暖白 Composer：上方输入，下方贴底工具行依次为圆形扩展、暖色模型胶囊和陶土色圆形发送/停止。权限模式进入扩展 sheet，不再常驻一行；剩余上下文 token 不再显示，也不影响指令建议区高度。输入以 `/` 开头且没有空格时，`CommandSuggestions` 继续按前缀优先规则筛选 daemon 同步的 Claude Code 指令。
+`PromptBar` 处理权限模式、附件预览、多行输入、模型选择、发送和停止。当前为暖白 Composer：上方输入，下方贴底工具行依次为圆形扩展、暖色模型胶囊和 `terracotta-deep` 圆形发送/停止。权限模式进入扩展 sheet，不再常驻一行；剩余上下文 token 不再显示，也不影响指令建议区高度。输入以 `/` 开头且没有空格时，`CommandSuggestions` 继续按前缀优先规则筛选 daemon 同步的 Claude Code 指令。
+
+`PermissionRequestCard` 为全宽决策面：命令 → 工作目录（`session.workspaceDir` 或 fallback 文案）→ 影响 → 范围 →「仅本次允许」/「拒绝并返回」。
 
 `SessionNavigatorSheet` 展示项目和各自会话，允许切换或创建会话。`SettingsSheet` 按 Warm Console 分组管理设备信息、模型、背景、通知、重连和退出配对。`WorkspaceDrawer` 只读显示活动项目文件与 Git diff。
 
-主界面与工作区图标统一来自 `lucide_icons_flutter` 3.1.15。思考态使用 `brain` 和 `AnimationController` 做原生脉冲，普通活动 running 继续使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`，保留 `SignalPressEffect` 等已有原生交互效果。
+主界面与工作区图标统一来自 `lucide_icons_flutter` 3.1.15。主题打包 `NotoSansSC` / `NotoSerifSC`。思考态使用 `brain` 和 `AnimationController` 做原生脉冲，普通活动 running 继续使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`，保留 `SignalPressEffect` 等已有原生交互效果。
 
 ## 核心状态
 
@@ -36,7 +38,7 @@ Flutter App 是产品主入口。当前实现集中在少量文件中，优先�
 
 transcript 使用 `TranscriptMessage`，角色分为 user、assistant、system 和 activity。daemon 快照由 `RemoteTranscriptSnapshot` 解析，包含消息、运行状态、权限模式、审批请求、Claude session id 和 session info。
 
-运行状态由 `connected`、`remoteOffline`、`running`、`stopping` 和 `uploadingAttachments` 等字段共同表达。Warm Console 直接映射这些事实，不另设重复状态机对象；停止超时是“仍在运行但最近停止请求未确认”的视图状态，不能当成已停止。
+运行状态由 `connected`、`remoteOffline`、`running`、`stopping` 和 `uploadingAttachments` 等字段共同表达。`ConsolePresentation` / `ConsolePhase` 把这些事实映射为连接中、已连接、上传中、运行中、等待审批、停止中、停止未确认、已停止、执行失败、连接已断开；Header、状态条与 Composer 共用同一解析结果。停止超时是“仍在运行但最近停止请求未确认”的视图状态，不能当成已停止。
 
 ## 网络行为
 
@@ -70,11 +72,11 @@ App 支持 `manual`、`acceptEdits`、`auto`、`dontAsk`、`plan` 和 `bypassPer
 
 主界面使用 SafeArea。Warm Console 参考画板为 390×844，水平安全边距 20px，顶部会话头约 76px，Composer 视觉尺寸 350×110。视觉图标可为 36px，但语义命中区至少 44px。键盘出现时 transcript 和指令建议让出空间，状态和主动作不能被遮挡。
 
-系统大字体、小屏、横屏和键盘场景都有回归测试。中文显示需要真机验证，测试环境的 Ahem 字体只用于布局。
+系统大字体、小屏、横屏和键盘场景都有回归测试。中文 UI 依赖打包的 Noto 子集字体；widget 测试环境的 Ahem 字体只用于布局几何。
 
 ## 测试范围
 
-`mobile/test/widget_test.dart` 覆盖启动、配对、Warm Console 设置与菜单、当前模型屏读语义、菜单去上下文 token、会话导航、工作区、指令筛选、Composer 44/36px 尺寸、权限模式、审批卡、运行和停止状态、思考计时、原生进度指示器、减少动态效果、小屏大字体、横屏扫码、离线重连、Markdown 回复和活动展示。当前 Flutter 测试总数为 83 项。
+`mobile/test/widget_test.dart` 覆盖启动、配对、Warm Console 设置与菜单、当前模型屏读语义、菜单去上下文 token、会话导航、工作区、指令筛选、Composer 44/36px 尺寸、权限模式、审批卡（含工作目录与 fallback）、运行和停止状态、思考计时、原生进度指示器、连接中状态条与空状态卡、减少动态效果、小屏大字体、横屏扫码、离线重连、Markdown 回复和活动展示。`mobile/test/` 合计约 90 项测试（以 `flutter test` 为准）。
 
 `mobile/test/attachments_test.dart` 覆盖附件上传、限制和错误清理。提交前运行：
 

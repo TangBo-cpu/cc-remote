@@ -15,7 +15,7 @@ Flutter App
 
 当前公开版本是 [`v1.1.0`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.1.0)。Android 用户可以从 Release 页面下载 APK；当前安装包使用测试签名，适合个人测试，不应作为应用商店正式包分发。
 
-当前开发版本已将手机端主界面迁移到“暖纸控制台 / Warm Console”：暖白连续背景、陶土动作色、紧凑会话头、内容优先 transcript、分层活动状态和贴底 Composer；不再使用绿色状态、大黑色 Dock、玻璃或彩色偏移阴影。公开的 `v1.1.0` APK 仍是上一版界面。实现规格见 `DESIGN.md` 与 `docs/mobile-ui-app-design.md`。
+当前开发版本已将手机端主界面迁移到“暖纸控制台 / Warm Console”：暖白连续背景、`terracotta-deep` CTA、打包 Noto 中西文字体、紧凑会话头 + 状态条、助手 elevated 气泡、内容优先 transcript、分层活动状态和贴底 Composer；不再使用绿色状态、大黑色 Dock、玻璃或彩色偏移阴影。公开的 `v1.1.0` APK 仍是上一版界面。实现规格见 `DESIGN.md` 与 `docs/mobile-ui-app-design.md`。
 
 已经支持扫码配对、Bearer token、WebSocket 首包鉴权、流式输出、停止任务、六种权限模式、手机端一次性工具审批、斜杠指令、多项目与多会话、transcript 恢复、模型选择与上下文状态同步、只读工作区、Git diff、图片与文件附件、Android 后台本地通知、WebSocket 自动重连和活动任务恢复。Composer 和“···”菜单不再显示剩余上下文 token，菜单底栏最多保留当前模型名。
 

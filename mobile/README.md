@@ -6,9 +6,9 @@ Flutter 手机 App，用于扫码配对本机 CC Remote daemon，并远程控制
 
 App 已支持扫码确认、Secure Storage、启动恢复、WebSocket 自动重连、活动任务恢复、流式对话、停止任务、斜杠指令、Markdown、模型选择与上下文状态同步、六种权限模式、一次性工具审批、多项目与多会话、只读工作区、Git diff、图片与文件附件，以及 Android 后台本地通知。
 
-当前开发代码已实现“暖纸控制台 / Warm Console”主界面：Claude 风格的分离式顶部浮动控制、内容优先 transcript、分层活动状态、Warm Console 设置与菜单，以及贴底的暖白 Composer。公开的 `v1.1.0` APK 仍是上一版界面。
+当前开发代码已实现“暖纸控制台 / Warm Console”主界面：Claude 风格的分离式顶部浮动控制、非已连接相位的 `ConsoleStatusStrip`、内容优先 transcript（助手 elevated 气泡 + 衬线）、连接中/离线分空状态、权限卡工作目录、分层活动状态、Warm Console 设置与菜单，以及贴底的暖白 Composer（`terracotta-deep` 发送/停止）。公开的 `v1.1.0` APK 仍是上一版界面。
 
-Composer 底栏使用圆形扩展按钮、暖色模型胶囊和陶土色圆形发送/停止按钮，不显示剩余上下文 token。“···”菜单底栏最多保留当前模型名，并提供对应屏读语义。主界面和工作区统一使用 `lucide_icons_flutter`；思考态是原生脉冲 brain 图标，活动 running 状态仍使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`。
+Composer 底栏使用圆形扩展按钮、暖色模型胶囊和 `terracotta-deep` 圆形发送/停止按钮，不显示剩余上下文 token。“···”菜单底栏最多保留当前模型名，并提供对应屏读语义。主界面和工作区统一使用 `lucide_icons_flutter`；字体打包 `NotoSansSC` / `NotoSerifSC` 于 `fonts/`。思考态是原生脉冲 brain 图标，活动 running 状态仍使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`。
 
 ## 开发运行
 
@@ -96,14 +96,14 @@ App 在后台或锁屏时可以发送任务完成、失败、停止和等待权�
 
 ## 连接状态
 
-已配对表示本地保存了 origin 和 token。已连接表示 WebSocket 已完成鉴权。电脑端离线时保留配对和 transcript，禁用发送并提供重新连接。401 表示配对失效，App 会清除本地 token 并返回扫码页。
+已配对表示本地保存了 origin 和 token。已连接表示 WebSocket 已完成鉴权。连接建立中（已配对但尚未 `wsReady`，且非电脑端离线）显示状态条「正在连接」与 transcript 连接中空状态卡。电脑端离线时保留配对和 transcript，禁用发送并提供重新连接。401 表示配对失效，App 会清除本地 token 并返回扫码页。
 
 ## 代码入口
 
-`lib/main.dart` 是应用状态和主要页面。`lib/signal_console_theme.dart` 是主题与视觉部件。`lib/workspace_drawer.dart` 是只读工作区。`lib/attachments.dart` 是附件选择与上传。`lib/notification_service.dart` 是本地通知。
+`lib/main.dart` 是应用状态和主要页面。`lib/signal_console_theme.dart` 是主题与视觉部件（含 CTA / 字体 token）。`lib/workspace_drawer.dart` 是只读工作区。`lib/attachments.dart` 是附件选择与上传。`lib/notification_service.dart` 是本地通知。`fonts/` 为打包的 Noto 子集。
 
 更完整的设计和架构说明见 `../docs/mobile-ui-app-design.md`、`../docs/mobile-app-architecture.md` 和 `../docs/flutter-app-design.md`。
 
 ## 当前验证状态
 
-当前开发代码通过 `flutter analyze` 和 83 项 Flutter 测试，包括 Composer 触控尺寸、菜单模型语义、不显示上下文 token、思考计时和活动 running 指示器。`v1.1.0` 已安装到 Android 真机确认版本与主界面；本轮 Warm Console 改动尚待真机视觉验收。第二轮 session resume 与 Stop 长任务均已完成真机验证，Stop 后 daemon 没有残留 Claude 子进程。
+当前开发代码通过 `flutter analyze`；`mobile/test/` 合计约 90 项测试（含连接中状态条/空状态、权限工作目录与 fallback）。开发 release 已装 Android 真机；本轮 Warm Console a11y/UX 改动的逐屏视觉清单仍待勾选。第二轮 session resume 与 Stop 长任务均已完成真机验证，Stop 后 daemon 没有残留 Claude 子进程。
