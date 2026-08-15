@@ -1,218 +1,126 @@
 # CC Remote
 
-CC Remote 是一个手机端 Flutter App，用来远程控制本机 Claude Code。电脑端 daemon 负责配对、鉴权、会话保存、工作区读取和 Claude Code CLI 调用，网页只保留为调试壳。
+**在手机上远程控制本机 Claude Code。**
+
+扫码配对后，你就能在 Warm Console 里发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更——电脑端 daemon 继续跑 Claude Code CLI，手机只是随身控制台。
+
+[下载 Android APK · v1.2.0](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.2.0/cc-remote-v1.2.0-android.apk)
+·
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.2.0)
 
 ```text
-Flutter App
-  -> HTTPS / WSS
-  -> Cloudflare Tunnel
-  -> 127.0.0.1:8787
-  -> CC Remote daemon
-  -> local Claude Code CLI
+手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI
 ```
 
-## 当前版本
+<p align="center">
+  <img src="docs/images/01-chat.png" alt="Warm Console 主界面" width="280" />
+</p>
 
-当前公开版本是 [`v1.2.0`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.2.0)。Android 用户可以从 Release 页面下载 APK；当前安装包使用测试签名，适合个人测试，不应作为应用商店正式包分发。
+<p align="center"><sub>Warm Console · 已连接空状态：快捷任务 + 贴底 Composer</sub></p>
 
-`v1.2.0` 将手机端主界面发布为“暖纸控制台 / Warm Console”：暖白连续背景、`terracotta-deep` CTA、打包 Noto 衬线字体、紧凑会话头 + 状态条、更宽助手 elevated 气泡、连续字号滑杆（默认约 95%）、轻拟态抬升、内容优先 transcript、分层活动状态和贴底 Composer；不再使用绿色状态、大黑色 Dock、玻璃或彩色偏移阴影。实现规格见 `DESIGN.md` 与 `docs/mobile-ui-app-design.md`。
+---
 
-已经支持扫码配对、Bearer token、WebSocket 首包鉴权、流式输出、停止任务、六种权限模式、手机端一次性工具审批、斜杠指令、多项目与多会话、transcript 恢复、模型选择与上下文状态同步、只读工作区、Git diff、图片与文件附件、Android 后台本地通知、WebSocket 自动重连和活动任务恢复。Composer 和“···”菜单不再显示剩余上下文 token，菜单底栏最多保留当前模型名。
+## 它能做什么
 
-主界面与工作区已统一使用 Lucide 线性图标。思考态使用原生脉冲的 brain 图标，活动执行中仍使用 `CircularProgressIndicator`；交互保留 `SignalPressEffect` 等 Flutter 原生效果，不引入 `flutter_animate`。
+| 场景 | 体验 |
+| --- | --- |
+| 出门前丢一条任务 | 手机发 prompt，桌面 Claude 继续跑；流式回复实时回传 |
+| 工具要权限 | 手机弹出决策卡：看命令摘要与工作目录，拒绝或仅本次允许 |
+| 想确认改了什么 | 只读工作区 + Git diff，手机不提交、不改文件 |
+| 断线了 | transcript 与草稿保留，自动重连；回来后从权威快照继续 |
+| 字号不合适 | 设置里连续滑杆，默认约 95% |
 
-最近补齐了工作区冷启动对齐：daemon 启动时会按 `WORKSPACE_DIR` / 启动目录注册并激活项目，和“daemon 已在跑时再执行 `cc-remote`”语义一致。手机「项目与会话」面板与设置页会显示完整项目路径。流式回复做了文本合批、流式轻渲染和本地落盘节流，减轻手机经隧道时的卡顿体感。历史 Claude session 已失效时，daemon 会识别 CLI 的原始错误、清除旧 session ID，并自动以新会话重试本轮请求。
+**安全边界（产品承诺）：**
 
-当前限制是单设备授权。工作区不提供远程编辑、暂存和提交。手机不能注册任意电脑目录，只能切换电脑端已注册项目。会话全文搜索与 FCM 远程推送尚未实现。
+- daemon 默认只听 `127.0.0.1`，公网走 Tunnel
+- 一次性扫码配对，Bearer token；退出配对即撤销
+- 手机不能注册任意目录、不能跑任意 shell、不能远程编辑 / 提交
 
-## 启动电脑端
+---
 
-在准备交给 Claude Code 的项目目录运行：
+## 界面一览
+
+真机截图（v1.2.0 Warm Console）。
+
+| 主控制台 | 项目与会话 | 更多菜单 |
+| :---: | :---: | :---: |
+| <img src="docs/images/01-chat.png" width="220" alt="主控制台" /> | <img src="docs/images/06-sessions.png" width="220" alt="项目与会话" /> | <img src="docs/images/02-more-menu.png" width="220" alt="更多菜单" /> |
+
+| 设置（字号滑杆） | 工作区文件 | Git 修改 |
+| :---: | :---: | :---: |
+| <img src="docs/images/03-settings.png" width="220" alt="设置" /> | <img src="docs/images/04-workspace.png" width="220" alt="工作区" /> | <img src="docs/images/05-diff.png" width="220" alt="Diff" /> |
+
+暖白纸感背景、衬线阅读正文、更宽助手气泡、`terracotta-deep` 发送按钮；顶部只有圆形菜单 + 新建/更多胶囊，模型放在 Composer。设计规格见 [`DESIGN.md`](DESIGN.md)。
+
+---
+
+## 三分钟上手
+
+### 1. 电脑端
+
+在要交给 Claude 的项目目录：
 
 ```powershell
 cc-remote
 ```
 
-命令会启动 daemon 和 Cloudflare Tunnel，并在终端显示手机配对二维码。按 `Ctrl+C` 会停止本次启动的 daemon 和 tunnel。
+会启动 daemon + Cloudflare Tunnel，并在终端打印**手机配对二维码**。`Ctrl+C` 结束本次服务。
 
-如果 daemon 已经运行，在另一个项目目录再次执行 `cc-remote`，命令会把该目录注册到现有 daemon，并切换到该项目，不会重复启动服务。如果 daemon 重新冷启动，也会按本次启动目录激活对应项目，不会一直停在上次活动项目。手机端随后可以在「项目与会话」面板中切换已注册项目，并看到完整路径。
+daemon 已在跑时，换目录再执行一次 `cc-remote`，只注册并切换项目，不重复起服务。
 
-项目内也可以使用：
+### 2. 手机端
 
-```powershell
-.\cc-remote.cmd
-```
+1. 安装 [v1.2.0 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.2.0/cc-remote-v1.2.0-android.apk)（测试签名，个人使用）
+2. 允许「未知来源」安装
+3. 打开 App → 扫终端二维码 → 确认电脑名与服务地址 → 进入控制台
 
-常用参数：
+### 3. 开始对话
 
-```powershell
-cc-remote -NoTunnel
-cc-remote -WorkspaceDir "C:\Projects\cc-remote" -DeviceName "My PC"
-cc-remote -DisableBypassPermissions
-```
+在 Composer 输入任务，或点空状态快捷芯片。运行中可随时停止；需要权限时在手机上点一次「仅本次允许」或拒绝。
 
-## 手动运行 daemon
+---
 
-```powershell
-npm install
-$env:PUBLIC_ORIGIN = "https://cc-remote.example.com"
-$env:WORKSPACE_DIR = "C:\Projects\cc-remote"
-$env:DEVICE_NAME = "My PC"
-npm run dev
-```
+## 功能清单
 
-不设置 `PUBLIC_ORIGIN` 时默认使用 `http://127.0.0.1:8787`，适合本机调试。
+**连接与会话**
 
-固定 Cloudflare Tunnel 可以这样启动：
+- 扫码配对 / Secure Storage / 启动恢复
+- WebSocket 鉴权、自动重连、活动任务恢复
+- 多项目、多会话；完整项目路径展示
+- 会话 transcript 持久化与恢复
 
-```powershell
-cloudflared tunnel --config ".run\cloudflared-cc-remote.yml" run
-```
+**对话与控制**
 
-健康检查：
+- 流式输出（合批推送 + 手机端轻渲染）
+- 停止任务、思考计时、安全化工具活动
+- Claude Code 斜杠指令
+- 模型选择（Composer 暖色胶囊）
+- 六种权限模式 + 一次性工具审批
+- 图片 / 文件附件（每轮最多 5 个，单文件 ≤ 25MB）
 
-```text
-https://cc-remote.example.com/api/health
-```
+**工作区（只读）**
 
-正常响应：
+- 浏览已注册项目文件
+- 查看 Git diff（含未跟踪摘要）
 
-```json
-{"ok":true,"service":"cc-remote"}
-```
+**通知与偏好**
 
-## Flutter App
+- Android 后台本地通知（完成 / 失败 / 等待权限）
+- 连续字号滑杆（约 0.85×–1.40×，默认 0.95）
+- 聊天背景等对话偏好
 
-Android APK：
+**当前不做 / 限制**
 
-- [查看 `v1.2.0` Release](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.2.0)
-- [直接下载 `cc-remote-v1.2.0-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.2.0/cc-remote-v1.2.0-android.apk)
+- 单设备授权（多设备列表与单设备撤销未做）
+- 无会话全文搜索、无 FCM（进程被杀后无法推送）
+- 工作区不可编辑、暂存、提交
+- APK 为测试签名，非应用商店包
 
-下载后在 Android 手机上允许当前来源安装未知应用，并打开 APK 完成安装。
+---
 
-开发运行：
+## 开发者
 
-```powershell
-cd C:\Projects\cc-remote\mobile
-flutter pub get
-flutter analyze
-flutter test
-flutter run
-```
-
-开发者构建并安装 Android 调试版：
-
-```powershell
-cd C:\Projects\cc-remote\mobile
-flutter build apk --debug
-adb devices -l
-adb install -r build\app\outputs\flutter-apk\app-debug.apk
-adb shell monkey -p com.example.cc_remote -c android.intent.category.LAUNCHER 1
-```
-
-如果连接了多台设备，在 `adb` 命令中增加 `-s <device-id>`。
-
-## 配对协议
-
-daemon 启动后会打印一次性 JSON 二维码：
-
-```json
-{
-  "type": "cc-remote-pair",
-  "version": 1,
-  "origin": "https://cc-remote.example.com",
-  "nonce": "base64url-random-nonce",
-  "deviceName": "My PC",
-  "expiresAt": 1780000000000
-}
-```
-
-二维码 5 分钟过期，只能使用一次。App 扫码后先显示设备和服务地址，用户确认后调用 `/api/pair` 换取 token。token 明文只返回这一次，App 将其保存到 Secure Storage，daemon 只保存 token hash。
-
-## HTTP API
-
-无需鉴权：
-
-```text
-GET  /api/health
-POST /api/pair
-```
-
-需要 `Authorization: Bearer <token>`：
-
-```text
-GET  /api/status
-GET  /api/projects
-GET  /api/sessions/:sessionId
-POST /api/projects/:projectId/sessions
-POST /api/sessions/:sessionId/select
-POST /api/sessions/:sessionId/title
-POST /api/sessions/:sessionId/archive
-DELETE /api/sessions/:sessionId
-POST /api/sessions/:sessionId/attachments
-GET  /api/sessions/:sessionId/attachments/:attachmentId/content
-GET  /api/workspace
-GET  /api/workspace/file?path=src/daemon.ts
-GET  /api/workspace/diff?path=src/daemon.ts
-GET  /api/workspace/diff?path=src/daemon.ts&staged=1
-POST /api/new-conversation
-POST /api/stop
-POST /api/logout
-```
-
-`POST /api/local/projects/register` 只供本机启动脚本使用，通过本地控制 token 鉴权，不对手机开放。
-
-附件按会话上传。单轮最多 5 个，单个文件最大 25MB。文件保存到 daemon 的 `.data/uploads/`，不会写入用户项目。工作区接口只允许读取已注册项目内未被 Git 忽略的文本文件和 diff。
-
-## WebSocket 协议
-
-连接 `/ws` 后第一条消息必须是：
-
-```json
-{ "type": "auth", "token": "..." }
-```
-
-发送任务：
-
-```json
-{
-  "type": "prompt",
-  "promptId": "...",
-  "sessionId": "...",
-  "text": "帮我检查这个项目",
-  "attachmentIds": ["..."],
-  "permissionMode": "manual"
-}
-```
-
-其他客户端消息：
-
-```json
-{ "type": "stop" }
-{ "type": "select_session", "sessionId": "..." }
-{ "type": "permission_response", "requestId": "...", "decision": "allow" }
-```
-
-服务端消息包括 `status`、`catalog`、`prompt_accepted`、`transcript_snapshot`、`permission_capabilities`、`permission_request`、`permission_resolved`、`permission_expired`、`commands`、`session_info`、`activity`、`text`、`done`、`stopped` 和 `error`。
-
-`activity` 只发送安全化后的思考状态、工具名和摘要，不发送私有思考文本或完整工具结果。`text` 在 daemon 侧会短时合批后再推送，任务结束前会 flush 尾包。会话消息带 `projectId` 和 `sessionId`；daemon 接管任务后返回带相同 `promptId` 的 `prompt_accepted`。App 只会在确认丢失时重发同一个 `promptId`，daemon 的有界收据缓存会返回原确认而不再次启动 Claude。重连后再以 `transcript_snapshot`、`running`、`stopping`、`runId` 和 `startedAt` 恢复任务内容与 Stop 中间态。
-
-## 配置
-
-| 环境变量 | 默认值 | 说明 |
-|---|---|---|
-| `HOST` | `127.0.0.1` | daemon 监听地址 |
-| `PORT` | `8787` | daemon 监听端口 |
-| `PUBLIC_ORIGIN` | `http://127.0.0.1:8787` | 手机访问的源站 |
-| `WORKSPACE_DIR` | 当前目录 | 启动时注册并激活的项目目录 |
-| `CLAUDE_BIN` | `claude` | Claude Code CLI 路径 |
-| `CLAUDE_ARGS` | 未设置 | 以 `|` 分隔的额外 Claude CLI 参数，主要用于测试或特殊启动参数 |
-| `DEVICE_NAME` | 当前主机名 | 配对时显示的电脑名 |
-| `ALLOW_BYPASS_PERMISSIONS` | `1` | 是否允许手机为单次任务选择跳过权限 |
-| `MAX_WS_CONNECTIONS` | `16` | WebSocket 最大连接数 |
-| `WS_AUTH_TIMEOUT_MS` | `10000` | WebSocket 首包鉴权超时（毫秒） |
-
-## 校验
+### 校验
 
 ```powershell
 npm run typecheck
@@ -223,12 +131,70 @@ flutter analyze
 flutter test
 ```
 
-## 安全边界
+### 手动跑 daemon
 
-daemon 默认只监听 loopback，公网入口通过 Cloudflare Tunnel。二维码不包含长期 secret。HTTP 使用 Bearer token，WebSocket 使用首条 `auth` 消息。退出配对或重新配对会撤销旧 token 并关闭旧连接。
+```powershell
+npm install
+$env:PUBLIC_ORIGIN = "https://your-tunnel.example.com"
+$env:WORKSPACE_DIR = "C:\path\to\project"
+$env:DEVICE_NAME = "My PC"
+npm run dev
+```
 
-手机不能注册任意目录，不能调用任意 shell，不能远程编辑工作区。`bypassPermissions` 可由电脑端关闭；启用时手机仍需二次确认，并且只对下一次任务生效。
+不设 `PUBLIC_ORIGIN` 时默认 `http://127.0.0.1:8787`（本机调试）。
 
-## 重置配对
+### Flutter
 
-停止 daemon，删除 `.data/state.json`，再重新启动并扫码。
+```powershell
+cd mobile
+flutter pub get
+flutter run
+# 或
+flutter build apk --release
+```
+
+### 常用启动参数
+
+```powershell
+cc-remote -NoTunnel
+cc-remote -WorkspaceDir "C:\Projects\app" -DeviceName "My PC"
+cc-remote -DisableBypassPermissions
+```
+
+### 配置（摘要）
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `HOST` / `PORT` | `127.0.0.1` / `8787` | 本机监听 |
+| `PUBLIC_ORIGIN` | `http://127.0.0.1:8787` | 手机访问源 |
+| `WORKSPACE_DIR` | 当前目录 | 启动时注册并激活的项目 |
+| `DEVICE_NAME` | 主机名 | 配对显示名 |
+| `ALLOW_BYPASS_PERMISSIONS` | `1` | 是否允许手机选「跳过权限」 |
+| `CLAUDE_BIN` | `claude` | CLI 路径 |
+
+### 协议与 API
+
+- 配对：终端一次性 JSON 二维码（5 分钟、单次）→ `POST /api/pair` → token 仅返回一次
+- 实时：`/ws` 首条必须 `{ "type": "auth", "token": "..." }`，之后 `prompt` / `stop` / `permission_response` 等
+- HTTP：健康检查无需鉴权；项目、会话、附件、工作区等需 Bearer
+- 本地项目注册：`POST /api/local/projects/register` 仅本机脚本，不对手机开放
+
+完整消息类型、HTTP 路由与状态机说明见：
+
+- [`docs/mobile-app-architecture.md`](docs/mobile-app-architecture.md)
+- [`docs/flutter-app-design.md`](docs/flutter-app-design.md)
+- [`docs/mobile-ui-app-design.md`](docs/mobile-ui-app-design.md)
+- [`mobile/README.md`](mobile/README.md)
+
+### 重置配对
+
+停止 daemon，删除 `.data/state.json`，再启动并重新扫码。
+
+---
+
+## 版本
+
+当前公开版：**[v1.2.0](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.2.0)**  
+APK：[`cc-remote-v1.2.0-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.2.0/cc-remote-v1.2.0-android.apk)
+
+Warm Console：暖白连续背景、Noto 衬线、elevated 助手气泡、连续字号、轻拟态、内容优先 transcript 与贴底 Composer。
