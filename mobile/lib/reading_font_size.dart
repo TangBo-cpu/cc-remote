@@ -1,24 +1,38 @@
 import 'package:flutter/painting.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-/// Claude-style reading size steps for transcript and UI text.
-enum ReadingFontSizePreference {
-  small(0.9, '较小'),
-  medium(1.0, '标准'),
-  large(1.15, '较大'),
-  xlarge(1.3, '最大');
+/// Continuous reading scale for transcript and UI text (0.95 = app default).
+const double kReadingFontScaleDefault = 0.95;
+const double kReadingFontScaleMin = 0.85;
+const double kReadingFontScaleMax = 1.40;
 
-  const ReadingFontSizePreference(this.scale, this.label);
+double clampReadingFontScale(double value) {
+  return value.clamp(kReadingFontScaleMin, kReadingFontScaleMax).toDouble();
+}
 
-  final double scale;
-  final String label;
+/// Snap to 0.05 steps so the slider feels direct without float noise.
+double snapReadingFontScale(double value) {
+  final clamped = clampReadingFontScale(value);
+  return (clamped * 20).round() / 20;
+}
 
-  static ReadingFontSizePreference fromWireName(String? value) {
-    return values.firstWhere(
-      (preference) => preference.name == value,
-      orElse: () => medium,
-    );
+/// Parses stored wire values. Accepts continuous decimals and legacy enum names.
+double parseReadingFontScale(String? raw) {
+  if (raw == null || raw.isEmpty) return kReadingFontScaleDefault;
+  switch (raw) {
+    case 'small':
+      return 0.90;
+    case 'medium':
+      // Legacy enum default was 1.0; keep wire value stable.
+      return 1.0;
+    case 'large':
+      return 1.15;
+    case 'xlarge':
+      return 1.30;
   }
+  final parsed = double.tryParse(raw);
+  if (parsed == null) return kReadingFontScaleDefault;
+  return clampReadingFontScale(parsed);
 }
 
 class ReadingFontSizePreferenceStore {
@@ -28,29 +42,34 @@ class ReadingFontSizePreferenceStore {
   static const key = 'cc_remote_reading_font_size';
   final FlutterSecureStorage storage;
 
-  Future<ReadingFontSizePreference> load() async {
+  Future<double> load() async {
     try {
-      return ReadingFontSizePreference.fromWireName(await storage.read(key: key));
+      return parseReadingFontScale(await storage.read(key: key));
     } catch (_) {
-      return ReadingFontSizePreference.medium;
+      return kReadingFontScaleDefault;
     }
   }
 
-  Future<void> save(ReadingFontSizePreference preference) {
-    if (preference == ReadingFontSizePreference.medium) {
+  Future<void> save(double scale) {
+    final snapped = snapReadingFontScale(scale);
+    if ((snapped - kReadingFontScaleDefault).abs() < 0.001) {
       return storage.delete(key: key);
     }
-    return storage.write(key: key, value: preference.name);
+    return storage.write(key: key, value: snapped.toStringAsFixed(2));
   }
 }
 
-String readingFontSizeDescription(ReadingFontSizePreference preference) {
-  return switch (preference) {
-    ReadingFontSizePreference.small => '更紧凑，适合一屏看更多',
-    ReadingFontSizePreference.medium => 'Claude 默认阅读尺寸',
-    ReadingFontSizePreference.large => '更舒适的长文阅读',
-    ReadingFontSizePreference.xlarge => '最大阅读字号',
-  };
+String readingFontSizeLabel(double scale) {
+  final percent = (snapReadingFontScale(scale) * 100).round();
+  return '$percent%';
+}
+
+String readingFontSizeDescription(double scale) {
+  final snapped = snapReadingFontScale(scale);
+  if (snapped < 0.95) return '更紧凑，适合一屏看更多';
+  if (snapped <= 1.0) return '默认阅读尺寸';
+  if (snapped < 1.25) return '更舒适的长文阅读';
+  return '最大阅读字号';
 }
 
 /// Multiplies a platform [TextScaler] by [factor], preserving nonlinear a11y

@@ -4,7 +4,7 @@
 
 本文记录 Flutter Warm Console 的当前实现规格与后续验收目标，视觉依据是 Penpot 的 11 张 `CCR / 01` 至 `CCR / 11` 画板和已落地的 Flutter 组件。根目录 [`DESIGN.md`](../DESIGN.md) 是颜色、排版、圆角、间距和共享组件的规范源；本文负责页面流程、状态映射和工程验收。
 
-截至 2026-08-15，`mobile/lib/main.dart`、`mobile/lib/signal_console_theme.dart` 与 `mobile/lib/workspace_drawer.dart` 已完成 Warm Console 主界面、设置/菜单、Composer 和 Lucide 图标迁移，并保持原有网络、会话、附件、权限和 transcript 行为。后续已落地：`terracotta-deep` CTA、打包 Noto 字体、助手 elevated 气泡、权限卡工作目录、`ConsoleStatusStrip`（含连接中）、连接中空状态卡与聚焦描边对比。公开的 `v1.1.0` APK 仍使用上一版界面；开发 release 已装真机，逐屏视觉验收与恢复终态面板仍待补齐。
+截至 2026-08-15，`mobile/lib/main.dart`、`mobile/lib/signal_console_theme.dart` 与 `mobile/lib/workspace_drawer.dart` 已完成 Warm Console 主界面、设置/菜单、Composer 和 Lucide 图标迁移，并保持原有网络、会话、附件、权限和 transcript 行为。后续已落地：`terracotta-deep` CTA、打包 Noto 衬线字体、更宽助手 elevated 气泡、连续字号滑杆（默认 0.95）、轻拟态抬升、权限卡工作目录、`ConsoleStatusStrip`（含连接中）、连接中空状态卡与聚焦描边对比。公开版本为 `v1.2.0`；逐屏视觉验收与恢复终态面板仍可继续补齐。
 
 ## 目标与非目标
 
@@ -29,7 +29,7 @@
 - 浅陶土（`terracotta`）只用于品牌大面积与执行节点；实心 CTA / 发送 /「仅本次允许」使用 `terracotta-deep` + elevated 字色。
 - 在线与完成不使用绿色；状态由图标、文案和色调共同表达。
 - Flutter 打包 `NotoSerifSC`（Regular）到 `mobile/fonts/`；UI 与助手正文统一衬线，默认约 15.5px / 1.7。
-- 设置「对话偏好 → 字体大小」提供较小 / 标准 / 较大 / 最大四级；缩放与系统文字缩放相乘，夹在 0.85–1.6。
+- 设置「对话偏好 → 字体大小」提供连续滑杆（约 0.85×–1.40×，步进 0.05，默认 0.95）；缩放与系统文字缩放相乘，夹在 0.85–1.6。
 - 默认无玻璃、无渐变、无普通卡片阴影、无彩色偏移阴影。
 - 关键状态与按钮辅助文字最低 12px；正文约 15–15.5px；Diff 代码 12–13px。
 - 视觉图标按钮可为 36×36，实际命中区至少 44×44。
@@ -73,7 +73,7 @@
 
 顶部参考 Claude 手机端：左侧仅保留圆形菜单，右侧是新建与更多组成的短胶囊，中间不显示产品名、会话名、连接状态或设备名。非「已连接」相位时，会话头下方显示紧凑 `ConsoleStatusStrip`。模型留在 Composer，路径和设备信息进入设置或 sheet，剩余上下文 token 不显示。
 
-用户消息使用暖灰气泡；Claude 连续回复靠左使用 elevated paper 轻量气泡 + 衬线阅读字体。空 transcript：已连接给快捷下一步；离线给重连卡；连接中给独立状态卡。当前活动可展开，已完成活动折叠为一行。运行中必须始终能看到停止入口。
+用户消息使用暖灰气泡；Claude 连续回复靠左使用更宽的 elevated paper 气泡（贴合 transcript 阅读栏、软圆角与轻阴影）+ 衬线阅读字体。空 transcript：已连接给快捷下一步；离线给重连卡；连接中给独立状态卡。当前活动可展开，已完成活动折叠为一行。运行中必须始终能看到停止入口。
 
 ### 04 Permission Request
 
@@ -171,7 +171,7 @@
 ### TranscriptView
 
 - 保留现有本地缓存、snapshot 覆盖与流式轻渲染逻辑。
-- 用户消息靠右暖灰气泡；助手回复靠左 elevated paper 气泡 + 衬线；系统消息不使用营销式卡片。
+- 用户消息靠右暖灰气泡；助手回复靠左更宽 elevated paper 气泡 + 衬线；系统消息不使用营销式卡片。
 - 空状态三分支：已连接快捷芯片 / 离线 `_OfflineReconnectCard` / 连接中 `_ConnectingStatusCard`。
 - 权限请求为全宽决策面，顺序为命令 → 工作目录 → 影响 → 范围 → 动作。
 

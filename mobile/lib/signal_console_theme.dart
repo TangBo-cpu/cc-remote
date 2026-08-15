@@ -56,7 +56,7 @@ class AppTypography {
     'monospace',
   ];
 
-  /// Base assistant body before [ReadingFontSizePreference] scaling.
+  /// Base assistant body before reading-font scale factor.
   static const assistantBodySize = 15.5;
   static const assistantBodyHeight = 1.7;
   static const userBodySize = 15.0;
@@ -86,10 +86,33 @@ class AppRadii {
   static const surface = 16.0;
   static const header = 22.0;
   static const pill = 999.0;
+  /// Soft chat bubbles (Claude / iMessage-like).
+  static const bubbleSoft = 22.0;
 
   static const panel = surface;
-  static const bubble = surface;
+  static const bubble = bubbleSoft;
   static const input = control;
+}
+
+/// Quiet paper lift — not glass, not heavy drop shadow.
+class AppElevation {
+  static List<BoxShadow> softCard({double alpha = 0.07}) => [
+    BoxShadow(
+      color: const Color(0xFF2B2A27).withValues(alpha: alpha),
+      blurRadius: 18,
+      offset: const Offset(0, 6),
+      spreadRadius: -4,
+    ),
+  ];
+
+  static List<BoxShadow> softBubble({double alpha = 0.055}) => [
+    BoxShadow(
+      color: const Color(0xFF2B2A27).withValues(alpha: alpha),
+      blurRadius: 14,
+      offset: const Offset(0, 4),
+      spreadRadius: -3,
+    ),
+  ];
 }
 
 class AppMotion {

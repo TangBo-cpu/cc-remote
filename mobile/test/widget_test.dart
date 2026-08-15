@@ -939,13 +939,13 @@ void main() {
             chatBackground: ChatBackgroundPreference.defaultValue,
             currentModel: 'claude-opus-4-8',
             selectedModel: ClaudeModelPreference.followComputer,
-            readingFontSize: ReadingFontSizePreference.medium,
+            readingFontScale: kReadingFontScaleDefault,
             onReconnect: () {},
             onNotificationsChanged: (value) async => value,
             onModelChanged: (_) async {},
             onChatBackgroundChanged: (preference) async => preference,
             onPickChatBackgroundImage: (_) async => null,
-            onReadingFontSizeChanged: (_) async {},
+            onReadingFontScaleChanged: (scale, {bool persist = true}) async {},
             onLogout: () {},
           ),
         ),
@@ -1088,7 +1088,7 @@ void main() {
     );
   });
 
-  testWidgets('warm sheet surfaces use tonal depth without shadows', (
+  testWidgets('warm sheet surfaces use soft paper lift', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -1101,7 +1101,8 @@ void main() {
     final surface = tester.widget<Container>(find.byType(Container).first);
     final decoration = surface.decoration! as BoxDecoration;
     expect(decoration.color, AppColors.surfaceElevated);
-    expect(decoration.boxShadow, isNull);
+    expect(decoration.boxShadow, isNotNull);
+    expect(decoration.boxShadow, isNotEmpty);
   });
 
   testWidgets('new conversation clears the current transcript', (tester) async {

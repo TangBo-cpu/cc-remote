@@ -6,7 +6,7 @@ Flutter 手机 App，用于扫码配对本机 CC Remote daemon，并远程控制
 
 App 已支持扫码确认、Secure Storage、启动恢复、WebSocket 自动重连、活动任务恢复、流式对话、停止任务、斜杠指令、Markdown、模型选择与上下文状态同步、六种权限模式、一次性工具审批、多项目与多会话、只读工作区、Git diff、图片与文件附件，以及 Android 后台本地通知。
 
-当前开发代码已实现“暖纸控制台 / Warm Console”主界面：Claude 风格的分离式顶部浮动控制、非已连接相位的 `ConsoleStatusStrip`、内容优先 transcript（助手 elevated 气泡 + 衬线）、连接中/离线分空状态、权限卡工作目录、分层活动状态、Warm Console 设置与菜单，以及贴底的暖白 Composer（`terracotta-deep` 发送/停止）。公开的 `v1.1.0` APK 仍是上一版界面。
+`v1.2.0` 已发布“暖纸控制台 / Warm Console”主界面：Claude 风格的分离式顶部浮动控制、非已连接相位的 `ConsoleStatusStrip`、内容优先 transcript（更宽助手 elevated 气泡 + 衬线）、连续字号滑杆（默认约 95%）、轻拟态抬升、连接中/离线分空状态、权限卡工作目录、分层活动状态、Warm Console 设置与菜单，以及贴底的暖白 Composer（`terracotta-deep` 发送/停止）。
 
 Composer 底栏使用圆形扩展按钮、暖色模型胶囊和 `terracotta-deep` 圆形发送/停止按钮，不显示剩余上下文 token。“···”菜单底栏最多保留当前模型名，并提供对应屏读语义。主界面和工作区统一使用 `lucide_icons_flutter`；字体打包 `NotoSerifSC` 于 `fonts/`（UI 与助手统一衬线）。思考态是原生脉冲 brain 图标，活动 running 状态仍使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`。
 
@@ -30,9 +30,9 @@ flutter run
 
 ## Android 安装
 
-当前公开版本是 [`v1.1.0`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.1.0)：
+当前公开版本是 [`v1.2.0`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.2.0)：
 
-- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.1.0/cc-remote-v1.1.0-android.apk)
+- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.2.0/cc-remote-v1.2.0-android.apk)
 
 下载后在 Android 手机上允许当前来源安装未知应用，并打开 APK 完成安装。当前 APK 使用测试签名，适合个人测试，不应作为应用商店正式包分发。
 

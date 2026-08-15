@@ -27,6 +27,17 @@ void main() {
   runApp(const CcRemoteApp());
 }
 
+/// Keep a healthy chat socket across app resume / picker returns.
+/// Manual reconnect and offline recovery still force a new connection.
+bool shouldPreserveLiveWebSocket({
+  required bool forceReconnect,
+  required bool wsReady,
+  required bool remoteOffline,
+  required bool hasChannel,
+}) {
+  return !forceReconnect && wsReady && !remoteOffline && hasChannel;
+}
+
 class CcRemoteApp extends StatefulWidget {
   const CcRemoteApp({
     super.key,
@@ -57,8 +68,9 @@ class CcRemoteApp extends StatefulWidget {
 
 class _CcRemoteAppState extends State<CcRemoteApp> {
   late final ReadingFontSizePreferenceStore readingFontSizePreferenceStore;
-  final ValueNotifier<ReadingFontSizePreference> readingFontSize =
-      ValueNotifier(ReadingFontSizePreference.medium);
+  final ValueNotifier<double> readingFontScale = ValueNotifier(
+    kReadingFontScaleDefault,
+  );
   int readingFontSizeRevision = 0;
 
   @override
@@ -72,21 +84,23 @@ class _CcRemoteAppState extends State<CcRemoteApp> {
 
   @override
   void dispose() {
-    readingFontSize.dispose();
+    readingFontScale.dispose();
     super.dispose();
   }
 
   Future<void> initializeReadingFontSize() async {
     final revision = readingFontSizeRevision;
-    final preference = await readingFontSizePreferenceStore.load();
+    final scale = await readingFontSizePreferenceStore.load();
     if (!mounted || revision != readingFontSizeRevision) return;
-    readingFontSize.value = preference;
+    readingFontScale.value = scale;
   }
 
-  Future<void> setReadingFontSize(ReadingFontSizePreference preference) async {
+  Future<void> setReadingFontScale(double scale, {bool persist = true}) async {
+    final snapped = snapReadingFontScale(scale);
     readingFontSizeRevision += 1;
-    await readingFontSizePreferenceStore.save(preference);
-    if (mounted) readingFontSize.value = preference;
+    readingFontScale.value = snapped;
+    if (!persist) return;
+    await readingFontSizePreferenceStore.save(snapped);
   }
 
   @override
@@ -96,16 +110,13 @@ class _CcRemoteAppState extends State<CcRemoteApp> {
       debugShowCheckedModeBanner: false,
       theme: buildSignalConsoleTheme(),
       builder: (context, child) {
-        return ValueListenableBuilder<ReadingFontSizePreference>(
-          valueListenable: readingFontSize,
-          builder: (context, preference, _) {
+        return ValueListenableBuilder<double>(
+          valueListenable: readingFontScale,
+          builder: (context, scale, _) {
             final media = MediaQuery.of(context);
             return MediaQuery(
               data: media.copyWith(
-                textScaler: multiplyReadingTextScaler(
-                  media.textScaler,
-                  preference.scale,
-                ),
+                textScaler: multiplyReadingTextScaler(media.textScaler, scale),
               ),
               child: child ?? const SizedBox.shrink(),
             );
@@ -121,8 +132,8 @@ class _CcRemoteAppState extends State<CcRemoteApp> {
         chatBackgroundPreferenceStore: widget.chatBackgroundPreferenceStore,
         chatBackgroundImageService: widget.chatBackgroundImageService,
         cameraPermissionService: widget.cameraPermissionService,
-        readingFontSizeListenable: readingFontSize,
-        onReadingFontSizeChanged: setReadingFontSize,
+        readingFontScaleListenable: readingFontScale,
+        onReadingFontScaleChanged: setReadingFontScale,
       ),
     );
   }
@@ -139,15 +150,14 @@ class DemoShell extends StatefulWidget {
     this.chatBackgroundPreferenceStore,
     this.chatBackgroundImageService,
     this.cameraPermissionService,
-    ValueListenable<ReadingFontSizePreference>? readingFontSizeListenable,
-    Future<void> Function(ReadingFontSizePreference)? onReadingFontSizeChanged,
-  }) : readingFontSizeListenable =
-           readingFontSizeListenable ??
-           const _StaticReadingFontSizeListenable(
-             ReadingFontSizePreference.medium,
-           ),
-       onReadingFontSizeChanged =
-           onReadingFontSizeChanged ?? _noopReadingFontSizeChanged;
+    ValueListenable<double>? readingFontScaleListenable,
+    Future<void> Function(double scale, {bool persist})?
+    onReadingFontScaleChanged,
+  }) : readingFontScaleListenable =
+           readingFontScaleListenable ??
+           const _StaticReadingFontScaleListenable(kReadingFontScaleDefault),
+       onReadingFontScaleChanged =
+           onReadingFontScaleChanged ?? _noopReadingFontScaleChanged;
 
   final bool enableCamera;
   final bool demoMode;
@@ -157,23 +167,24 @@ class DemoShell extends StatefulWidget {
   final ChatBackgroundPreferenceStore? chatBackgroundPreferenceStore;
   final ChatBackgroundImageService? chatBackgroundImageService;
   final CameraPermissionService? cameraPermissionService;
-  final ValueListenable<ReadingFontSizePreference> readingFontSizeListenable;
-  final Future<void> Function(ReadingFontSizePreference) onReadingFontSizeChanged;
+  final ValueListenable<double> readingFontScaleListenable;
+  final Future<void> Function(double scale, {bool persist})
+  onReadingFontScaleChanged;
 
-  static Future<void> _noopReadingFontSizeChanged(
-    ReadingFontSizePreference _,
-  ) async {}
+  static Future<void> _noopReadingFontScaleChanged(
+    double _, {
+    bool persist = true,
+  }) async {}
 
   @override
   State<DemoShell> createState() => _DemoShellState();
 }
 
-class _StaticReadingFontSizeListenable
-    implements ValueListenable<ReadingFontSizePreference> {
-  const _StaticReadingFontSizeListenable(this.value);
+class _StaticReadingFontScaleListenable implements ValueListenable<double> {
+  const _StaticReadingFontScaleListenable(this.value);
 
   @override
-  final ReadingFontSizePreference value;
+  final double value;
 
   @override
   void addListener(VoidCallback listener) {}
@@ -256,6 +267,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final Set<String> respondingPermissionIds = {};
   Future<void> lastTranscriptWrite = Future<void>.value();
   Future<void>? refreshConnectionInFlight;
+  bool refreshConnectionForcesReconnect = false;
+  int connectionRefreshGeneration = 0;
   // ponytail: batch stream paint/persist; tighten if first glyph feels late
   static const streamTextBatchInterval = Duration(milliseconds: 40);
   static const streamPersistInterval = Duration(milliseconds: 1500);
@@ -320,7 +333,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     if (state != AppLifecycleState.resumed) return;
     unawaited(cancelNotifications());
     openPendingNotificationSession();
-    unawaited(refreshConnection());
+    // Notification shade / attachment pickers also resume the app. Keep a
+    // healthy socket; only force-reconnect when already offline.
+    unawaited(refreshConnection(forceReconnect: false));
   }
 
   Future<void> initializeNotifications() async {
@@ -612,29 +627,68 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     return true;
   }
 
-  Future<void> refreshConnection() {
+  Future<void> refreshConnection({bool forceReconnect = true}) {
     final inFlight = refreshConnectionInFlight;
-    if (inFlight != null) return inFlight;
-    late final Future<void> operation;
-    operation = _refreshConnection().whenComplete(() {
-      if (identical(refreshConnectionInFlight, operation)) {
-        refreshConnectionInFlight = null;
+    if (inFlight != null) {
+      if (!forceReconnect || refreshConnectionForcesReconnect) {
+        return inFlight;
       }
-    });
+      // Soft probe is already running; ensure a forced reconnect follows it.
+      late final Future<void> forced;
+      forced = inFlight
+          .then((_) {
+            if (!mounted) return Future<void>.value();
+            return _refreshConnection(forceReconnect: true);
+          })
+          .whenComplete(() {
+            if (identical(refreshConnectionInFlight, forced)) {
+              refreshConnectionInFlight = null;
+              refreshConnectionForcesReconnect = false;
+            }
+          });
+      refreshConnectionInFlight = forced;
+      refreshConnectionForcesReconnect = true;
+      return forced;
+    }
+    late final Future<void> operation;
+    operation = _refreshConnection(forceReconnect: forceReconnect).whenComplete(
+      () {
+        if (identical(refreshConnectionInFlight, operation)) {
+          refreshConnectionInFlight = null;
+          refreshConnectionForcesReconnect = false;
+        }
+      },
+    );
     refreshConnectionInFlight = operation;
+    refreshConnectionForcesReconnect = forceReconnect;
     return operation;
   }
 
-  Future<void> _refreshConnection() async {
+  Future<void> _refreshConnection({required bool forceReconnect}) async {
     final current = session;
     if (widget.demoMode || route != ShellRoute.chat || current == null) return;
-    setState(() {
-      wsReady = false;
-      remoteOffline = false;
-    });
+
+    final generation = connectionRefreshGeneration;
+    final keepLiveSocket = shouldPreserveLiveWebSocket(
+      forceReconnect: forceReconnect,
+      wsReady: wsReady,
+      remoteOffline: remoteOffline,
+      hasChannel: wsClient.channel != null,
+    );
+    if (!keepLiveSocket) {
+      setState(() {
+        wsReady = false;
+        remoteOffline = false;
+      });
+    }
+
     try {
       final status = await fetchStatus(current);
-      if (!mounted || session != current) return;
+      if (!mounted ||
+          session != current ||
+          generation != connectionRefreshGeneration) {
+        return;
+      }
       final restored = current.copyWith(
         deviceName: status.deviceName,
         workspaceDir: status.workspaceDir,
@@ -642,42 +696,45 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       setState(() {
         session = restored;
         remoteOffline = false;
-        running = status.running;
-        stopping = status.running && status.stopping;
-        activeRunId = status.running ? status.runId : null;
-        runStartedAt = status.running ? status.startedAt : null;
-        if (status.hasSessionInfo) {
-          modelName = status.modelName;
-          contextWindow = status.contextWindow;
-          remainingContext = status.remainingContext;
+        // Live WS is authoritative for run/model; soft resume only refreshes
+        // catalog/device metadata so a delayed /api/status cannot clobber it.
+        if (!keepLiveSocket) {
+          running = status.running;
+          stopping = status.running && status.stopping;
+          activeRunId = status.running ? status.runId : null;
+          runStartedAt = status.running ? status.startedAt : null;
+          if (status.hasSessionInfo) {
+            modelName = status.modelName;
+            contextWindow = status.contextWindow;
+            remainingContext = status.remainingContext;
+          }
+          if (!status.running) removeInterruptedRunNotice();
         }
         applyCatalog(status.catalog);
-        if (!status.running) removeInterruptedRunNotice();
       });
       persistTranscriptSnapshotLater();
+      if (!forceReconnect && wsClient.channel != null) return;
+      if (generation != connectionRefreshGeneration) return;
       connectWs(restored);
     } catch (err) {
-      if (!mounted || session != current) return;
+      if (!mounted ||
+          session != current ||
+          generation != connectionRefreshGeneration) {
+        return;
+      }
       if (err is UnauthorizedSession) {
-        closeWs();
-        await tokenStore.clear();
-        await clearTranscriptStore();
-        if (!mounted || session != current) return;
-        setState(() {
-          session = null;
-          route = ShellRoute.pair;
-          pairError = '无法恢复连接，请重新扫码';
-          remoteOffline = false;
-          running = false;
-          stopping = false;
-          messages.clear();
-        });
+        await recoverUnauthorizedSession();
+        return;
+      }
+      if (!forceReconnect && wsClient.channel != null) {
+        // Soft probe: leave auto-reconnect / live socket alone.
         return;
       }
       setState(() {
         remoteOffline = true;
       });
       persistTranscriptSnapshotLater();
+      if (generation != connectionRefreshGeneration) return;
       connectWs(current);
     }
   }
@@ -1057,6 +1114,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   Future<void> recoverUnauthorizedSession() async {
+    connectionRefreshGeneration += 1;
+    refreshConnectionInFlight = null;
+    refreshConnectionForcesReconnect = false;
     closeWs();
     await tokenStore.clear();
     await clearTranscriptStore();
@@ -1876,9 +1936,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    return ValueListenableBuilder<ReadingFontSizePreference>(
-      valueListenable: widget.readingFontSizeListenable,
-      builder: (context, readingFontSize, _) {
+    return ValueListenableBuilder<double>(
+      valueListenable: widget.readingFontScaleListenable,
+      builder: (context, readingFontScale, _) {
         final screen = switch (route) {
           ShellRoute.boot => const BootstrapScreen(),
           ShellRoute.pair => PairScreen(
@@ -1923,13 +1983,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
               chatBackground,
               modelName,
               selectedModel,
-              readingFontSize,
+              readingFontScale,
               refreshConnection,
               setNotificationsEnabled,
               setModelPreference,
               setChatBackground,
               pickChatBackgroundImage,
-              widget.onReadingFontSizeChanged,
+              widget.onReadingFontScaleChanged,
               logoutPairedDevice,
             ),
             onOpenModelPicker: () => openModelPicker(context),
@@ -2950,7 +3010,7 @@ class ChatScreen extends StatelessWidget {
         return SafeArea(
           key: const ValueKey('chat'),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
+            padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
             child: Column(
               children: [
                 header,
@@ -3393,14 +3453,14 @@ Future<void> showSettingsSheet(
   ChatBackgroundPreference chatBackground,
   String? currentModel,
   ClaudeModelPreference selectedModel,
-  ReadingFontSizePreference readingFontSize,
+  double readingFontScale,
   VoidCallback onReconnect,
   Future<bool> Function(bool) onNotificationsChanged,
   Future<void> Function(ClaudeModelPreference) onModelChanged,
   Future<ChatBackgroundPreference> Function(ChatBackgroundPreference)
   onChatBackgroundChanged,
   Future<ChatBackgroundPreference?> Function(double) onPickChatBackgroundImage,
-  Future<void> Function(ReadingFontSizePreference) onReadingFontSizeChanged,
+  Future<void> Function(double scale, {bool persist}) onReadingFontScaleChanged,
   VoidCallback onLogout,
 ) {
   return showModalBottomSheet<void>(
@@ -3412,13 +3472,13 @@ Future<void> showSettingsSheet(
       chatBackground: chatBackground,
       currentModel: currentModel,
       selectedModel: selectedModel,
-      readingFontSize: readingFontSize,
+      readingFontScale: readingFontScale,
       onReconnect: onReconnect,
       onNotificationsChanged: onNotificationsChanged,
       onModelChanged: onModelChanged,
       onChatBackgroundChanged: onChatBackgroundChanged,
       onPickChatBackgroundImage: onPickChatBackgroundImage,
-      onReadingFontSizeChanged: onReadingFontSizeChanged,
+      onReadingFontScaleChanged: onReadingFontScaleChanged,
       onLogout: onLogout,
     ),
   );
@@ -3705,13 +3765,13 @@ class SettingsSheet extends StatefulWidget {
     required this.chatBackground,
     required this.currentModel,
     required this.selectedModel,
-    required this.readingFontSize,
+    required this.readingFontScale,
     required this.onReconnect,
     required this.onNotificationsChanged,
     required this.onModelChanged,
     required this.onChatBackgroundChanged,
     required this.onPickChatBackgroundImage,
-    required this.onReadingFontSizeChanged,
+    required this.onReadingFontScaleChanged,
     required this.onLogout,
   });
 
@@ -3720,7 +3780,7 @@ class SettingsSheet extends StatefulWidget {
   final ChatBackgroundPreference chatBackground;
   final String? currentModel;
   final ClaudeModelPreference selectedModel;
-  final ReadingFontSizePreference readingFontSize;
+  final double readingFontScale;
   final VoidCallback onReconnect;
   final Future<bool> Function(bool) onNotificationsChanged;
   final Future<void> Function(ClaudeModelPreference) onModelChanged;
@@ -3728,8 +3788,8 @@ class SettingsSheet extends StatefulWidget {
   onChatBackgroundChanged;
   final Future<ChatBackgroundPreference?> Function(double)
   onPickChatBackgroundImage;
-  final Future<void> Function(ReadingFontSizePreference)
-  onReadingFontSizeChanged;
+  final Future<void> Function(double scale, {bool persist})
+  onReadingFontScaleChanged;
   final VoidCallback onLogout;
 
   @override
@@ -3740,10 +3800,11 @@ class _SettingsSheetState extends State<SettingsSheet> {
   late bool notificationsEnabled = widget.notificationsEnabled;
   late ChatBackgroundPreference chatBackground = widget.chatBackground;
   late ClaudeModelPreference selectedModel = widget.selectedModel;
-  late ReadingFontSizePreference readingFontSize = widget.readingFontSize;
+  late double readingFontScale = widget.readingFontScale;
+  late double persistedReadingFontScale = widget.readingFontScale;
   bool changingNotifications = false;
   bool changingModel = false;
-  bool changingReadingFontSize = false;
+  bool savingReadingFontScale = false;
 
   Future<void> changeNotifications(bool value) async {
     if (changingNotifications) return;
@@ -3793,24 +3854,33 @@ class _SettingsSheetState extends State<SettingsSheet> {
     }
   }
 
-  Future<void> chooseReadingFontSize() async {
-    if (changingReadingFontSize) return;
-    final next = await showReadingFontSizePicker(
-      context,
-      selected: readingFontSize,
-    );
-    if (next == null || next == readingFontSize || !mounted) return;
-    setState(() => changingReadingFontSize = true);
+  void previewReadingFontScale(double value) {
+    final snapped = snapReadingFontScale(value);
+    if ((snapped - readingFontScale).abs() < 0.001) return;
+    setState(() => readingFontScale = snapped);
+    unawaited(widget.onReadingFontScaleChanged(snapped, persist: false));
+  }
+
+  Future<void> commitReadingFontScale(double value) async {
+    final snapped = snapReadingFontScale(value);
+    final previous = persistedReadingFontScale;
+    setState(() {
+      readingFontScale = snapped;
+      savingReadingFontScale = true;
+    });
     try {
-      await widget.onReadingFontSizeChanged(next);
-      if (mounted) setState(() => readingFontSize = next);
+      await widget.onReadingFontScaleChanged(snapped, persist: true);
+      if (!mounted) return;
+      setState(() => persistedReadingFontScale = snapped);
     } catch (_) {
       if (!mounted) return;
+      setState(() => readingFontScale = previous);
+      unawaited(widget.onReadingFontScaleChanged(previous, persist: false));
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('字体大小保存失败，请重试')));
     } finally {
-      if (mounted) setState(() => changingReadingFontSize = false);
+      if (mounted) setState(() => savingReadingFontScale = false);
     }
   }
 
@@ -3952,35 +4022,95 @@ class _SettingsSheetState extends State<SettingsSheet> {
                         ),
                       ),
                       const Divider(height: 1, indent: 60, endIndent: 12),
-                      ListTile(
+                      Padding(
                         key: const ValueKey('reading-font-size-setting'),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 2,
-                        ),
-                        minVerticalPadding: 10,
-                        leading: const _SettingsLeadingIcon(
-                          icon: LucideIcons.type,
-                        ),
-                        title: Text('字体大小', style: rowTitleStyle),
-                        subtitle: Text(
-                          '${readingFontSize.label} · ${readingFontSizeDescription(readingFontSize)}',
-                          style: rowSubtitleStyle,
-                        ),
-                        trailing: changingReadingFontSize
-                            ? const SizedBox.square(
-                                dimension: 20,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
+                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const _SettingsLeadingIcon(
+                                  icon: LucideIcons.type,
                                 ),
-                              )
-                            : const Icon(
-                                LucideIcons.chevronRight,
-                                color: AppColors.inactive,
-                              ),
-                        onTap: changingReadingFontSize
-                            ? null
-                            : chooseReadingFontSize,
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text('字体大小', style: rowTitleStyle),
+                                ),
+                                Text(
+                                  readingFontSizeLabel(readingFontScale),
+                                  style: textTheme.labelLarge?.copyWith(
+                                    color: AppColors.terracottaDeep,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                if (savingReadingFontScale) ...[
+                                  const SizedBox(width: 8),
+                                  const SizedBox.square(
+                                    dimension: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              readingFontSizeDescription(readingFontScale),
+                              style: rowSubtitleStyle,
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                Text(
+                                  'A',
+                                  style: textTheme.bodySmall?.copyWith(
+                                    fontSize: 12,
+                                    color: AppColors.muted,
+                                  ),
+                                ),
+                                Expanded(
+                                  child: SliderTheme(
+                                    data: SliderTheme.of(context).copyWith(
+                                      activeTrackColor: AppColors.terracotta,
+                                      inactiveTrackColor: AppColors.control,
+                                      thumbColor: AppColors.terracottaDeep,
+                                      overlayColor: AppColors.terracotta
+                                          .withValues(alpha: 0.14),
+                                      trackHeight: 3.5,
+                                    ),
+                                    child: Slider(
+                                      key: const ValueKey(
+                                        'reading-font-size-slider',
+                                      ),
+                                      value: readingFontScale.clamp(
+                                        kReadingFontScaleMin,
+                                        kReadingFontScaleMax,
+                                      ),
+                                      min: kReadingFontScaleMin,
+                                      max: kReadingFontScaleMax,
+                                      divisions: 11,
+                                      label: readingFontSizeLabel(
+                                        readingFontScale,
+                                      ),
+                                      onChanged: previewReadingFontScale,
+                                      onChangeEnd: commitReadingFontScale,
+                                    ),
+                                  ),
+                                ),
+                                Text(
+                                  'A',
+                                  style: textTheme.bodySmall?.copyWith(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.ink,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
                     ],
                   ),
@@ -4057,7 +4187,6 @@ class _SettingsSheetState extends State<SettingsSheet> {
     );
   }
 }
-
 class _SettingsCloseButton extends StatelessWidget {
   const _SettingsCloseButton({required this.onPressed});
 
@@ -4117,7 +4246,8 @@ class _SettingsGroupCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(AppRadii.surface),
-        border: Border.all(color: AppColors.line),
+        border: Border.all(color: AppColors.line.withValues(alpha: 0.85)),
+        boxShadow: AppElevation.softCard(alpha: 0.045),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(AppRadii.surface - 1),
@@ -4138,7 +4268,8 @@ class _SettingsInfoCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surface,
         borderRadius: BorderRadius.circular(AppRadii.surface),
-        border: Border.all(color: AppColors.line),
+        border: Border.all(color: AppColors.line.withValues(alpha: 0.85)),
+        boxShadow: AppElevation.softCard(alpha: 0.04),
       ),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
@@ -4261,138 +4392,6 @@ Future<ClaudeModelPreference?> showClaudeModelPicker(
                   ),
                 ),
             ],
-          ),
-        ),
-      ),
-    ),
-  );
-}
-
-Future<ReadingFontSizePreference?> showReadingFontSizePicker(
-  BuildContext context, {
-  required ReadingFontSizePreference selected,
-}) {
-  return showModalBottomSheet<ReadingFontSizePreference>(
-    context: context,
-    backgroundColor: Colors.transparent,
-    isScrollControlled: true,
-    builder: (context) => SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 20, 14, 14),
-        child: WarmSheetSurface(
-          radius: 28,
-          padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(context).height * 0.72,
-            ),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    '字体大小',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    '调整界面与 Claude 回复的阅读字号',
-                    style: TextStyle(color: AppColors.muted, fontSize: 12),
-                  ),
-                  const SizedBox(height: 14),
-                  for (final preference in ReadingFontSizePreference.values)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Material(
-                        color: preference == selected
-                            ? AppColors.control
-                            : AppColors.surface,
-                        borderRadius: BorderRadius.circular(AppRadii.surface),
-                        child: InkWell(
-                          key: ValueKey('font-size-option-${preference.name}'),
-                          onTap: () => Navigator.pop(context, preference),
-                          borderRadius: BorderRadius.circular(AppRadii.surface),
-                          child: Semantics(
-                            selected: preference == selected,
-                            button: true,
-                            label:
-                                '${preference.label}，${readingFontSizeDescription(preference)}',
-                            child: Padding(
-                              padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
-                              child: Row(
-                                children: [
-                                  SizedBox.square(
-                                    dimension: AppSizes.iconControl,
-                                    child: DecoratedBox(
-                                      decoration: BoxDecoration(
-                                        color: AppColors.surfaceElevated,
-                                        borderRadius: BorderRadius.circular(
-                                          AppRadii.control,
-                                        ),
-                                        border: Border.all(
-                                          color: AppColors.line,
-                                        ),
-                                      ),
-                                      child: Icon(
-                                        LucideIcons.type,
-                                        size: 19,
-                                        color: preference == selected
-                                            ? AppColors.terracottaDeep
-                                            : AppColors.ink,
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          preference.label,
-                                          style: TextStyle(
-                                            fontSize:
-                                                AppTypography.assistantBodySize *
-                                                preference.scale,
-                                            fontWeight: FontWeight.w700,
-                                          ),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          readingFontSizeDescription(
-                                            preference,
-                                          ),
-                                          style: const TextStyle(
-                                            color: AppColors.muted,
-                                            fontSize: 12,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  ExcludeSemantics(
-                                    child: Icon(
-                                      preference == selected
-                                          ? LucideIcons.circleCheck
-                                          : LucideIcons.circle,
-                                      color: preference == selected
-                                          ? AppColors.terracottaDeep
-                                          : AppColors.inactiveLight,
-                                      size: 22,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ),
           ),
         ),
       ),
@@ -5653,23 +5652,24 @@ class MessageBlock extends StatelessWidget {
       );
     }
 
-    final maxWidth = MediaQuery.sizeOf(context).width * 0.76;
+    final maxWidth = MediaQuery.sizeOf(context).width * 0.82;
     return Align(
       alignment: Alignment.centerRight,
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth),
         child: Container(
           key: const ValueKey('user-message'),
-          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
           decoration: BoxDecoration(
             color: AppColors.control,
             borderRadius: const BorderRadius.only(
               topLeft: Radius.circular(AppRadii.bubble),
               topRight: Radius.circular(AppRadii.bubble),
               bottomLeft: Radius.circular(AppRadii.bubble),
-              bottomRight: Radius.circular(6),
+              bottomRight: Radius.circular(8),
             ),
-            border: Border.all(color: AppColors.line),
+            border: Border.all(color: AppColors.line.withValues(alpha: 0.75)),
+            boxShadow: AppElevation.softBubble(alpha: 0.04),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -5850,28 +5850,27 @@ class AssistantBubbleFrame extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final maxWidth = MediaQuery.sizeOf(context).width * (compact ? 0.88 : 0.86);
+    // Fill the transcript column; parent padding already sets reading margins.
     return Align(
       alignment: Alignment.centerLeft,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxWidth),
-        child: Container(
-          key: bubbleKey,
-          padding: compact
-              ? const EdgeInsets.fromLTRB(12, 10, 14, 10)
-              : const EdgeInsets.fromLTRB(14, 12, 14, 12),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceElevated,
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(AppRadii.bubble),
-              topRight: Radius.circular(AppRadii.bubble),
-              bottomLeft: Radius.circular(6),
-              bottomRight: Radius.circular(AppRadii.bubble),
-            ),
-            border: Border.all(color: AppColors.line),
+      child: Container(
+        key: bubbleKey,
+        width: double.infinity,
+        padding: compact
+            ? const EdgeInsets.fromLTRB(14, 12, 16, 12)
+            : const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceElevated,
+          borderRadius: const BorderRadius.only(
+            topLeft: Radius.circular(AppRadii.bubble),
+            topRight: Radius.circular(AppRadii.bubble),
+            bottomLeft: Radius.circular(8),
+            bottomRight: Radius.circular(AppRadii.bubble),
           ),
-          child: child,
+          border: Border.all(color: AppColors.line.withValues(alpha: 0.7)),
+          boxShadow: AppElevation.softBubble(),
         ),
+        child: child,
       ),
     );
   }
@@ -6316,7 +6315,8 @@ class PromptBar extends StatelessWidget {
               decoration: BoxDecoration(
                 color: AppColors.surfaceElevated,
                 borderRadius: BorderRadius.circular(AppRadii.surface),
-                border: Border.all(color: AppColors.line),
+                border: Border.all(color: AppColors.line.withValues(alpha: 0.8)),
+                boxShadow: AppElevation.softCard(alpha: 0.05),
               ),
               child: Row(
                 children: [
@@ -6396,7 +6396,8 @@ class PromptBar extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: AppColors.surfaceElevated,
                   borderRadius: BorderRadius.circular(AppRadii.surface),
-                  border: Border.all(color: AppColors.line),
+                  border: Border.all(color: AppColors.line.withValues(alpha: 0.8)),
+                  boxShadow: AppElevation.softCard(alpha: 0.05),
                 ),
                 // Pin content to the box edges: text up top, tools on the floor.
                 alignment: Alignment.bottomCenter,
@@ -7304,7 +7305,8 @@ class WarmSheetSurface extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.surfaceElevated,
         borderRadius: BorderRadius.circular(radius),
-        border: Border.all(color: AppColors.line),
+        border: Border.all(color: AppColors.line.withValues(alpha: 0.85)),
+        boxShadow: AppElevation.softCard(),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(radius - 1),
