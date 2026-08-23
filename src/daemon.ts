@@ -1,7 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { hostname } from 'node:os';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { delimiter, extname, join } from 'node:path';
 import qrcode from 'qrcode-terminal';
 import WebSocket, { WebSocketServer } from 'ws';
 import { createAuthState } from './authState.js';
@@ -25,13 +26,26 @@ import {
   extractClaudeCommands,
   extractClaudeSessionInfo,
   isMissingConversationError,
-  normalizeClaudeModel,
   restoreClaudeSessionInfo,
   type ClaudeActivity,
   type ClaudePermissionMode,
   type ClaudePermissionRequest,
   type ClaudeSessionInfo,
 } from './claudeBridge.js';
+import {
+  CodexBridge,
+  extractCodexActivities,
+  extractCodexSessionInfo,
+} from './codexBridge.js';
+import {
+  normalizeAgentEngine,
+  normalizeCodexSandboxMode,
+  normalizeEngineEffort,
+  normalizeEngineModel,
+  type AgentEngine,
+  type CodexSandboxMode,
+  type EngineBridge,
+} from './engineBridge.js';
 import { createRunFlight } from './runFlight.js';
 
 const HOST = process.env.HOST || '127.0.0.1';
@@ -43,12 +57,79 @@ const CLAUDE_BIN = process.env.CLAUDE_BIN || 'claude';
 const CLAUDE_ARGS = process.env.CLAUDE_ARGS
   ? process.env.CLAUDE_ARGS.split('|').filter(Boolean)
   : undefined;
+const DEFAULT_CODEX = defaultCodexCommand();
+const CODEX_BIN = process.env.CODEX_BIN || DEFAULT_CODEX.bin;
+const CODEX_ARGS = [
+  ...(process.env.CODEX_BIN ? [] : DEFAULT_CODEX.args),
+  ...(process.env.CODEX_ARGS
+    ? process.env.CODEX_ARGS.split('|').filter(Boolean)
+    : []),
+];
 const DEVICE_NAME = process.env.DEVICE_NAME || hostname();
 const ALLOW_BYPASS_PERMISSIONS = process.env.ALLOW_BYPASS_PERMISSIONS !== '0';
+
+function readBoundedIntEnv(
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === '') return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    console.warn(
+      `[config] ${name} must be an integer in [${minimum}, ${maximum}]; using ${fallback}`,
+    );
+    return fallback;
+  }
+  return value;
+}
+
 const MAX_BODY_BYTES = 64 * 1024;
 // ponytail: single-device product; raise only if multi-device lands
-const MAX_WS_CONNECTIONS = Number(process.env.MAX_WS_CONNECTIONS || 16);
-const WS_AUTH_TIMEOUT_MS = Number(process.env.WS_AUTH_TIMEOUT_MS || 10_000);
+const MAX_WS_CONNECTIONS = readBoundedIntEnv(
+  'MAX_WS_CONNECTIONS',
+  16,
+  1,
+  64,
+);
+const WS_AUTH_TIMEOUT_MS = readBoundedIntEnv(
+  'WS_AUTH_TIMEOUT_MS',
+  10_000,
+  1_000,
+  60_000,
+);
+const WS_HEARTBEAT_INTERVAL_MS = readBoundedIntEnv(
+  'WS_HEARTBEAT_INTERVAL_MS',
+  30_000,
+  1_000,
+  120_000,
+);
+const WS_CLOSE_TIMEOUT_MS = readBoundedIntEnv(
+  'WS_CLOSE_TIMEOUT_MS',
+  1_000,
+  100,
+  10_000,
+);
+
+function defaultCodexCommand(): { bin: string; args: string[] } {
+  if (process.platform !== 'win32') return { bin: 'codex', args: [] };
+  for (const entry of (process.env.PATH || '').split(delimiter)) {
+    const directory = entry.replace(/^"|"$/g, '');
+    if (!directory) continue;
+    const launcher = join(
+      directory,
+      'node_modules',
+      '@openai',
+      'codex',
+      'bin',
+      'codex.js',
+    );
+    if (existsSync(launcher)) return { bin: process.execPath, args: [launcher] };
+  }
+  return { bin: 'codex', args: [] };
+}
 
 const publicUrl = new URL(PUBLIC_ORIGIN);
 const auth = await createAuthState();
@@ -59,12 +140,34 @@ await projectSessions.registerProject(WORKSPACE_DIR);
 const attachments = new AttachmentStore();
 let activeContext = projectSessions.active();
 let workspace = new WorkspaceService(activeContext.project.path);
-let bridge = createBridge(activeContext.project.path);
+let bridge = createBridge(activeContext.project.path, activeContext.session.engine);
 // Serializes prompt/select/register across awaits; bridge.isRunning alone races.
 const runFlight = createRunFlight(() => bridge.isRunning());
 const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_BODY_BYTES });
 const openSockets = new Set<WebSocket>();
 const authedSockets = new Set<WebSocket>();
+const wsAlive = new WeakMap<WebSocket, boolean>();
+const wsCloseTimers = new WeakMap<WebSocket, NodeJS.Timeout>();
+const wsHeartbeatTimer = setInterval(() => {
+  for (const client of wss.clients) {
+    if (client.readyState === WebSocket.CLOSING) {
+      client.terminate();
+      continue;
+    }
+    if (client.readyState !== WebSocket.OPEN) continue;
+    if (wsAlive.get(client) === false) {
+      client.terminate();
+      continue;
+    }
+    wsAlive.set(client, false);
+    try {
+      client.ping();
+    } catch {
+      client.terminate();
+    }
+  }
+}, WS_HEARTBEAT_INTERVAL_MS);
+wsHeartbeatTimer.unref?.();
 const commandCaches = new Map<string, string[]>();
 const commandDiscoveries = new Map<string, Promise<string[]>>();
 const promptReceipts = new Map<string, PromptReceipt>();
@@ -73,9 +176,9 @@ let nextRunId = 0;
 let activeRunId: string | undefined;
 let activeRunStartedAt: number | undefined;
 let sessionInfo: ClaudeSessionInfo = activeContext.transcript.snapshot().sessionInfo;
-if (!Object.keys(sessionInfo).length) {
+if (activeContext.session.engine === 'claude' && !Object.keys(sessionInfo).length) {
   const restoredSessionInfo = await restoreClaudeSessionInfo({
-    sessionId: activeContext.transcript.snapshot().claudeSessionId || '',
+    sessionId: activeContext.transcript.snapshot().engineSessionId || '',
   });
   if (restoredSessionInfo) {
     sessionInfo = restoredSessionInfo;
@@ -102,6 +205,7 @@ const server = createServer(async (req, res) => {
 });
 
 server.on('upgrade', (req, socket, head) => {
+  socket.on('error', () => socket.destroy());
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   if (url.pathname !== '/ws' || !isAllowedHost(req) || !isAllowedOrigin(req)) {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
@@ -123,6 +227,7 @@ wss.on('connection', ws => {
   let authenticated = false;
   let authGeneration = -1;
   openSockets.add(ws);
+  wsAlive.set(ws, true);
   const authTimer = setTimeout(() => {
     if (!authenticated && ws.readyState === WebSocket.OPEN) {
       ws.close(1008, 'auth_timeout');
@@ -134,8 +239,21 @@ wss.on('connection', ws => {
     clearTimeout(authTimer);
   };
 
+  ws.on('pong', () => {
+    wsAlive.set(ws, true);
+  });
+
+  ws.on('error', () => {
+    clearAuthTimer();
+    if (ws.readyState !== WebSocket.CLOSED) ws.terminate();
+  });
+
   ws.on('close', () => {
     clearAuthTimer();
+    const closeTimer = wsCloseTimers.get(ws);
+    if (closeTimer) clearTimeout(closeTimer);
+    wsCloseTimers.delete(ws);
+    wsAlive.delete(ws);
     openSockets.delete(ws);
     authedSockets.delete(ws);
   });
@@ -155,8 +273,8 @@ wss.on('connection', ws => {
         authedSockets.add(ws);
         sendStatus(ws, true);
         send(ws, { type: 'catalog', ...projectSessions.catalog() });
-        const commands = commandCaches.get(activeContext.project.id) || [];
-        if (commands.length) {
+        const commands = commandCaches.get(commandCacheKey(activeContext)) || [];
+        if (activeContext.session.engine === 'codex' || commands.length) {
           send(ws, sessionMessage({ type: 'commands', commands }));
         } else {
           void refreshCommands();
@@ -169,12 +287,43 @@ wss.on('connection', ws => {
           ...activeContext.transcript.snapshot(),
           ...taskStatus(activeContext),
         }, activeContext, activeRunId));
-        send(ws, { type: 'permission_capabilities', allowBypassPermissions: ALLOW_BYPASS_PERMISSIONS });
+        send(ws, sessionMessage(permissionCapabilities(activeContext)));
         return true;
       },
     }).catch(err => {
       const message = err instanceof Error ? err.message : String(err);
-      send(ws, { type: 'error', message });
+      let envelope: Record<string, unknown> = {};
+      try {
+        const parsed = JSON.parse(data.toString('utf8')) as unknown;
+        if (typeof parsed === 'object' && parsed !== null) {
+          envelope = parsed as Record<string, unknown>;
+        }
+      } catch {}
+      const requestedSessionId = envelope.sessionId;
+      const context = typeof requestedSessionId === 'string'
+        ? projectSessions.getSession(requestedSessionId)
+        : activeContext;
+      const promptId = typeof envelope.promptId === 'string'
+        ? envelope.promptId
+        : undefined;
+      const receipt = promptId ? promptReceipts.get(promptId) : undefined;
+      const errorData = {
+        type: 'error',
+        message,
+        ...(promptId ? { promptId } : {}),
+      };
+      if (!authenticated) {
+        send(ws, errorData);
+      } else if (context) {
+        send(ws, sessionMessage(errorData, context, receipt?.runId));
+      } else {
+        send(ws, {
+          ...errorData,
+          ...(typeof requestedSessionId === 'string'
+            ? { sessionId: requestedSessionId }
+            : {}),
+        });
+      }
       // Unauthenticated peers must not keep the socket after a bad first frame.
       if (!authenticated) {
         clearAuthTimer();
@@ -260,10 +409,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       workspaceDir: activeContext.project.path,
       activeProjectId: activeContext.project.id,
       activeSessionId: activeContext.session.id,
+      engine: activeContext.session.engine,
       sessionInfo,
       catalog: projectSessions.catalog(),
       ...auth.status(),
-      hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
+      ...engineSessionStatus(activeContext),
     });
     return;
   }
@@ -273,15 +423,38 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     return;
   }
 
+  if (req.method === 'GET' && url.pathname === '/api/search/sessions') {
+    const query = (url.searchParams.get('q') || '').trim();
+    const requestedLimit = Number(url.searchParams.get('limit') || 50);
+    if (!query || query.length > 200) {
+      sendJson(res, 400, { error: 'search_query_invalid' });
+      return;
+    }
+    if (!Number.isInteger(requestedLimit) || requestedLimit < 1) {
+      sendJson(res, 400, { error: 'search_limit_invalid' });
+      return;
+    }
+    sendJson(res, 200, {
+      query,
+      results: projectSessions.searchSessions(query, Math.min(requestedLimit, 50)),
+    });
+    return;
+  }
+
   const createSessionMatch = req.method === 'POST'
     ? url.pathname.match(/^\/api\/projects\/([^/]+)\/sessions$/)
     : null;
   if (createSessionMatch) {
     if (!runFlight.tryBegin('mutate')) return sendJson(res, 409, { error: 'claude_is_busy' });
     try {
-      const context = await projectSessions.createSession(decodeURIComponent(createSessionMatch[1]));
+      const body = await readJson<{ engine?: unknown }>(req);
+      const context = await projectSessions.createSession(
+        decodeURIComponent(createSessionMatch[1]),
+        undefined,
+        normalizeAgentEngine(body.engine),
+      );
       await selectActiveSession(context);
-      broadcastCatalog();
+      broadcastActiveSession();
       sendJson(res, 201, {
         ok: true,
         projectId: context.project.id,
@@ -474,7 +647,12 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   if (req.method === 'POST' && url.pathname === '/api/new-conversation') {
     if (!runFlight.tryBegin('mutate')) return sendJson(res, 409, { error: 'claude_is_busy' });
     try {
-      const context = await projectSessions.createSession(activeContext.project.id);
+      const body = await readJson<{ engine?: unknown }>(req);
+      const context = await projectSessions.createSession(
+        activeContext.project.id,
+        undefined,
+        normalizeAgentEngine(body.engine),
+      );
       await auth.setClaudeSessionId(undefined);
       await selectActiveSession(context);
       broadcastActiveSession();
@@ -492,7 +670,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       type: 'status',
       authenticated: true,
       ...taskStatus(activeContext),
-      hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
+      ...engineSessionStatus(activeContext),
     }, activeContext, activeRunId));
     sendJson(res, 200, { stopped });
     return;
@@ -513,11 +691,14 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     text?: string;
     token?: string;
     permissionMode?: string;
+    sandboxMode?: unknown;
     requestId?: string;
     decision?: string;
     sessionId?: string;
     promptId?: unknown;
     model?: unknown;
+    effort?: unknown;
+    engine?: unknown;
     attachmentIds?: unknown;
   };
 
@@ -537,7 +718,7 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
       type: 'status',
       authenticated: true,
       ...taskStatus(activeContext),
-      hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
+      ...engineSessionStatus(activeContext),
     }, activeContext, activeRunId));
     return;
   }
@@ -580,7 +761,18 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     ? projectSessions.getSession(msg.sessionId)
     : activeContext;
   if (!promptContext) throw new Error('session_not_found');
-  const signature = promptSignature(msg, prompt, attachmentIds);
+  const engine = normalizeAgentEngine(msg.engine, promptContext.session.engine);
+  if (engine !== promptContext.session.engine) throw new Error('engine_mismatch');
+  const sandboxMode = engine === 'codex'
+    ? normalizeCodexSandboxMode(msg.sandboxMode)
+    : undefined;
+  const signature = promptSignature(
+    msg,
+    prompt,
+    attachmentIds,
+    engine,
+    sandboxMode,
+  );
   if (promptId) {
     const receipt = promptReceipts.get(promptId);
     if (receipt) {
@@ -591,6 +783,7 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
           promptId,
           projectId: receipt.projectId,
           sessionId: receipt.sessionId,
+          engine: receipt.engine,
           runId: receipt.runId,
         });
       } else {
@@ -617,13 +810,26 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
       signature,
       projectId: promptContext.project.id,
       sessionId: promptContext.session.id,
+      engine,
       runId,
     };
     rememberPromptReceipt(promptId, receipt);
     sendPromptAccepted(ws, promptId, receipt);
   }
   try {
-    await runPromptFlight(msg, prompt, attachmentIds, runId);
+    await runPromptFlight(
+      msg,
+      prompt,
+      attachmentIds,
+      runId,
+      engine,
+      sandboxMode,
+    );
+  } catch (error) {
+    if (promptId && !promptContext.transcript.snapshot().running) {
+      promptReceipts.delete(promptId);
+    }
+    throw error;
   } finally {
     if (activeRunId === runId) {
       activeRunId = undefined;
@@ -638,14 +844,24 @@ async function runPromptFlight(
     sessionId?: string;
     permissionMode?: string;
     model?: unknown;
+    effort?: unknown;
+    engine?: unknown;
+    sandboxMode?: unknown;
   },
   prompt: string,
   attachmentIds: string[],
   runId: string,
+  engine: AgentEngine,
+  sandboxMode: CodexSandboxMode | undefined,
 ): Promise<void> {
   const permissionMode = parsePermissionMode(msg.permissionMode);
-  const model = normalizeClaudeModel(msg.model);
-  if (permissionMode === 'bypassPermissions' && !ALLOW_BYPASS_PERMISSIONS) {
+  const model = engine === 'codex' && msg.engine === undefined
+    ? undefined
+    : normalizeEngineModel(msg.model);
+  const effort = normalizeEngineEffort(msg.effort);
+  if (engine === 'claude'
+    && permissionMode === 'bypassPermissions'
+    && !ALLOW_BYPASS_PERMISSIONS) {
     throw new Error('bypass_permissions_disabled');
   }
   if (msg.sessionId && msg.sessionId !== activeContext.session.id) {
@@ -657,19 +873,28 @@ async function runPromptFlight(
   }
 
   const runContext = activeContext;
+  if (runContext.session.engine !== engine) throw new Error('engine_mismatch');
   const promptAttachments = await attachments.resolveMany(
     runContext.project.id,
     runContext.session.id,
     attachmentIds,
   );
-  const uploadDirectory = await attachments.ensureSessionDirectory(
-    runContext.project.id,
-    runContext.session.id,
-  );
+  if (engine === 'codex'
+    && promptAttachments.some(attachment => !attachment.mimeType.startsWith('image/'))) {
+    throw new Error('codex_only_supports_image_attachments');
+  }
+  const uploadDirectory = engine === 'claude'
+    ? await attachments.ensureSessionDirectory(
+        runContext.project.id,
+        runContext.session.id,
+      )
+    : undefined;
   if (runFlight.isStopRequested()) return;
 
   const displayPrompt = prompt;
-  const claudePrompt = promptWithAttachments(prompt, promptAttachments);
+  const enginePrompt = engine === 'claude'
+    ? promptWithAttachments(prompt, promptAttachments)
+    : prompt || '请查看附件并根据内容处理。';
   if (runFlight.isStopRequested()) return;
 
   activeRunStartedAt = Date.now();
@@ -677,6 +902,7 @@ async function runPromptFlight(
     displayPrompt,
     permissionMode,
     promptAttachments.map(attachmentDescriptor),
+    sandboxMode,
   );
   await projectSessions.setSessionTitleFromPrompt(
     runContext.session.id,
@@ -689,7 +915,7 @@ async function runPromptFlight(
       type: 'status',
       authenticated: true,
       ...taskStatus(runContext),
-      hasClaudeSessionId: Boolean(runContext.transcript.snapshot().claudeSessionId),
+      ...engineSessionStatus(runContext),
     }, runContext, runId));
     broadcastCatalog();
     return;
@@ -699,29 +925,40 @@ async function runPromptFlight(
     type: 'status',
     authenticated: true,
     ...taskStatus(runContext),
-    hasClaudeSessionId: Boolean(runContext.transcript.snapshot().claudeSessionId),
+    ...engineSessionStatus(runContext),
   }, runContext, runId));
 
-  const runClaude = (sessionId: string | undefined) => bridge.run({
-    prompt: claudePrompt,
+  const runEngine = (sessionId: string | undefined) => bridge.run({
+    prompt: enginePrompt,
     sessionId,
-    additionalDirectories: [uploadDirectory],
+    additionalDirectories: uploadDirectory ? [uploadDirectory] : undefined,
+    imagePaths: engine === 'codex'
+      ? promptAttachments.map(attachment => attachment.path)
+      : undefined,
     permissionMode,
+    sandboxMode,
     model,
+    effort,
     onEvent: event => {
-      const commands = extractClaudeCommands(event);
-      const cachedCommands = commandCaches.get(runContext.project.id) || [];
+      const commands = engine === 'claude' ? extractClaudeCommands(event) : [];
+      const cacheKey = commandCacheKey(runContext);
+      const cachedCommands = commandCaches.get(cacheKey) || [];
       if (commands.length && commands.join('\n') !== cachedCommands.join('\n')) {
-        commandCaches.set(runContext.project.id, commands);
+        commandCaches.set(cacheKey, commands);
         broadcast(sessionMessage({ type: 'commands', commands }, runContext, runId));
       }
-      const nextSessionInfo = extractClaudeSessionInfo(event);
+      const nextSessionInfo = engine === 'claude'
+        ? extractClaudeSessionInfo(event)
+        : extractCodexSessionInfo(event);
       if (nextSessionInfo) {
         sessionInfo = { ...sessionInfo, ...nextSessionInfo };
         runContext.transcript.setSessionInfo(nextSessionInfo);
         broadcast(sessionMessage({ type: 'session_info', ...sessionInfo }, runContext, runId));
       }
-      for (const activity of extractClaudeActivities(event)) {
+      const activities = engine === 'claude'
+        ? extractClaudeActivities(event)
+        : extractCodexActivities(event);
+      for (const activity of activities) {
         const publicActivity = redactAttachmentPaths(
           activity,
           promptAttachments,
@@ -735,8 +972,8 @@ async function runPromptFlight(
       enqueueTextDelta(runContext, text, runId);
     },
     onSessionId: sessionId => {
-      runContext.transcript.setClaudeSessionId(sessionId);
-      void auth.setClaudeSessionId(sessionId);
+      runContext.transcript.setEngineSessionId(sessionId);
+      if (engine === 'claude') void auth.setClaudeSessionId(sessionId);
     },
     onPermissionRequest: request => {
       runContext.transcript.addPermission(request);
@@ -748,22 +985,25 @@ async function runPromptFlight(
     },
   });
 
-  const previousSessionId = runContext.transcript.snapshot().claudeSessionId;
-  let result = await runClaude(previousSessionId);
-  if (previousSessionId && result.exitCode !== 0 && isMissingConversationError(result.stderr)) {
+  const previousSessionId = runContext.transcript.snapshot().engineSessionId;
+  let result = await runEngine(previousSessionId);
+  if (engine === 'claude'
+    && previousSessionId
+    && result.exitCode !== 0
+    && isMissingConversationError(result.stderr)) {
     await auth.setClaudeSessionId(undefined);
-    runContext.transcript.setClaudeSessionId(undefined);
+    runContext.transcript.setEngineSessionId(undefined);
     result = runFlight.isStopRequested()
       ? { ...result, stopped: true }
-      : await runClaude(undefined);
+      : await runEngine(undefined);
   }
 
   // Flush coalesced stream text before terminal events so clients never miss a tail.
   flushTextDeltaBatch();
 
   if (result.sessionId) {
-    runContext.transcript.setClaudeSessionId(result.sessionId);
-    await auth.setClaudeSessionId(result.sessionId);
+    runContext.transcript.setEngineSessionId(result.sessionId);
+    if (engine === 'claude') await auth.setClaudeSessionId(result.sessionId);
   }
   if (result.stopped) {
     await runContext.transcript.finishStopped();
@@ -778,14 +1018,15 @@ async function runPromptFlight(
     broadcast(sessionMessage({
       type: 'done',
       exitCode: result.exitCode,
-      claudeSessionId: result.sessionId,
+      engineSessionId: result.sessionId,
+      ...(engine === 'claude' ? { claudeSessionId: result.sessionId } : {}),
     }, runContext, runId));
   }
   broadcast(sessionMessage({
     type: 'status',
     authenticated: true,
     ...taskStatus(runContext),
-    hasClaudeSessionId: Boolean(runContext.transcript.snapshot().claudeSessionId),
+    ...engineSessionStatus(runContext),
   }, runContext, runId));
   broadcastCatalog();
 }
@@ -793,14 +1034,14 @@ async function runPromptFlight(
 function redactAttachmentPaths(
   activity: ClaudeActivity,
   promptAttachments: StoredAttachment[],
-  uploadDirectory: string,
+  uploadDirectory: string | undefined,
 ): ClaudeActivity {
   if (!activity.detail) return activity;
   let detail = activity.detail;
   for (const attachment of promptAttachments) {
     detail = detail.split(attachment.path).join(`附件/${attachment.name}`);
   }
-  detail = detail.split(uploadDirectory).join('附件');
+  if (uploadDirectory) detail = detail.split(uploadDirectory).join('附件');
   return detail === activity.detail ? activity : { ...activity, detail };
 }
 
@@ -869,34 +1110,49 @@ function sendStatus(ws: WebSocket, authenticated: boolean): void {
     type: 'status',
     authenticated,
     ...taskStatus(activeContext),
-    hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
+    ...engineSessionStatus(activeContext),
     workspaceDir: activeContext.project.path,
   }, activeContext, activeRunId));
 }
 
 function refreshCommands(): Promise<string[]> {
   const project = activeContext.project;
-  const existing = commandDiscoveries.get(project.id);
+  const context = activeContext;
+  const cacheKey = commandCacheKey(context);
+  if (context.session.engine === 'codex') {
+    commandCaches.set(cacheKey, []);
+    broadcast(sessionMessage({ type: 'commands', commands: [] }, context));
+    return Promise.resolve([]);
+  }
+  const existing = commandDiscoveries.get(cacheKey);
   if (existing) return existing;
   const discovery = discoverClaudeCommands({
     claudeBin: CLAUDE_BIN,
     workspaceDir: project.path,
   }).then(commands => {
     if (commands.length) {
-      commandCaches.set(project.id, commands);
-      if (activeContext.project.id === project.id) {
+      commandCaches.set(cacheKey, commands);
+      if (activeContext.project.id === project.id
+        && activeContext.session.engine === 'claude') {
         broadcast(sessionMessage({ type: 'commands', commands }));
       }
     }
     return commands;
   }).finally(() => {
-    commandDiscoveries.delete(project.id);
+    commandDiscoveries.delete(cacheKey);
   });
-  commandDiscoveries.set(project.id, discovery);
+  commandDiscoveries.set(cacheKey, discovery);
   return discovery;
 }
 
-function createBridge(workspaceDir: string): ClaudeBridge {
+function createBridge(workspaceDir: string, engine: AgentEngine): EngineBridge {
+  if (engine === 'codex') {
+    return new CodexBridge({
+      codexBin: CODEX_BIN,
+      codexArgs: CODEX_ARGS,
+      workspaceDir,
+    });
+  }
   return new ClaudeBridge({
     claudeBin: CLAUDE_BIN,
     claudeArgs: CLAUDE_ARGS,
@@ -906,13 +1162,14 @@ function createBridge(workspaceDir: string): ClaudeBridge {
 }
 
 async function selectActiveSession(context: SessionContext): Promise<void> {
+  bridge.close();
   activeContext = context;
   workspace = new WorkspaceService(context.project.path);
-  bridge = createBridge(context.project.path);
+  bridge = createBridge(context.project.path, context.session.engine);
   sessionInfo = context.transcript.snapshot().sessionInfo;
-  if (!Object.keys(sessionInfo).length) {
+  if (context.session.engine === 'claude' && !Object.keys(sessionInfo).length) {
     const restored = await restoreClaudeSessionInfo({
-      sessionId: context.transcript.snapshot().claudeSessionId || '',
+      sessionId: context.transcript.snapshot().engineSessionId || '',
     });
     if (restored) {
       sessionInfo = restored;
@@ -933,7 +1190,7 @@ function broadcastActiveSession(): void {
     type: 'status',
     authenticated: true,
     ...taskStatus(activeContext),
-    hasClaudeSessionId: Boolean(activeContext.transcript.snapshot().claudeSessionId),
+    ...engineSessionStatus(activeContext),
     workspaceDir: activeContext.project.path,
   }, activeContext, activeRunId));
   broadcast(sessionMessage({ type: 'session_info', ...sessionInfo }, activeContext, activeRunId));
@@ -942,8 +1199,9 @@ function broadcastActiveSession(): void {
     ...activeContext.transcript.snapshot(),
     ...taskStatus(activeContext),
   }, activeContext, activeRunId));
-  const commands = commandCaches.get(activeContext.project.id);
-  if (commands?.length) broadcast(sessionMessage({ type: 'commands', commands }));
+  broadcast(sessionMessage(permissionCapabilities(activeContext)));
+  const commands = commandCaches.get(commandCacheKey(activeContext)) || [];
+  broadcast(sessionMessage({ type: 'commands', commands }));
 }
 
 function sessionMessage(
@@ -955,6 +1213,7 @@ function sessionMessage(
     ...data,
     projectId: context.project.id,
     sessionId: context.session.id,
+    engine: context.session.engine,
     ...(runId ? { runId } : {}),
   };
 }
@@ -963,6 +1222,7 @@ type PromptReceipt = {
   signature: string;
   projectId: string;
   sessionId: string;
+  engine: AgentEngine;
   runId: string;
 };
 
@@ -975,9 +1235,18 @@ function parsePromptId(value: unknown): string | undefined {
 }
 
 function promptSignature(
-  msg: { sessionId?: string; permissionMode?: string; model?: unknown },
+  msg: {
+    sessionId?: string;
+    permissionMode?: string;
+    model?: unknown;
+    effort?: unknown;
+    engine?: unknown;
+    sandboxMode?: unknown;
+  },
   prompt: string,
   attachmentIds: string[],
+  engine: AgentEngine,
+  sandboxMode: CodexSandboxMode | undefined,
 ): string {
   return JSON.stringify({
     sessionId: msg.sessionId ?? activeContext.session.id,
@@ -985,6 +1254,9 @@ function promptSignature(
     attachmentIds,
     permissionMode: msg.permissionMode ?? 'manual',
     model: msg.model ?? null,
+    effort: msg.effort ?? null,
+    engine,
+    sandboxMode: sandboxMode ?? null,
   });
 }
 
@@ -1003,6 +1275,7 @@ function sendPromptAccepted(ws: WebSocket, promptId: string, receipt: PromptRece
     promptId,
     projectId: receipt.projectId,
     sessionId: receipt.sessionId,
+    engine: receipt.engine,
     runId: receipt.runId,
   });
 }
@@ -1013,6 +1286,29 @@ function taskStatus(context: SessionContext): Record<string, unknown> {
     running,
     stopping: running && runFlight.isStopRequested(),
     ...(running && activeRunStartedAt ? { startedAt: activeRunStartedAt } : {}),
+  };
+}
+
+function engineSessionStatus(context: SessionContext): Record<string, unknown> {
+  const hasEngineSessionId = Boolean(context.transcript.snapshot().engineSessionId);
+  return {
+    hasEngineSessionId,
+    hasClaudeSessionId: context.session.engine === 'claude' && hasEngineSessionId,
+  };
+}
+
+function commandCacheKey(context: SessionContext): string {
+  return `${context.session.engine}:${context.project.id}`;
+}
+
+function permissionCapabilities(context: SessionContext): Record<string, unknown> {
+  return {
+    type: 'permission_capabilities',
+    allowBypassPermissions:
+      context.session.engine === 'claude' && ALLOW_BYPASS_PERMISSIONS,
+    codexSandboxModes: context.session.engine === 'codex'
+      ? ['read-only', 'workspace-write', 'danger-full-access']
+      : [],
   };
 }
 
@@ -1062,17 +1358,59 @@ function flushTextDeltaBatch(): void {
 }
 
 function broadcast(data: unknown): void {
-  for (const client of authedSockets) send(client, data);
+  for (const client of [...authedSockets]) {
+    try {
+      send(client, data);
+    } catch {
+      if (client.readyState !== WebSocket.CLOSED) client.terminate();
+    }
+  }
 }
 
 function closeAllSockets(): void {
-  for (const client of wss.clients) client.close(1008, 'authorization_changed');
-  openSockets.clear();
-  authedSockets.clear();
+  for (const client of [...wss.clients]) {
+    if (client.readyState === WebSocket.CLOSED) continue;
+    const previousTimer = wsCloseTimers.get(client);
+    if (previousTimer) clearTimeout(previousTimer);
+    client.close(1008, 'authorization_changed');
+    const closeTimer = setTimeout(() => {
+      if (client.readyState !== WebSocket.CLOSED) client.terminate();
+      wsCloseTimers.delete(client);
+    }, WS_CLOSE_TIMEOUT_MS);
+    closeTimer.unref?.();
+    wsCloseTimers.set(client, closeTimer);
+  }
 }
 
 function send(ws: WebSocket, data: unknown): void {
-  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
+  if (ws.readyState !== WebSocket.OPEN) return;
+
+  let payload: string | undefined;
+  try {
+    payload = JSON.stringify(data);
+  } catch (error) {
+    console.error(
+      'WebSocket payload serialization failed:',
+      error instanceof Error ? error.message : String(error),
+    );
+    return;
+  }
+  if (payload === undefined) return;
+
+  try {
+    ws.send(payload, error => {
+      if (error) {
+        console.error('WebSocket send failed:', error.message);
+        ws.terminate();
+      }
+    });
+  } catch (error) {
+    console.error(
+      'WebSocket send failed:',
+      error instanceof Error ? error.message : String(error),
+    );
+    ws.terminate();
+  }
 }
 
 function headerValue(req: IncomingMessage, name: string): string | undefined {

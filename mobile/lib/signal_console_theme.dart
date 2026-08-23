@@ -16,6 +16,8 @@ class AppColors {
   static const danger = Color(0xFF9E4D35);
   static const line = Color(0xFFD8D5CD);
   static const lineStrong = inactiveLight;
+  /// Quiet warm-clay wash for the user's compact message bubble.
+  static const userBubble = Color(0xFFE9E1D8);
   /// Soft wash behind composer + / model controls.
   static const composerControlFill = Color(0xFFF0E4DB);
   static const composerControlInk = Color(0xFF8A5340);
@@ -85,6 +87,8 @@ class AppRadii {
   static const control = 12.0;
   static const surface = 16.0;
   static const header = 22.0;
+  /// Floating composer shell — softer than a docked bar.
+  static const composerFloat = 28.0;
   static const pill = 999.0;
   /// Soft chat bubbles (Claude / iMessage-like).
   static const bubbleSoft = 22.0;
@@ -105,12 +109,16 @@ class AppElevation {
     ),
   ];
 
-  static List<BoxShadow> softBubble({double alpha = 0.055}) => [
+  // No per-bubble shadow: N soft blurs while scrolling is a common FPS killer.
+  static List<BoxShadow> softBubble({double alpha = 0.05}) => const [];
+
+  /// Single light dock shadow (one layer only).
+  static List<BoxShadow> floatingComposer() => const [
     BoxShadow(
-      color: const Color(0xFF2B2A27).withValues(alpha: alpha),
-      blurRadius: 14,
-      offset: const Offset(0, 4),
-      spreadRadius: -3,
+      color: Color(0x1A2B2A27),
+      blurRadius: 12,
+      offset: Offset(0, 6),
+      spreadRadius: -4,
     ),
   ];
 }
@@ -507,40 +515,32 @@ class TaskRailFrame extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          SizedBox(
-            width: 22,
-            child: Stack(
-              alignment: Alignment.topCenter,
-              children: [
-                Positioned(
-                  top: 0,
-                  bottom: 0,
-                  width: 1,
-                  child: ColoredBox(color: color.withValues(alpha: 0.24)),
+    // Top-aligned rail — avoid IntrinsicHeight (forces child double layout).
+    final dot = active ? 10.0 : 8.0;
+    final top = compact ? 10.0 : 14.0;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 22,
+          child: Padding(
+            padding: EdgeInsets.only(top: top),
+            child: Center(
+              child: Container(
+                width: dot,
+                height: dot,
+                decoration: BoxDecoration(
+                  color: color,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.porcelain, width: 2),
                 ),
-                Positioned(
-                  top: compact ? 10 : 14,
-                  child: Container(
-                    width: active ? 10 : 8,
-                    height: active ? 10 : 8,
-                    decoration: BoxDecoration(
-                      color: color,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: AppColors.porcelain, width: 2),
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
           ),
-          const SizedBox(width: 4),
-          Expanded(child: child),
-        ],
-      ),
+        ),
+        const SizedBox(width: 4),
+        Expanded(child: child),
+      ],
     );
   }
 }

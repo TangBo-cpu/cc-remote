@@ -6,6 +6,19 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { StringDecoder } from 'node:string_decoder';
+import {
+  isClaudePermissionMode,
+  normalizeEngineEffort,
+  normalizeEngineModel,
+  type ClaudePermissionMode as SharedClaudePermissionMode,
+  type EngineActivity,
+  type EngineBridge,
+  type EngineEffortLevel,
+  type EnginePermissionRequest,
+  type EngineRunOptions,
+  type EngineRunResult,
+  type EngineSessionInfo,
+} from './engineBridge.js';
 
 export type ClaudeBridgeOptions = {
   claudeBin: string;
@@ -14,72 +27,24 @@ export type ClaudeBridgeOptions = {
   allowBypassPermissions?: boolean;
 };
 
-export type ClaudePermissionMode =
-  | 'manual'
-  | 'acceptEdits'
-  | 'auto'
-  | 'dontAsk'
-  | 'plan'
-  | 'bypassPermissions';
-
-export type ClaudePermissionRequest = {
-  requestId: string;
-  toolName: string;
-  input: Record<string, unknown>;
-  detail?: string;
-  title?: string;
-  displayName?: string;
-  description?: string;
-  decisionReason?: string;
-};
-
-export type ClaudeRunOptions = {
-  prompt: string;
-  sessionId?: string;
-  model?: string;
-  additionalDirectories?: string[];
-  permissionMode: ClaudePermissionMode;
-  onEvent: (event: unknown) => void;
-  onText: (text: string) => void;
-  onSessionId: (sessionId: string) => void;
-  onPermissionRequest: (request: ClaudePermissionRequest) => void;
-  onPermissionClosed: (requestId: string) => void;
-};
+export type ClaudePermissionMode = SharedClaudePermissionMode;
+export type ClaudeEffortLevel = EngineEffortLevel;
+export type ClaudePermissionRequest = EnginePermissionRequest;
+export type ClaudeRunOptions = EngineRunOptions;
 
 export function normalizeClaudeModel(value: unknown): string | undefined {
-  if (value === undefined || value === null || value === '') return undefined;
-  if (typeof value !== 'string') throw new Error('invalid_model');
-  const model = value.trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model)) {
-    throw new Error('invalid_model');
-  }
-  return model;
+  return normalizeEngineModel(value);
 }
 
-export type ClaudeRunResult = {
-  exitCode: number | null;
-  stopped: boolean;
-  sessionId?: string;
-  stderr: string;
-};
+export function normalizeClaudeEffort(value: unknown): ClaudeEffortLevel | undefined {
+  return normalizeEngineEffort(value);
+}
 
-export type ClaudeActivity = {
-  id: string;
-  kind: 'thinking' | 'tool' | 'summary';
-  state: 'running' | 'done' | 'error';
-  toolName?: string;
-  detail?: string;
-  durationMs?: number;
-  numTurns?: number;
-  permissionDenials?: number;
-};
+export type ClaudeRunResult = EngineRunResult;
 
-export type ClaudeSessionInfo = {
-  model?: string;
-  contextWindow?: number;
-  usedTokens?: number;
-  remainingTokens?: number;
-};
+export type ClaudeActivity = EngineActivity;
+
+export type ClaudeSessionInfo = EngineSessionInfo;
 
 export type ClaudeSessionInfoRestoreOptions = {
   sessionId: string;
@@ -89,15 +54,36 @@ export type ClaudeSessionInfoRestoreOptions = {
 };
 
 type CurrentRun = {
-  child: ChildProcessWithoutNullStreams;
+  process?: ClaudeProcess;
   stopped: boolean;
   settled: boolean;
   pendingPermissions: Map<string, ClaudePermissionRequest>;
   onPermissionClosed: (requestId: string) => void;
+  options: ClaudeRunOptions;
+  sessionId?: string;
+  sawDelta: boolean;
+  stderr: string;
+  resolve: (result: ClaudeRunResult) => void;
 };
 
-export class ClaudeBridge {
+type ClaudeProcess = {
+  child: ChildProcessWithoutNullStreams;
+  key: string;
+  sessionId?: string;
+  stderr: string;
+  stdoutBuffer: string;
+  decoder: StringDecoder;
+  exitCode: number | null;
+  closed: boolean;
+  initializeRequestId: string;
+  resolveInitialize: () => void;
+  rejectInitialize: (error: Error) => void;
+  initialized: Promise<void>;
+};
+
+export class ClaudeBridge implements EngineBridge {
   private current: CurrentRun | null = null;
+  private process: ClaudeProcess | null = null;
 
   constructor(private readonly options: ClaudeBridgeOptions) {}
 
@@ -108,16 +94,22 @@ export class ClaudeBridge {
   respondToPermission(requestId: string, decision: 'allow' | 'deny'): boolean {
     const run = this.current;
     const request = run?.pendingPermissions.get(requestId);
-    if (!run || !request || run.child.stdin.destroyed) return false;
+    const child = run?.process?.child;
+    if (!run || !request || !child || child.stdin.destroyed) return false;
     run.pendingPermissions.delete(requestId);
-    run.child.stdin.write(JSON.stringify(permissionControlResponse(request, decision)) + '\n');
+    child.stdin.write(JSON.stringify(permissionControlResponse(request, decision)) + '\n');
     run.onPermissionClosed(requestId);
     return true;
   }
 
   async run(options: ClaudeRunOptions): Promise<ClaudeRunResult> {
     if (this.current) throw new Error('Claude is already running');
+    if (!isClaudePermissionMode(options.permissionMode)) {
+      throw new Error('invalid_permission_mode');
+    }
     const model = normalizeClaudeModel(options.model);
+    const effort = normalizeClaudeEffort(options.effort);
+    const permissionMode = options.permissionMode;
 
     const args = [
       ...(this.options.claudeArgs ?? []),
@@ -127,178 +119,57 @@ export class ClaudeBridge {
       '--verbose',
       '--include-partial-messages',
       '--permission-prompt-tool', 'stdio',
-      '--permission-mode', options.permissionMode,
+      '--permission-mode', permissionMode,
     ];
-    if (options.permissionMode === 'bypassPermissions') {
+    if (permissionMode === 'bypassPermissions') {
       if (!this.options.allowBypassPermissions) throw new Error('bypass_permissions_disabled');
       args.push('--allow-dangerously-skip-permissions');
     }
     if (model) args.push('--model', model);
+    if (effort && effort !== 'auto') args.push('--effort', effort);
     const additionalDirectories = [...new Set(options.additionalDirectories ?? [])]
       .filter(directory => directory.trim().length > 0);
     if (additionalDirectories.length) args.push('--add-dir', ...additionalDirectories);
     if (options.sessionId) args.push('--resume', options.sessionId);
-
-    const child = spawn(this.options.claudeBin, args, {
-      cwd: this.options.workspaceDir,
-      shell: false,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env },
+    let resolveRun: (result: ClaudeRunResult) => void = () => {};
+    const completed = new Promise<ClaudeRunResult>(resolve => {
+      resolveRun = resolve;
     });
-    let exitCode: number | null = null;
-    const closed = new Promise<[number | null, NodeJS.Signals | null]>(resolveClose => {
-      child.once('close', (code, signal) => {
-        exitCode = code;
-        resolveClose([code, signal]);
-      });
-    });
-    const exitOrError = Promise.race([
-      closed,
-      once(child, 'error').then(([err]) => err instanceof Error ? err : new Error(String(err))),
-      once(child.stdin, 'error').then(([err]) => err instanceof Error ? err : new Error(String(err))),
-    ]);
-
     const run: CurrentRun = {
-      child,
       stopped: false,
       settled: false,
       pendingPermissions: new Map(),
-      onPermissionClosed: options.onPermissionClosed,
+      onPermissionClosed: options.onPermissionClosed ?? (() => {}),
+      options,
+      sessionId: options.sessionId,
+      sawDelta: false,
+      stderr: '',
+      resolve: resolveRun,
     };
     this.current = run;
 
-    let stderr = '';
-    let stdoutBuffer = '';
-    let sessionId = options.sessionId;
-    let sawDelta = false;
-    const decoder = new StringDecoder('utf8');
-    const initializeRequestId = `cc-remote-init-${Date.now()}`;
-    let initializeResolve: (() => void) | undefined;
-    let initializeReject: ((error: Error) => void) | undefined;
-    const initialized = new Promise<void>((resolve, reject) => {
-      initializeResolve = resolve;
-      initializeReject = reject;
+    const processKey = JSON.stringify({
+      permissionMode,
+      model,
+      effort,
+      additionalDirectories,
     });
-
-    const handleLine = (line: string) => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-      let event: unknown;
-      try {
-        event = JSON.parse(trimmed);
-      } catch {
-        options.onEvent({ type: 'parse_error', line: trimmed });
-        return;
-      }
-
-      if (isRecord(event) && event.type === 'control_response') {
-        const response = isRecord(event.response) ? event.response : undefined;
-        if (response?.request_id === initializeRequestId) {
-          if (response.subtype === 'error') {
-            initializeReject?.(new Error(String(response.error || 'claude_initialize_failed')));
-          } else {
-            initializeResolve?.();
-          }
-          return;
-        }
-      }
-
-      const permissionRequest = extractClaudePermissionRequest(event);
-      if (permissionRequest) {
-        run.pendingPermissions.set(permissionRequest.requestId, permissionRequest);
-        options.onPermissionRequest(permissionRequest);
-        return;
-      }
-
-      if (isRecord(event) && event.type === 'control_cancel_request' && typeof event.request_id === 'string') {
-        if (run.pendingPermissions.delete(event.request_id)) options.onPermissionClosed(event.request_id);
-        return;
-      }
-
-      options.onEvent(event);
-
-      const foundSessionId = findSessionId(event);
-      if (foundSessionId && foundSessionId !== sessionId) {
-        sessionId = foundSessionId;
-        options.onSessionId(foundSessionId);
-      }
-
-      const delta = extractTextDelta(event);
-      if (delta) {
-        sawDelta = true;
-        options.onText(delta);
-        return;
-      }
-
-      const assistantText = extractAssistantText(event);
-      if (assistantText && !sawDelta) {
-        options.onText(assistantText);
-        return;
-      }
-
-      const resultText = extractResultText(event);
-      if (resultText && !sawDelta) {
-        options.onText(resultText);
-      }
-
-      if (isRecord(event) && event.type === 'result' && !child.stdin.destroyed) {
-        child.stdin.end();
-      }
-    };
-
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdoutBuffer += decoder.write(chunk);
-      let idx: number;
-      while ((idx = stdoutBuffer.indexOf('\n')) >= 0) {
-        const line = stdoutBuffer.slice(0, idx);
-        stdoutBuffer = stdoutBuffer.slice(idx + 1);
-        handleLine(line);
-      }
-    });
-
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString('utf8');
-      if (stderr.length > 16_000) stderr = stderr.slice(-16_000);
-    });
-
     try {
-      child.stdin.write(JSON.stringify({
-        type: 'control_request',
-        request_id: initializeRequestId,
-        request: { subtype: 'initialize', hooks: null },
-      }) + '\n');
-      await Promise.race([
-        initialized,
-        exitOrError.then(result => {
-          if (result instanceof Error) throw result;
-          throw new Error('claude_exited_before_initialize');
-        }),
-        new Promise<never>((_, reject) => {
-          const timer = setTimeout(() => reject(new Error('claude_initialize_timeout')), 15_000);
-          timer.unref();
-        }),
-      ]);
-      child.stdin.write(JSON.stringify({
+      const processState = await this.ensureProcess(processKey, args, effort, options.sessionId);
+      run.process = processState;
+      processState.child.stdin.write(JSON.stringify({
         type: 'user',
         message: {
           role: 'user',
           content: [{ type: 'text', text: options.prompt }],
         },
       }) + '\n');
-      const result = await exitOrError;
-      if (result instanceof Error) throw result;
-      const [exitCode] = result;
-      run.settled = true;
-      const rest = decoder.end();
-      if (rest) stdoutBuffer += rest;
-      if (stdoutBuffer.trim()) handleLine(stdoutBuffer);
-      return { exitCode, stopped: run.stopped, sessionId, stderr };
+      return await completed;
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      return { exitCode, stopped: run.stopped, sessionId, stderr: stderr.trim() ? stderr : errorMessage };
+      const message = err instanceof Error ? err.message : String(err);
+      this.finishRun(run, run.process?.exitCode ?? null, message);
+      return await completed;
     } finally {
-      for (const requestId of run.pendingPermissions.keys()) options.onPermissionClosed(requestId);
-      run.pendingPermissions.clear();
       if (this.current === run) this.current = null;
     }
   }
@@ -307,17 +178,216 @@ export class ClaudeBridge {
     const run = this.current;
     if (!run) return false;
     run.stopped = true;
-    run.child.kill();
-
-    if (process.platform === 'win32' && run.child.pid) {
-      const pid = run.child.pid;
-      setTimeout(() => {
-        if (this.current !== run || run.settled) return;
-        spawn('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore', shell: false });
-      }, 1_500).unref();
-    }
+    this.terminateProcess(run.process ?? this.process);
     return true;
   }
+
+  close(): void {
+    this.terminateProcess(this.process);
+  }
+
+  private async ensureProcess(
+    key: string,
+    args: string[],
+    effort: ClaudeEffortLevel | undefined,
+    sessionId: string | undefined,
+  ): Promise<ClaudeProcess> {
+    const existing = this.process;
+    if (existing
+      && !existing.closed
+      && existing.key === key
+      && (!sessionId || !existing.sessionId || existing.sessionId === sessionId)) {
+      return existing;
+    }
+    this.terminateProcess(existing);
+
+    const child = spawn(this.options.claudeBin, args, {
+      cwd: this.options.workspaceDir,
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        ...(effort === 'auto' ? { CLAUDE_CODE_EFFORT_LEVEL: 'auto' } : {}),
+      },
+    });
+    let resolveInitialize: () => void = () => {};
+    let rejectInitialize: (error: Error) => void = () => {};
+    const initialized = new Promise<void>((resolve, reject) => {
+      resolveInitialize = resolve;
+      rejectInitialize = reject;
+    });
+    const state: ClaudeProcess = {
+      child,
+      key,
+      sessionId,
+      stderr: '',
+      stdoutBuffer: '',
+      decoder: new StringDecoder('utf8'),
+      exitCode: null,
+      closed: false,
+      initializeRequestId: `cc-remote-init-${Date.now()}`,
+      resolveInitialize,
+      rejectInitialize,
+      initialized,
+    };
+    this.process = state;
+    if (this.current) this.current.process = state;
+
+    child.stdout.on('data', (chunk: Buffer) => {
+      state.stdoutBuffer += state.decoder.write(chunk);
+      let index: number;
+      while ((index = state.stdoutBuffer.indexOf('\n')) >= 0) {
+        const line = state.stdoutBuffer.slice(0, index);
+        state.stdoutBuffer = state.stdoutBuffer.slice(index + 1);
+        this.handleLine(state, line);
+      }
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      const text = chunk.toString('utf8');
+      state.stderr = appendBounded(state.stderr, text);
+      const run = this.current;
+      if (run?.process === state) run.stderr = appendBounded(run.stderr, text);
+    });
+    child.once('error', error => this.handleProcessFailure(state, error));
+    child.stdin.once('error', error => this.handleProcessFailure(state, error));
+    child.once('close', code => {
+      state.exitCode = code;
+      state.closed = true;
+      const rest = state.decoder.end();
+      if (rest) state.stdoutBuffer += rest;
+      if (state.stdoutBuffer.trim()) this.handleLine(state, state.stdoutBuffer);
+      state.rejectInitialize(new Error('claude_exited_before_initialize'));
+      const run = this.current;
+      if (run?.process === state) {
+        this.finishRun(run, code, run.stopped ? undefined : 'claude_process_exited');
+      }
+    });
+
+    child.stdin.write(JSON.stringify({
+      type: 'control_request',
+      request_id: state.initializeRequestId,
+      request: { subtype: 'initialize', hooks: null },
+    }) + '\n');
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      await Promise.race([
+        state.initialized,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('claude_initialize_timeout')), 15_000);
+          timer.unref();
+        }),
+      ]);
+      return state;
+    } catch (error) {
+      this.terminateProcess(state);
+      throw error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private handleLine(state: ClaudeProcess, line: string): void {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    let event: unknown;
+    try {
+      event = JSON.parse(trimmed);
+    } catch {
+      this.current?.options.onEvent({ type: 'parse_error', line: trimmed });
+      return;
+    }
+
+    if (isRecord(event) && event.type === 'control_response') {
+      const response = isRecord(event.response) ? event.response : undefined;
+      if (response?.request_id === state.initializeRequestId) {
+        if (response.subtype === 'error') {
+          state.rejectInitialize(new Error(String(response.error || 'claude_initialize_failed')));
+        } else {
+          state.resolveInitialize();
+        }
+        return;
+      }
+    }
+
+    const run = this.current;
+    if (!run || run.process !== state || run.settled) return;
+    const permissionRequest = extractClaudePermissionRequest(event);
+    if (permissionRequest) {
+      run.pendingPermissions.set(permissionRequest.requestId, permissionRequest);
+      run.options.onPermissionRequest?.(permissionRequest);
+      return;
+    }
+    if (isRecord(event) && event.type === 'control_cancel_request' && typeof event.request_id === 'string') {
+      if (run.pendingPermissions.delete(event.request_id)) run.onPermissionClosed(event.request_id);
+      return;
+    }
+
+    run.options.onEvent(event);
+    const foundSessionId = findSessionId(event);
+    if (foundSessionId && foundSessionId !== run.sessionId) {
+      run.sessionId = foundSessionId;
+      state.sessionId = foundSessionId;
+      run.options.onSessionId(foundSessionId);
+    }
+
+    const delta = extractTextDelta(event);
+    if (delta) {
+      run.sawDelta = true;
+      run.options.onText(delta);
+    } else {
+      const assistantText = extractAssistantText(event);
+      const resultText = extractResultText(event);
+      if (assistantText && !run.sawDelta) run.options.onText(assistantText);
+      else if (resultText && !run.sawDelta) run.options.onText(resultText);
+    }
+
+    if (isRecord(event) && event.type === 'result') {
+      this.finishRun(
+        run,
+        event.is_error === true ? 1 : 0,
+        event.is_error === true ? extractResultText(event) || 'claude_run_failed' : undefined,
+      );
+    }
+  }
+
+  private handleProcessFailure(state: ClaudeProcess, error: Error): void {
+    state.rejectInitialize(error);
+    const run = this.current;
+    if (run?.process === state) this.finishRun(run, state.exitCode, error.message);
+  }
+
+  private finishRun(run: CurrentRun, exitCode: number | null, error?: string): void {
+    if (run.settled) return;
+    run.settled = true;
+    for (const requestId of run.pendingPermissions.keys()) run.onPermissionClosed(requestId);
+    run.pendingPermissions.clear();
+    run.resolve({
+      exitCode,
+      stopped: run.stopped,
+      sessionId: run.sessionId,
+      stderr: run.stderr.trim() || error || '',
+    });
+  }
+
+  private terminateProcess(state: ClaudeProcess | null | undefined): void {
+    if (!state || state.closed) return;
+    if (this.process === state) this.process = null;
+    state.closed = true;
+    if (!state.child.stdin.destroyed) state.child.stdin.end();
+    if (process.platform === 'win32' && state.child.pid) {
+      spawn('taskkill', ['/pid', String(state.child.pid), '/t', '/f'], {
+        stdio: 'ignore',
+        shell: false,
+      });
+    } else {
+      state.child.kill();
+    }
+  }
+}
+
+function appendBounded(current: string, addition: string): string {
+  const next = current + addition;
+  return next.length > 16_000 ? next.slice(-16_000) : next;
 }
 
 export function extractClaudePermissionRequest(event: unknown): ClaudePermissionRequest | null {

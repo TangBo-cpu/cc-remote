@@ -13,7 +13,7 @@ test('persists the authoritative transcript and restores it after restart', asyn
     state.beginPrompt('检查项目', 'manual');
     state.appendText('已经检查完成');
     state.setSessionInfo({ model: 'claude-opus-4-8', contextWindow: 200000, remainingTokens: 175000 });
-    state.setClaudeSessionId('session-1');
+    state.setEngineSessionId('session-1');
     await state.finishDone();
 
     const restored = await createTranscriptState(path);
@@ -22,7 +22,8 @@ test('persists the authoritative transcript and restores it after restart', asyn
       revision: 5,
       running: false,
       updatedAt: restored.snapshot().updatedAt,
-      claudeSessionId: 'session-1',
+      engineSessionId: 'session-1',
+      sandboxMode: undefined,
       permissionMode: 'manual',
       pendingPermissions: [],
       sessionInfo: {
@@ -34,6 +35,55 @@ test('persists the authoritative transcript and restores it after restart', asyn
         { role: 'user', text: '检查项目' },
         { role: 'assistant', text: '已经检查完成' },
       ],
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('keeps leading whitespace stream fragments until visible text arrives', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-transcript-'));
+  const path = join(dir, 'transcript.json');
+  try {
+    const state = await createTranscriptState(path);
+    state.beginPrompt('写代码', 'manual');
+    state.appendText('    ');
+    assert.equal(
+      state.snapshot().messages.some((message) => message.role === 'assistant'),
+      false,
+      'whitespace-only prefix must not open a blank assistant bubble',
+    );
+
+    state.appendText('const x = 1;');
+    assert.deepEqual(state.snapshot().messages.at(-1), {
+      role: 'assistant',
+      text: '    const x = 1;',
+    });
+
+    await state.finishDone();
+    assert.deepEqual(state.snapshot().messages.at(-1), {
+      role: 'assistant',
+      text: '    const x = 1;',
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('discards whitespace-only prefix when the turn ends without visible text', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-transcript-'));
+  const path = join(dir, 'transcript.json');
+  try {
+    const state = await createTranscriptState(path);
+    state.beginPrompt('空回复', 'manual');
+    state.appendText('  \n');
+    await state.finishDone();
+    assert.equal(state.snapshot().messages.length, 2);
+    assert.equal(state.snapshot().messages[0].role, 'user');
+    assert.equal(state.snapshot().messages[0].text, '空回复');
+    assert.deepEqual(state.snapshot().messages[1], {
+      role: 'system',
+      text: '本轮没有返回文本，请重试',
     });
   } finally {
     await rm(dir, { recursive: true, force: true });

@@ -182,6 +182,23 @@ class RemoteProjectSummary {
   }
 }
 
+enum SessionEngine {
+  claude('claude', 'CC'),
+  codex('codex', 'Codex');
+
+  const SessionEngine(this.wireName, this.label);
+
+  final String wireName;
+  final String label;
+
+  static SessionEngine fromWire(Object? value) {
+    return values.firstWhere(
+      (engine) => engine.wireName == value,
+      orElse: () => SessionEngine.claude,
+    );
+  }
+}
+
 class RemoteSessionSummary {
   const RemoteSessionSummary({
     required this.id,
@@ -191,6 +208,7 @@ class RemoteSessionSummary {
     required this.running,
     required this.messageCount,
     this.model,
+    this.engine = SessionEngine.claude,
     this.archived = false,
   });
 
@@ -201,6 +219,7 @@ class RemoteSessionSummary {
   final bool running;
   final int messageCount;
   final String? model;
+  final SessionEngine engine;
   final bool archived;
 
   String get summary {
@@ -225,7 +244,85 @@ class RemoteSessionSummary {
       running: json['running'] == true,
       messageCount: (json['messageCount'] as num?)?.toInt() ?? 0,
       model: json['model'] as String?,
+      engine: SessionEngine.fromWire(json['engine']),
       archived: json['archived'] == true || json['archivedAt'] is num,
+    );
+  }
+}
+
+enum RemoteSessionSearchRole { title, user, assistant }
+
+class RemoteSessionSearchResult {
+  const RemoteSessionSearchResult({
+    required this.sessionId,
+    required this.projectId,
+    required this.title,
+    required this.updatedAt,
+    required this.archived,
+    required this.role,
+    required this.messageIndex,
+    required this.snippet,
+    required this.matchStart,
+    required this.matchEnd,
+    required this.matchCount,
+    this.engine = SessionEngine.claude,
+  });
+
+  final String sessionId;
+  final String projectId;
+  final String title;
+  final int updatedAt;
+  final bool archived;
+  final RemoteSessionSearchRole role;
+  final int messageIndex;
+  final String snippet;
+  final int matchStart;
+  final int matchEnd;
+  final int matchCount;
+  final SessionEngine engine;
+
+  String get roleLabel => switch (role) {
+    RemoteSessionSearchRole.title => '会话标题',
+    RemoteSessionSearchRole.user => '你的消息',
+    RemoteSessionSearchRole.assistant => '${engine.label} 回复',
+  };
+
+  static RemoteSessionSearchResult? tryParse(Map<String, dynamic> json) {
+    final sessionId = json['sessionId'];
+    final projectId = json['projectId'];
+    final title = json['title'];
+    final snippet = json['snippet'];
+    final role = switch (json['role']) {
+      'title' => RemoteSessionSearchRole.title,
+      'user' => RemoteSessionSearchRole.user,
+      'assistant' => RemoteSessionSearchRole.assistant,
+      _ => null,
+    };
+    if (sessionId is! String ||
+        projectId is! String ||
+        title is! String ||
+        snippet is! String ||
+        role == null) {
+      return null;
+    }
+    final matchStart = (json['matchStart'] as num?)?.toInt() ?? 0;
+    final matchEnd = (json['matchEnd'] as num?)?.toInt() ?? 0;
+    if (matchStart < 0 || matchEnd < matchStart || matchEnd > snippet.length) {
+      return null;
+    }
+    return RemoteSessionSearchResult(
+      sessionId: sessionId,
+      projectId: projectId,
+      title: title,
+      updatedAt: (json['updatedAt'] as num?)?.toInt() ?? 0,
+      archived: json['archived'] == true,
+      role: role,
+      messageIndex: (json['messageIndex'] as num?)?.toInt() ?? -1,
+      snippet: snippet,
+      matchStart: matchStart,
+      matchEnd: matchEnd,
+      matchCount: (json['matchCount'] as num?)?.toInt() ?? 1,
+      engine: SessionEngine.fromWire(json['engine']),
     );
   }
 }
@@ -381,6 +478,7 @@ class RemoteTranscriptSnapshot {
     required this.messages,
     required this.permissionMode,
     required this.pendingPermissions,
+    this.codexSandboxMode = CodexSandboxMode.readOnly,
     this.stopping = false,
     this.runId,
     this.startedAt,
@@ -394,6 +492,7 @@ class RemoteTranscriptSnapshot {
   final List<TranscriptMessage> messages;
   final PermissionMode permissionMode;
   final List<RemotePermissionRequest> pendingPermissions;
+  final CodexSandboxMode codexSandboxMode;
   final bool stopping;
   final String? runId;
   final DateTime? startedAt;
@@ -421,6 +520,7 @@ class RemoteTranscriptSnapshot {
             )
             .toList(),
         permissionMode: PermissionMode.fromWire(json['permissionMode']),
+        codexSandboxMode: CodexSandboxMode.fromWire(json['sandboxMode']),
         stopping: json['stopping'] == true,
         runId: json['runId'] as String?,
         startedAt: _dateTimeFromMilliseconds(json['startedAt']),

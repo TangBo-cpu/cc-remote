@@ -50,4 +50,37 @@ void main() {
       isFalse,
     );
   });
+
+  test('forces reconnect after a full liveness window in background', () {
+    const livenessWindow = Duration(seconds: 60);
+
+    expect(
+      shouldForceReconnectAfterBackground(
+        backgroundDuration: const Duration(seconds: 59),
+        livenessThreshold: livenessWindow,
+      ),
+      isFalse,
+    );
+    expect(
+      shouldForceReconnectAfterBackground(
+        backgroundDuration: livenessWindow,
+        livenessThreshold: livenessWindow,
+      ),
+      isTrue,
+    );
+
+    final forceReconnect = shouldForceReconnectAfterBackground(
+      backgroundDuration: livenessWindow,
+      livenessThreshold: livenessWindow,
+    );
+    expect(
+      shouldPreserveLiveWebSocket(
+        forceReconnect: forceReconnect,
+        wsReady: true,
+        remoteOffline: false,
+        hasChannel: true,
+      ),
+      isFalse,
+    );
+  });
 }

@@ -4,11 +4,11 @@ Flutter 手机 App，用于扫码配对本机 CC Remote daemon，并远程控制
 
 ## 当前能力
 
-App 已支持扫码确认、Secure Storage、启动恢复、WebSocket 自动重连、活动任务恢复、流式对话、停止任务、斜杠指令、Markdown、模型选择与上下文状态同步、六种权限模式、一次性工具审批、多项目与多会话、只读工作区、Git diff、图片与文件附件，以及 Android 后台本地通知。
+App 已支持扫码确认、Secure Storage、启动恢复、WebSocket 自动重连、活动任务恢复、流式对话、停止任务、斜杠指令、Markdown、模型选择、Claude Code 思考强度与上下文状态同步、六种权限模式、一次性工具审批、多项目与多会话、只读工作区、Git diff、图片与文件附件，以及 Android 后台本地通知。
 
-`v1.2.0` 已发布“暖纸控制台 / Warm Console”主界面：Claude 风格的分离式顶部浮动控制、非已连接相位的 `ConsoleStatusStrip`、内容优先 transcript（更宽助手 elevated 气泡 + 衬线）、连续字号滑杆（默认约 95%）、轻拟态抬升、连接中/离线分空状态、权限卡工作目录、分层活动状态、Warm Console 设置与菜单，以及贴底的暖白 Composer（`terracotta-deep` 发送/停止）。
+`v1.3.0` 在“暖纸控制台 / Warm Console”基础上加入 Codex 引擎与沙箱模式、跨项目会话搜索、来源链接跳转、任务恢复状态、时间线与代码块工具栏，以及更轻量的思考动效；电脑端桥接改为常驻 Claude Streaming Input 与 Codex App Server，后续轮次不再重复启动 CLI。
 
-Composer 底栏使用圆形扩展按钮、暖色模型胶囊和 `terracotta-deep` 圆形发送/停止按钮，不显示剩余上下文 token。“···”菜单底栏最多保留当前模型名，并提供对应屏读语义。主界面和工作区统一使用 `lucide_icons_flutter`；字体打包 `NotoSerifSC` 于 `fonts/`（UI 与助手统一衬线）。思考态是原生脉冲 brain 图标，活动 running 状态仍使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`。
+Composer 悬浮在 transcript 之上：列表可滚入 dock 背后，dock 本身不透明以免滚动叠字掉帧；工具行为圆形附件按钮（仅附件）、Lucide 灯泡思考强度、**紧贴的**暖色模型胶囊 + 权限模式胶囊、以及 `terracotta-deep` 圆形发送/停止，不显示剩余上下文 token。思考强度与 Claude Code `/effort` 对齐为自动、低、中、高、超高、最大六档；`max` 不保存为跨会话默认。底边平时用 `viewPadding` 抬离系统手势条，键盘打开时取消底部间隙和阴影并与 IME 连续衔接。长列表滚动侧：消息四角统一 22px，助手阅读面使用无描边 `surface`；气泡无 soft shadow、共享 Markdown 样式表、无标记纯文本跳过 Markdown、活动轨去掉 `IntrinsicHeight`。“···”菜单底栏最多保留当前模型名，并提供对应屏读语义。主界面和工作区统一使用 `lucide_icons_flutter`；字体打包 `NotoSerifSC` 于 `fonts/`（UI 与助手统一衬线）。思考态是原生脉冲 brain 图标，活动 running 状态仍使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`。
 
 ## 开发运行
 
@@ -30,9 +30,9 @@ flutter run
 
 ## Android 安装
 
-当前公开版本是 [`v1.2.0`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.2.0)：
+当前公开版本是 [`v1.3.0`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.3.0)：
 
-- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.2.0/cc-remote-v1.2.0-android.apk)
+- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.0/cc-remote-v1.3.0-android.apk)
 
 下载后在 Android 手机上允许当前来源安装未知应用，并打开 APK 完成安装。当前 APK 使用测试签名，适合个人测试，不应作为应用商店正式包分发。
 
@@ -76,7 +76,7 @@ adb shell monkey -p com.example.cc_remote -c android.intent.category.LAUNCHER 1
 
 ## 会话流程
 
-WebSocket 鉴权后，App 接收项目 catalog、当前 transcript、权限能力、指令、模型和上下文。发送任务时携带唯一 `promptId`、当前 `sessionId`、文本、附件 ID 和权限模式；daemon 接管后返回 `prompt_accepted`。
+WebSocket 鉴权后，App 接收项目 catalog、当前 transcript、权限能力、指令、模型和上下文。发送任务时携带唯一 `promptId`、当前 `sessionId`、文本、附件 ID、权限模式、模型覆盖项和 Claude Code `effort`；daemon 接管后返回 `prompt_accepted`。
 
 输入 `/` 会显示 daemon 同步的 Claude Code 指令。运行中会显示思考计时和安全化工具活动；调用 `Skill` 时会显示具体 Skill 名称。完成后临时活动收起，最终回复保留。连接异常时 WebSocket 按退避间隔自动重连；只有尚未收到确认的 Prompt 会使用同一 `promptId` 重发，daemon 去重后不会重复启动 Claude。重连后再以 daemon 的 transcript snapshot 和运行状态恢复内容、活动任务与 Stop 中间态。
 
@@ -106,4 +106,4 @@ App 在后台或锁屏时可以发送任务完成、失败、停止和等待权�
 
 ## 当前验证状态
 
-当前开发代码通过 `flutter analyze`；`mobile/test/` 合计约 90 项测试（含连接中状态条/空状态、权限工作目录与 fallback）。开发 release 已装 Android 真机；本轮 Warm Console a11y/UX 改动的逐屏视觉清单仍待勾选。第二轮 session resume 与 Stop 长任务均已完成真机验证，Stop 后 daemon 没有残留 Claude 子进程。
+当前开发代码通过 `flutter analyze`；`mobile/test/widget_test.dart` 等测试通过（含权限芯片直达、明文跳过 Markdown、附件发送、离线重连、Composer 尺寸）。开发 release 已装 Android 真机，验证悬浮 Composer、模型/权限紧贴与更宽气泡；逐屏视觉清单仍可继续补齐。第二轮 session resume 与 Stop 长任务均已完成真机验证，Stop 后 daemon 没有残留 Claude 子进程。

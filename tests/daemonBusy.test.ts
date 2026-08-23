@@ -290,7 +290,7 @@ class WsInbox {
         const index = this.waiters.findIndex(item => item.timer === timer);
         if (index >= 0) this.waiters.splice(index, 1);
         reject(new Error('websocket_message_timeout'));
-      }, 8_000);
+      }, 15_000);
       this.waiters.push({ predicate, resolve, reject, timer });
     });
   }

@@ -22,27 +22,27 @@ Flutter App 是产品主入口。当前实现集中在少量文件中，优先�
 
 `ChatScreen` 由 `ConnectionHeader`、可选 `ConsoleStatusStrip`、`TranscriptView` 和 `PromptBar` 组成。`ConnectionHeader` 是分离式紧凑会话头（菜单 + 新建/更多），不在 chrome 内堆连接文案；非 `connected` 相位时在头下方显示 `ConsoleStatusStrip`。模型选择位于输入台。“···”菜单不显示剩余上下文 token，底栏最多保留具有屏读语义的当前模型名。
 
-`TranscriptView` 展示用户消息、Claude Markdown 回复（`AssistantBubbleFrame` elevated 气泡 + 衬线）、活动状态、审批卡，以及空状态下的连接中卡 / 离线重连卡 / 已连接快捷芯片。`MessageBlock` 与附件组件负责历史内容。`ActivityBlock` 合并思考和工具活动，任务结束后清理临时活动。
+`TranscriptView` 展示用户消息、Claude 回复（`AssistantBubbleFrame` elevated 气泡 + 衬线；流式/无标记纯文本用 `Text`，带 Markdown 标记再用共享 `MarkdownStyleSheet`）、活动状态、审批卡，以及空状态下的连接中卡 / 离线重连卡 / 已连接快捷芯片。助手 Markdown 链接只接受绝对 `http` / `https` URL，点击后由 `url_launcher` 交给系统浏览器；无效协议保持不可跳转。`MessageBlock` 与附件组件负责历史内容。`ActivityBlock` 合并思考和工具活动，任务结束后清理临时活动。
 
-`PromptBar` 处理权限模式、附件预览、多行输入、模型选择、发送和停止。当前为暖白 Composer：上方输入，下方贴底工具行依次为圆形扩展、暖色模型胶囊和 `terracotta-deep` 圆形发送/停止。权限模式进入扩展 sheet，不再常驻一行；剩余上下文 token 不再显示，也不影响指令建议区高度。输入以 `/` 开头且没有空格时，`CommandSuggestions` 继续按前缀优先规则筛选 daemon 同步的 Claude Code 指令。
+`PromptBar` 处理权限模式、附件预览、多行输入、模型选择、发送和停止。当前为叠在 transcript 上的不透明暖白 Composer：上方输入，下方工具行依次为圆形附件 `+`、**紧贴的**暖色模型胶囊与权限模式胶囊、以及 `terracotta-deep` 圆形发送/停止。`+` 只开附件；权限模式点开既有 sheet（含 bypass 二次确认）。剩余上下文 token 不再显示，也不影响指令建议区高度。输入以 `/` 开头且没有空格时，`CommandSuggestions` 继续按前缀优先规则筛选 daemon 同步的 Claude Code 指令。
 
 `PermissionRequestCard` 为全宽决策面：命令 → 工作目录（`session.workspaceDir` 或 fallback 文案）→ 影响 → 范围 →「仅本次允许」/「拒绝并返回」。
 
-`SessionNavigatorSheet` 展示项目和各自会话，允许切换或创建会话。`SettingsSheet` 按 Warm Console 分组管理设备信息、模型、背景、通知、重连和退出配对。`WorkspaceDrawer` 只读显示活动项目文件与 Git diff。
+`SessionNavigatorSheet` 展示项目和各自会话，允许切换或创建会话；新建会话时先弹出引擎选择器（Claude / Codex），会话创建后引擎不可更改，会话摘要与搜索结果都带引擎标签。输入搜索词后切换为跨项目全文搜索，使用 300ms 防抖、加载线、匹配片段高亮、项目/角色/匹配数信息和空态/错误态。搜索结果由 daemon 的权威 transcript 生成，点击后复用现有会话切换；`TranscriptView` 等目标会话快照加载后按原始消息索引定位，并以规范化片段作为索引漂移时的安全回退，再短暂高亮既有气泡。`SettingsSheet` 按 Warm Console 分组管理设备信息、模型、背景、通知、重连和退出配对。`WorkspaceDrawer` 只读显示活动项目文件与 Git diff。
 
-主界面与工作区图标统一来自 `lucide_icons_flutter` 3.1.15。主题打包 `NotoSerifSC`（UI 与助手统一衬线）。思考态使用 `brain` 和 `AnimationController` 做原生脉冲，普通活动 running 继续使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`，保留 `SignalPressEffect` 等已有原生交互效果。
+主界面与工作区图标统一来自 `lucide_icons_flutter` 3.1.15。主题打包 `NotoSerifSC`（UI 与助手统一衬线）。思考态使用 `AnimationController` 驱动固定中心的暖陶花形帧动画，由 `CustomPainter` 在圆点、四瓣、六瓣和八瓣星芒间生长 / 收缩；系统关闭动画时固定为完整花形。可见计时明确标为「本轮已运行」，屏读 live region 只播报一次「正在思考」，不会随秒数重复播报。普通活动 running 继续使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`，保留 `SignalPressEffect` 等已有原生交互效果。
 
 ## 核心状态
 
-保存的配对信息由 `SavedSession` 表示，包含 origin、token、deviceName 和 workspaceDir。项目与会话 catalog 使用 `RemoteProjectCatalog`、`RemoteProjectSummary` 和 `RemoteSessionSummary`。
+保存的配对信息由 `SavedSession` 表示，包含 origin、token、deviceName 和 workspaceDir。项目与会话 catalog 使用 `RemoteProjectCatalog`、`RemoteProjectSummary` 和 `RemoteSessionSummary`；全文搜索摘要使用 `RemoteSessionSearchResult`，只保存会话归属、片段、高亮范围和匹配数量，不复制完整历史。
 
-transcript 使用 `TranscriptMessage`，角色分为 user、assistant、system 和 activity。daemon 快照由 `RemoteTranscriptSnapshot` 解析，包含消息、运行状态、权限模式、审批请求、Claude session id 和 session info。
+transcript 使用 `TranscriptMessage`，角色分为 user、assistant、system 和 activity。daemon 快照由 `RemoteTranscriptSnapshot` 解析，包含消息、运行状态、权限模式、Codex 沙箱模式、审批请求、引擎 session id 和 session info。
 
 运行状态由 `connected`、`remoteOffline`、`running`、`stopping` 和 `uploadingAttachments` 等字段共同表达。`ConsolePresentation` / `ConsolePhase` 把这些事实映射为连接中、已连接、上传中、运行中、等待审批、停止中、停止未确认、已停止、执行失败、连接已断开；Header、状态条与 Composer 共用同一解析结果。停止超时是“仍在运行但最近停止请求未确认”的视图状态，不能当成已停止。
 
 ## 网络行为
 
-配对成功后 token 写入 `flutter_secure_storage`。HTTP 使用 Bearer token。WebSocket 从扫码 origin 推导 `ws` 或 `wss` 地址，连接后先发送 `auth`。
+配对成功后 token 写入 `flutter_secure_storage`。HTTP 使用 Bearer token。WebSocket 从扫码 origin 推导 `ws` 或 `wss` 地址，连接 ready 后先发送 `auth`。
 
 发送任务前，App 将附件上传到当前会话，得到附件 ID，再发送 prompt。纯附件任务允许文本为空。发送后立即在本地追加用户消息和思考活动，等待 daemon 权威事件修正状态。
 
@@ -56,6 +56,8 @@ App 支持 `manual`、`acceptEdits`、`auto`、`dontAsk`、`plan` 和 `bypassPer
 
 如果 daemon 关闭 bypass 能力，选择项禁用。选择 bypass 时必须弹出确认，任务结束后自动恢复询问权限。
 
+Codex 会话不使用权限模式，改用三档沙箱模式（只读 / 工作区可写 / 完全访问），由 daemon 下发的 `codexSandboxModes` 驱动选择项；选择 `danger-full-access` 发送一次后自动回落为 `read-only`。Codex 会话的附件仅允许图片，违反时提示「Codex 会话只支持图片附件」。
+
 ## 附件
 
 附件来源包括相机、相册和文件。选择后在 Composer 上方或内部短条预览。一次最多 5 个，单个最大 25MB。上传期间禁止发送、删除附件和切换会话。
@@ -66,17 +68,19 @@ App 支持 `manual`、`acceptEdits`、`auto`、`dontAsk`、`plan` 和 `bypassPer
 
 二维码格式错误、过期、网络失败和配对失败都留在 PairScreen，并提供重新扫描。HTTP 401 清除 token，回到配对页。普通网络错误保留配对和 transcript，主控制台显示电脑端离线。
 
-运行中断线不自动重发 prompt。重新连接后通过 transcript snapshot 判断任务是否继续、完成或中断。Stop 进入停止中状态，禁用重复点击；收到 `stopped`、`done` 或 `error` 后恢复输入。
+运行中断线不重发已收到 `prompt_accepted` 的 prompt；未收到确认的 prompt 会在重连后使用原 `promptId` 重试。重新连接后通过 transcript snapshot 判断任务是否继续、完成或中断。Stop 进入停止中状态，禁用重复点击；收到 `stopped`、`done` 或 `error` 后恢复输入。
 
 ## 布局要求
 
 主界面使用 SafeArea。Warm Console 参考画板为 390×844，水平安全边距 20px，顶部会话头约 76px，Composer 视觉尺寸 350×110。视觉图标可为 36px，但语义命中区至少 44px。键盘出现时 transcript 和指令建议让出空间，状态和主动作不能被遮挡。
 
+IME 动画的真实 `viewInsets.bottom` 只用于 `AppBackground` 外层避让；传给聊天子树的 `MediaQuery.viewInsets` 被稳定为“关闭 0 / 打开 1”两态，避免长 transcript、Markdown 与 Composer 随键盘每个高度帧重复 build。`ChatScreen` 不再使用覆盖整页的 `LayoutBuilder`，指令建议通过 `Flexible` 在剩余高度内收缩，Composer 使用独立 `RepaintBoundary`。最终键盘避让距离、底部圆角和阴影切换保持不变。
+
 系统大字体、小屏、横屏和键盘场景都有回归测试。中文 UI 依赖打包的 Noto 子集字体；widget 测试环境的 Ahem 字体只用于布局几何。
 
 ## 测试范围
 
-`mobile/test/widget_test.dart` 覆盖启动、配对、Warm Console 设置与菜单、当前模型屏读语义、菜单去上下文 token、会话导航、工作区、指令筛选、Composer 44/36px 尺寸、权限模式、审批卡（含工作目录与 fallback）、运行和停止状态、思考计时、原生进度指示器、连接中状态条与空状态卡、减少动态效果、小屏大字体、横屏扫码、离线重连、Markdown 回复和活动展示。`mobile/test/` 合计约 90 项测试（以 `flutter test` 为准）。
+`mobile/test/widget_test.dart` 覆盖启动、配对、Warm Console 设置与菜单、当前模型屏读语义、菜单去上下文 token、会话导航与全文搜索跳转、工作区、指令筛选、Composer 44/36px 尺寸、权限模式、审批卡（含工作目录与 fallback）、运行和停止状态、花形思考动画 / 本轮计时 / live region、原生进度指示器、共享恢复面板、减少动态效果、小屏大字体、横屏扫码、离线重连、Markdown 来源链接、回复和活动展示。键盘回归会模拟连续 inset 帧，确认已打开期间消息与 Composer 实例不重复重建。实际测试总数以 `flutter test` 输出为准。
 
 `mobile/test/attachments_test.dart` 覆盖附件上传、限制和错误清理。提交前运行：
 

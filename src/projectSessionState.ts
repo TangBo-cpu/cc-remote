@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { access, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createTranscriptState, type TranscriptSnapshot, type TranscriptState } from './transcriptState.js';
+import { isAgentEngine, type AgentEngine } from './engineBridge.js';
 
 const SCHEMA_VERSION = 1;
 
@@ -17,6 +18,7 @@ type StoredSession = {
   id: string;
   projectId: string;
   title: string;
+  engine: AgentEngine;
   createdAt: number;
   updatedAt: number;
   archivedAt?: number;
@@ -51,6 +53,21 @@ export type ProjectSessionCatalog = {
   sessions: SessionSummary[];
 };
 
+export type SessionSearchResult = {
+  sessionId: string;
+  projectId: string;
+  title: string;
+  engine: AgentEngine;
+  updatedAt: number;
+  archived: boolean;
+  role: 'title' | 'user' | 'assistant';
+  messageIndex: number;
+  snippet: string;
+  matchStart: number;
+  matchEnd: number;
+  matchCount: number;
+};
+
 export type SessionContext = {
   project: StoredProject;
   session: StoredSession;
@@ -61,8 +78,9 @@ export type ProjectSessionState = {
   catalog(): ProjectSessionCatalog;
   active(): SessionContext;
   getSession(sessionId: string): SessionContext | undefined;
+  searchSessions(query: string, limit?: number): SessionSearchResult[];
   registerProject(path: string, name?: string): Promise<ProjectSessionCatalog>;
-  createSession(projectId: string, title?: string): Promise<SessionContext>;
+  createSession(projectId: string, title?: string, engine?: AgentEngine): Promise<SessionContext>;
   selectSession(sessionId: string): Promise<SessionContext>;
   setSessionTitleFromPrompt(sessionId: string, prompt: string): Promise<void>;
   setSessionTitle(sessionId: string, title: string): Promise<SessionContext>;
@@ -116,7 +134,11 @@ export async function createProjectSessionState(options: {
     return state;
   }
 
-  async function createSessionRecord(projectId: string, title = '新会话'): Promise<SessionContext> {
+  async function createSessionRecord(
+    projectId: string,
+    title = '新会话',
+    engine: AgentEngine = 'claude',
+  ): Promise<SessionContext> {
     const project = catalog.projects.find(item => item.id === projectId);
     if (!project) throw new Error('project_not_found');
     const now = Date.now();
@@ -124,6 +146,7 @@ export async function createProjectSessionState(options: {
       id: randomUUID(),
       projectId,
       title,
+      engine,
       createdAt: now,
       updatedAt: now,
     };
@@ -143,6 +166,7 @@ export async function createProjectSessionState(options: {
       id: randomUUID(),
       projectId: project.id,
       title: '当前会话',
+      engine: 'claude',
       createdAt: now,
       updatedAt: now,
     };
@@ -211,6 +235,52 @@ export async function createProjectSessionState(options: {
     catalog: snapshotCatalog,
     active: current,
     getSession: getSessionContext,
+
+    searchSessions(query: string, limit = 50): SessionSearchResult[] {
+      const needle = query.trim();
+      if (!needle) return [];
+      const maxResults = Math.max(1, Math.min(Math.trunc(limit), 50));
+      return catalog.sessions
+        .map(session => {
+          const snapshot = transcripts.get(session.id)?.snapshot();
+          if (!snapshot) return undefined;
+          let matchCount = 0;
+          let bestMatch: ReturnType<typeof createSearchSnippet> | undefined;
+          let bestRole: SessionSearchResult['role'] = 'title';
+          let bestMessageIndex = -1;
+          for (let index = snapshot.messages.length - 1; index >= 0; index -= 1) {
+            const message = snapshot.messages[index];
+            if (message.role !== 'user' && message.role !== 'assistant') continue;
+            const match = createSearchSnippet(message.text, needle);
+            if (!match) continue;
+            matchCount += 1;
+            if (!bestMatch) {
+              bestMatch = match;
+              bestRole = message.role;
+              bestMessageIndex = index;
+            }
+          }
+          const titleMatch = createSearchSnippet(session.title, needle);
+          if (titleMatch) matchCount += 1;
+          const chosen = bestMatch ?? titleMatch;
+          if (!chosen) return undefined;
+          return {
+            sessionId: session.id,
+            projectId: session.projectId,
+            title: session.title,
+            engine: session.engine,
+            updatedAt: Math.max(session.updatedAt, snapshot.updatedAt),
+            archived: typeof session.archivedAt === 'number',
+            role: bestMatch ? bestRole : 'title',
+            messageIndex: bestMatch ? bestMessageIndex : -1,
+            ...chosen,
+            matchCount,
+          } satisfies SessionSearchResult;
+        })
+        .filter((result): result is SessionSearchResult => result !== undefined)
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .slice(0, maxResults);
+    },
 
     async registerProject(path: string, name?: string): Promise<ProjectSessionCatalog> {
       const canonicalPath = resolve(path);
@@ -352,6 +422,34 @@ function sessionSummary(session: StoredSession, snapshot?: TranscriptSnapshot): 
   };
 }
 
+function createSearchSnippet(
+  text: string,
+  needle: string,
+): Pick<SessionSearchResult, 'snippet' | 'matchStart' | 'matchEnd'> | undefined {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  const match = new RegExp(escapeSearchPattern(needle), 'iu').exec(normalized);
+  if (!match) return undefined;
+  const matchIndex = match.index;
+  const matchLength = match[0].length;
+  const contextBefore = 44;
+  const contextAfter = 72;
+  const sliceStart = Math.max(0, matchIndex - contextBefore);
+  const sliceEnd = Math.min(normalized.length, matchIndex + matchLength + contextAfter);
+  const hasPrefix = sliceStart > 0;
+  const hasSuffix = sliceEnd < normalized.length;
+  const snippet = `${hasPrefix ? '…' : ''}${normalized.slice(sliceStart, sliceEnd)}${hasSuffix ? '…' : ''}`;
+  const matchStart = (hasPrefix ? 1 : 0) + matchIndex - sliceStart;
+  return {
+    snippet,
+    matchStart,
+    matchEnd: matchStart + matchLength,
+  };
+}
+
+function escapeSearchPattern(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 async function loadCatalog(path: string): Promise<StoredCatalog> {
   try {
     const parsed = JSON.parse(await readFile(path, 'utf8')) as Partial<StoredCatalog>;
@@ -363,7 +461,12 @@ async function loadCatalog(path: string): Promise<StoredCatalog> {
       activeProjectId: typeof parsed.activeProjectId === 'string' ? parsed.activeProjectId : undefined,
       activeSessionId: typeof parsed.activeSessionId === 'string' ? parsed.activeSessionId : undefined,
       projects: parsed.projects.filter(isProject),
-      sessions: parsed.sessions.filter(isSession),
+      sessions: parsed.sessions
+        .filter(isSession)
+        .map(session => ({
+          ...session,
+          engine: isAgentEngine(session.engine) ? session.engine : 'claude',
+        })),
     };
   } catch {
     return emptyCatalog();
@@ -383,7 +486,9 @@ function isProject(value: unknown): value is StoredProject {
     && typeof value.updatedAt === 'number';
 }
 
-function isSession(value: unknown): value is StoredSession {
+function isSession(
+  value: unknown,
+): value is Omit<StoredSession, 'engine'> & { engine?: unknown } {
   if (!(isRecord(value)
     && typeof value.id === 'string'
     && typeof value.projectId === 'string'

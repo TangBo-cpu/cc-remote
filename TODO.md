@@ -1,6 +1,6 @@
 # TODO
 
-本文同步到当前开发版本。手机端主链路、工作区冷启动对齐、流式性能合批和可靠性自动化已经完成；Warm Console 主界面与 a11y/UX 补强已进入开发代码，并完成多机 release 安装；逐屏视觉清单与恢复终态面板仍待收尾。
+本文同步到当前开发版本。手机端主链路、工作区冷启动对齐、流式性能合批和可靠性自动化已经完成；Warm Console 主界面、a11y/UX 补强与共享恢复面板已进入开发代码，并完成多机 release 安装；逐屏视觉清单与断线重连终态策略仍待收尾。
 
 ## 已完成
 
@@ -22,6 +22,9 @@
 - [x] 流式 `text` 短时合批推送，任务结束前 flush 尾包
 - [x] daemon HTTP、WebSocket、鉴权和静态暴露黑盒测试
 - [x] Claude CLI fixture 覆盖 session resume、失效 session 自动重试和 Windows Stop 进程树清理
+- [x] 会话级引擎切换：`engineBridge` 统一接口 + `codexBridge` Codex CLI 桥接（fixture 覆盖）
+- [x] 新建会话可选 Claude / Codex；prompt 校验 engine 一致性，Codex 会话仅图片附件、三档沙箱模式且 danger 发送后自动回落
+- [x] transcript `claudeSessionId` 更名 `engineSessionId` 并兼容旧数据；session 记录持久化 `engine` 字段
 - [x] 实际 daemon、WebSocket 和 Claude CLI 完成两轮 resume 与 Stop 验证
 
 ### Flutter App
@@ -31,10 +34,12 @@
 - [x] prompt 接收确认与去重、流式输出、停止和错误状态
 - [x] 断线重连后恢复活动任务、Stop 中间态和思考计时
 - [x] Claude Code 斜杠指令搜索与滚动选择
+- [x] Composer 调整 Claude Code `effort`，覆盖自动、低、中、高、超高、最大并传递到 daemon
 - [x] 思考计时、安全化工具活动（含具体 Skill 名称）和 Markdown 输出
 - [x] 流式期间轻量文本渲染，结束后再 Markdown
 - [x] 流式 `setState` 合批与本地 transcript 落盘节流
 - [x] 权限模式选择和一次性工具审批
+- [x] 新建会话时选择引擎（Claude / Codex）；Codex 会话沙箱模式选择与图片附件限制
 - [x] 项目与会话面板、新会话和 transcript 恢复
 - [x] 项目完整路径显示（会话面板与设置页）
 - [x] 工作区文件与 Git diff 抽屉
@@ -42,7 +47,7 @@
 - [x] Android 后台本地通知与通知开关
 - [x] 浅色活力主题、紧凑双栏连接舱和 Command Dock（历史里程碑；现已被 Warm Console 取代）
 - [x] 小屏、横屏、键盘、大字体和缩放溢出回归测试
-- [x] Claude 普通回复使用 elevated paper 实体气泡、边框和衬线正文
+- [x] Claude 普通回复使用无描边 `surface` 阅读气泡、统一 22px 圆角和衬线正文
 - [x] 最新调试/release 版真机安装和主界面检查
 
 ### Warm Console 实现
@@ -52,17 +57,20 @@
 - [x] UI 实现文档同步到最新 Warm Console
 - [x] 迁移主题 tokens 并将主界面、工作区统一为 Lucide 线性图标
 - [x] 重构紧凑会话头、transcript 活动展示和贴底 Composer
-- [x] 完成 Composer 圆形扩展/发送/停止、暖色模型胶囊和上下文 token 隐藏
+- [x] 完成 Composer 圆形附件/灯泡思考强度/发送/停止、暖色模型胶囊和上下文 token 隐藏
 - [x] 按 Warm Console 整理设置与“···”菜单，菜单底栏最多保留模型名
 - [x] 思考态改为 brain 脉冲，活动 running 保留原生进度指示器
 - [x] 移除 `flutter_animate`，仅保留 `lucide_icons_flutter` 作为本轮新增视觉依赖
-- [x] `terracotta-deep` CTA、打包 Noto 字体、助手 elevated 气泡
+- [x] `terracotta-deep` CTA、打包 Noto 字体、无描边助手阅读气泡与 Markdown/代码块层级
 - [x] 权限决策展示 `workspaceDir`（缺失时 fallback 文案）
 - [x] `ConsoleStatusStrip` 覆盖连接中等非已连接相位；连接中空状态独立于离线卡
 - [x] 输入聚焦描边使用 `terracotta-deep`
 - [ ] 继续逐屏验收配对、会话选择、权限决策与 Diff
 - [x] 用共享 `ConsolePresentation` 统一 Header / Composer / 状态条的离线、失败、停止中、已停止和停止超时语义
-- [ ] 补齐共享恢复信息面板与有明确失败事实的重连失败视图
+- [x] 补齐共享恢复/终态面板，统一连接中、断线、失败、停止中、停止未确认与已停止的事实、保留内容和单一主动作
+- [x] WebSocket 客户端暴露自动重连次数、下一次重试时间和最近错误；共享恢复面板支持安全摘要与立即重连
+- [x] 优化 IME 弹出性能：键盘动画高度只作用于外层避让，聊天子树仅感知打开/关闭；移除逐帧重建聊天页的外层 `LayoutBuilder`，指令建议使用 `Flexible` 自适应并隔离 Composer 绘制
+- [ ] 若后续定义重试耗尽策略，再增加独立的重连失败终态；当前保持持续自动恢复
 - [x] 更新组件测试，覆盖 Composer 尺寸、模型语义、菜单去 token、活动状态、连接中状态条/空状态与权限工作目录
 - [ ] 完成 Android 真机 Warm Console 逐屏视觉验收清单
 
@@ -70,7 +78,7 @@
 
 - [x] 根 README 与当前启动、安装和协议一致
 - [x] 移动端 README 与当前 UI 和调试流程一致
-- [x] UI 设计文档更新为当前 Warm Console 实现与验收规格（含 2026-08-15 a11y/UX 补强）
+- [x] UI 设计文档更新为当前 Warm Console 实现与验收规格（含 2026-08-21 恢复面板、全文搜索、键盘性能与 effort 补强）
 - [x] 系统架构与 Flutter 实现文档去掉初版假设
 
 ## 待专项验证
@@ -84,10 +92,16 @@
 - [ ] 冷启动切换到另一项目目录后，手机 catalog 与 Claude cwd 同步
 - [ ] 公网隧道下首字延迟与流式顺滑度对照本机
 
+## Codex 切换待验证
+
+- [ ] 真机新建 Codex 会话并确认流式回复、停止与断线恢复
+- [ ] Codex `workspace-write` 下真实写入工作区文件，确认沙箱边界与活动展示
+- [ ] Codex 会话发送非图片附件被拒、danger-full-access 发送后回落 read-only
+
 ## 后续功能
 
 - [ ] 多设备授权、设备列表和单设备撤销
-- [ ] 会话全文搜索
+- [x] 会话全文搜索：daemon 权威 transcript 全局检索、会话级结果聚合、片段高亮、结果跳转与命中消息定位
 - [ ] FCM 推送，覆盖 App 进程被系统彻底杀死的场景
 - [x] daemon API 与 WebSocket 端到端自动化测试
 - [ ] 一键重置配对接口

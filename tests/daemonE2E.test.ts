@@ -81,6 +81,12 @@ test('daemon rejects a WebSocket upgrade from an untrusted Origin', async () => 
   assert.equal(statusCode, 401);
 });
 
+test('session search requires bearer authentication', async () => {
+  const response = await fetch(`${daemon.baseUrl}/api/search/sessions?q=history`);
+
+  assert.equal(response.status, 401);
+});
+
 test('logout revokes the old Bearer token and closes its WebSocket', async () => {
   const pairResponse = await fetch(`${daemon.baseUrl}/api/pair`, {
     method: 'POST',
@@ -93,6 +99,17 @@ test('logout revokes the old Bearer token and closes its WebSocket', async () =>
   assert.equal(pairResponse.status, 200);
   const pairBody = await pairResponse.json() as { token: string };
   const token = pairBody.token;
+
+  const searchResponse = await fetch(`${daemon.baseUrl}/api/search/sessions?q=missing`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(searchResponse.status, 200);
+  assert.deepEqual(await searchResponse.json(), { query: 'missing', results: [] });
+
+  const invalidSearchResponse = await fetch(`${daemon.baseUrl}/api/search/sessions`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(invalidSearchResponse.status, 400);
 
   const socket = new WebSocket(daemon.baseUrl.replace('http:', 'ws:') + '/ws', {
     headers: { Origin: daemon.baseUrl },
@@ -158,6 +175,7 @@ test('daemon retries a prompt without a stale Claude session id', async () => {
       sessionId: activeSessionId,
       text: 'retry stale session',
       permissionMode: 'manual',
+      effort: 'xhigh',
     }));
     const result = await promptResult;
 
@@ -169,7 +187,13 @@ test('daemon retries a prompt without a stale Claude session id', async () => {
       .map(line => JSON.parse(line) as string[]);
     assert.equal(invocations.length, 2);
     assert.deepEqual(invocations[0].slice(-2), ['--resume', staleSessionId]);
+    const effortIndex = invocations[0].indexOf('--effort');
+    assert.deepEqual(invocations[0].slice(effortIndex, effortIndex + 2), [
+      '--effort',
+      'xhigh',
+    ]);
     assert.equal(invocations[1].includes('--resume'), false);
+    assert.equal(invocations[1].includes('xhigh'), true);
   } finally {
     socket?.close();
     retryDaemon.child.kill();
@@ -181,9 +205,183 @@ test('daemon retries a prompt without a stale Claude session id', async () => {
   }
 });
 
+test('daemon persists and resumes a Codex session without invoking the Claude bridge', async () => {
+  const claudeFixture = resolve('tests/fixtures/fakeClaude.mjs');
+  const codexFixture = resolve('tests/fixtures/fakeCodex.mjs');
+  const codexDaemon = await startDaemon({
+    claudeBin: process.execPath,
+    claudeArgs: root => [
+      claudeFixture,
+      `--fake-log=${join(root, 'claude-args.jsonl')}`,
+    ],
+    codexBin: process.execPath,
+    codexArgs: root => [
+      codexFixture,
+      `--fake-log=${join(root, 'codex-args.jsonl')}`,
+    ],
+  });
+  let socket: WebSocket | undefined;
+  try {
+    const pairResponse = await fetch(`${codexDaemon.baseUrl}/api/pair`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: codexDaemon.baseUrl,
+      },
+      body: JSON.stringify({ nonce: codexDaemon.nonce }),
+    });
+    assert.equal(pairResponse.status, 200);
+    const { token } = await pairResponse.json() as { token: string };
+
+    const statusResponse = await fetch(`${codexDaemon.baseUrl}/api/status`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(statusResponse.status, 200);
+    const { activeProjectId } = await statusResponse.json() as {
+      activeProjectId: string;
+    };
+
+    const createResponse = await fetch(
+      `${codexDaemon.baseUrl}/api/projects/${encodeURIComponent(activeProjectId)}/sessions`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          Origin: codexDaemon.baseUrl,
+        },
+        body: JSON.stringify({ engine: 'codex' }),
+      },
+    );
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json() as {
+      sessionId: string;
+      catalog: {
+        sessions: Array<{ id: string; engine: string }>;
+      };
+    };
+    const sessionId = created.sessionId;
+    assert.equal(
+      created.catalog.sessions.find(session => session.id === sessionId)?.engine,
+      'codex',
+    );
+
+    socket = new WebSocket(codexDaemon.baseUrl.replace('http:', 'ws:') + '/ws', {
+      headers: { Origin: codexDaemon.baseUrl },
+    });
+    await once(socket, 'open');
+    const initialCatalogPromise = waitForWsMessage(socket, message =>
+      message.type === 'catalog' && message.activeSessionId === sessionId);
+    socket.send(JSON.stringify({ type: 'auth', token }));
+    const initialCatalog = await initialCatalogPromise;
+    assert.equal(
+      (initialCatalog.sessions as Array<{ id: string; engine: string }>)
+        .find(session => session.id === sessionId)?.engine,
+      'codex',
+    );
+
+    const selectedCatalog = waitForWsMessage(socket, message =>
+      message.type === 'catalog' && message.activeSessionId === sessionId);
+    const selectedStatus = waitForWsMessage(socket, message =>
+      message.type === 'status'
+      && message.sessionId === sessionId
+      && message.running === false);
+    socket.send(JSON.stringify({ type: 'select_session', sessionId }));
+    await Promise.all([selectedCatalog, selectedStatus]);
+    await new Promise(resolve => setTimeout(resolve, 25));
+
+    const firstResultPromise = waitForPromptResult(socket, sessionId);
+    const firstIdlePromise = waitForWsMessage(socket, message =>
+      message.type === 'status'
+      && message.sessionId === sessionId
+      && message.running === false
+      && message.hasEngineSessionId === true);
+    socket.send(JSON.stringify({
+      type: 'prompt',
+      promptId: 'codex-e2e-first',
+      sessionId,
+      engine: 'codex',
+      sandboxMode: 'read-only',
+      permissionMode: 'manual',
+      text: 'first Codex prompt',
+    }));
+    const firstResult = await firstResultPromise;
+    assert.equal(firstResult.text, 'fake codex reply');
+    assert.equal(firstResult.engineSessionId, 'fake-thread-id');
+    await firstIdlePromise;
+    await new Promise(resolve => setTimeout(resolve, 25));
+
+    const secondResultPromise = waitForPromptResult(socket, sessionId);
+    socket.send(JSON.stringify({
+      type: 'prompt',
+      promptId: 'codex-e2e-second',
+      sessionId,
+      engine: 'codex',
+      sandboxMode: 'read-only',
+      permissionMode: 'manual',
+      text: 'second Codex prompt',
+    }));
+    const secondResult = await secondResultPromise;
+    assert.equal(secondResult.text, 'fake codex reply');
+    assert.equal(secondResult.engineSessionId, 'fake-thread-id');
+
+    const records = (await readFile(
+      join(codexDaemon.root, 'codex-args.jsonl'),
+      'utf8',
+    ))
+      .trim()
+      .split(/\r?\n/)
+      .map(line => JSON.parse(line) as {
+        kind: 'process' | 'request';
+        args?: string[];
+        method?: string;
+        params?: { input?: Array<{ type: string; text?: string }> };
+      });
+    assert.deepEqual(records.filter(record => record.kind === 'process'), [{
+      kind: 'process',
+      args: ['app-server'],
+    }]);
+    const requests = records.filter(record => record.kind === 'request');
+    assert.deepEqual(requests.map(record => record.method), [
+      'initialize',
+      'thread/start',
+      'turn/start',
+      'turn/start',
+    ]);
+    assert.deepEqual(
+      requests
+        .filter(record => record.method === 'turn/start')
+        .map(record => record.params?.input?.find(item => item.type === 'text')?.text),
+      ['first Codex prompt', 'second Codex prompt'],
+    );
+
+    await assert.rejects(
+      () => readFile(join(codexDaemon.root, 'claude-args.jsonl'), 'utf8'),
+      { code: 'ENOENT' },
+    );
+  } finally {
+    socket?.close();
+    codexDaemon.child.kill();
+    await Promise.race([
+      codexDaemon.child.exitCode === null
+        ? once(codexDaemon.child, 'exit')
+        : Promise.resolve(),
+      new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
+    ]);
+    await rm(codexDaemon.root, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+      retryDelay: 50,
+    });
+  }
+});
+
 async function startDaemon(options: {
   claudeBin?: string;
   claudeArgs?: (root: string) => string[];
+  codexBin?: string;
+  codexArgs?: (root: string) => string[];
   staleSessionId?: string;
 } = {}): Promise<RunningDaemon> {
   const root = await mkdtemp(join(tmpdir(), 'cc-remote-daemon-e2e-'));
@@ -216,6 +414,8 @@ async function startDaemon(options: {
       WORKSPACE_DIR: root,
       CLAUDE_BIN: options.claudeBin ?? join(root, 'missing-claude-executable'),
       ...(options.claudeArgs ? { CLAUDE_ARGS: options.claudeArgs(root).join('|') } : {}),
+      CODEX_BIN: options.codexBin ?? join(root, 'missing-codex-executable'),
+      ...(options.codexArgs ? { CODEX_ARGS: options.codexArgs(root).join('|') } : {}),
       DEVICE_NAME: 'e2e-host',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -253,7 +453,11 @@ async function startDaemon(options: {
 function waitForPromptResult(
   socket: WebSocket,
   sessionId: string,
-): Promise<{ text: string; claudeSessionId?: string }> {
+): Promise<{
+  text: string;
+  engineSessionId?: string;
+  claudeSessionId?: string;
+}> {
   return new Promise((resolvePrompt, rejectPrompt) => {
     let text = '';
     const timeout = setTimeout(() => {
@@ -272,6 +476,9 @@ function waitForPromptResult(
         cleanup();
         resolvePrompt({
           text,
+          engineSessionId: typeof message.engineSessionId === 'string'
+            ? message.engineSessionId
+            : undefined,
           claudeSessionId: typeof message.claudeSessionId === 'string' ? message.claudeSessionId : undefined,
         });
       }

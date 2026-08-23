@@ -6,6 +6,7 @@ import type {
   ClaudePermissionRequest,
   ClaudeSessionInfo,
 } from './claudeBridge.js';
+import type { CodexSandboxMode } from './engineBridge.js';
 import type { AttachmentDescriptor } from './attachmentStore.js';
 
 const SCHEMA_VERSION = 1;
@@ -28,8 +29,9 @@ export type TranscriptSnapshot = {
   revision: number;
   running: boolean;
   updatedAt: number;
-  claudeSessionId?: string;
+  engineSessionId?: string;
   permissionMode: ClaudePermissionMode;
+  sandboxMode?: CodexSandboxMode;
   pendingPermissions: TranscriptPermissionRequest[];
   sessionInfo: ClaudeSessionInfo;
   messages: TranscriptMessage[];
@@ -43,11 +45,12 @@ export type TranscriptState = {
     prompt: string,
     permissionMode: ClaudePermissionMode,
     attachments?: AttachmentDescriptor[],
+    sandboxMode?: CodexSandboxMode,
   ): void;
   appendText(text: string): void;
   mergeActivity(activity: ClaudeActivity): void;
   setSessionInfo(info: ClaudeSessionInfo): void;
-  setClaudeSessionId(sessionId: string | undefined): void;
+  setEngineSessionId(sessionId: string | undefined): void;
   addPermission(request: ClaudePermissionRequest): void;
   removePermission(requestId: string): void;
   finishDone(): Promise<void>;
@@ -57,6 +60,10 @@ export type TranscriptState = {
   flush(): Promise<void>;
 };
 
+function clearPendingAssistantPrefix(holder: { pendingAssistantPrefix: string }): void {
+  holder.pendingAssistantPrefix = '';
+}
+
 export async function createTranscriptState(
   statePath = join(process.cwd(), '.data', 'transcript.json'),
 ): Promise<TranscriptState> {
@@ -64,6 +71,9 @@ export async function createTranscriptState(
   let saveQueue: Promise<void> = Promise.resolve();
   let saveTimer: NodeJS.Timeout | undefined;
   let tmpCounter = 0;
+  // Whitespace-only stream fragments may arrive before visible text; keep them
+  // until a non-whitespace delta arrives so indent/code fences are not lost.
+  const pending = { pendingAssistantPrefix: '' };
 
   async function saveNow(): Promise<void> {
     const snapshot = cloneSnapshot(state);
@@ -106,11 +116,13 @@ export async function createTranscriptState(
   if (state.running) {
     state.running = false;
     state.permissionMode = 'manual';
+    if (state.sandboxMode === 'danger-full-access') state.sandboxMode = 'read-only';
     state.pendingPermissions = [];
     state.messages = state.messages.filter(message => message.role !== 'activity');
     state.messages.push({ role: 'system', text: INTERRUPTED_MESSAGE });
     state.revision += 1;
     state.updatedAt = Date.now();
+    clearPendingAssistantPrefix(pending);
     await saveNow();
   }
 
@@ -123,10 +135,13 @@ export async function createTranscriptState(
       prompt: string,
       permissionMode: ClaudePermissionMode,
       attachments: AttachmentDescriptor[] = [],
+      sandboxMode?: CodexSandboxMode,
     ): void {
+      clearPendingAssistantPrefix(pending);
       mutate(() => {
         state.running = true;
         state.permissionMode = permissionMode;
+        state.sandboxMode = sandboxMode;
         state.pendingPermissions = [];
         state.messages.push({
           role: 'user',
@@ -138,13 +153,24 @@ export async function createTranscriptState(
 
     appendText(text: string): void {
       if (!text || !state.running) return;
-      mutate(() => {
-        const last = state.messages.at(-1);
-        if (last?.role === 'assistant') {
+      const last = state.messages.at(-1);
+      if (last?.role === 'assistant') {
+        mutate(() => {
           last.text += text;
-        } else {
-          state.messages.push({ role: 'assistant', text });
-        }
+        });
+        return;
+      }
+
+      // Hold leading whitespace until visible text arrives; never paint blank bubbles.
+      if (!text.trim()) {
+        pending.pendingAssistantPrefix += text;
+        return;
+      }
+
+      const nextText = pending.pendingAssistantPrefix + text;
+      clearPendingAssistantPrefix(pending);
+      mutate(() => {
+        state.messages.push({ role: 'assistant', text: nextText });
       });
     },
 
@@ -173,10 +199,10 @@ export async function createTranscriptState(
       });
     },
 
-    setClaudeSessionId(sessionId: string | undefined): void {
-      if (state.claudeSessionId === sessionId) return;
+    setEngineSessionId(sessionId: string | undefined): void {
+      if (state.engineSessionId === sessionId) return;
       mutate(() => {
-        state.claudeSessionId = sessionId;
+        state.engineSessionId = sessionId;
       });
     },
 
@@ -199,9 +225,11 @@ export async function createTranscriptState(
 
     async finishDone(): Promise<void> {
       if (!state.running) return flush();
+      clearPendingAssistantPrefix(pending);
       mutate(() => {
         state.running = false;
         state.permissionMode = 'manual';
+        if (state.sandboxMode === 'danger-full-access') state.sandboxMode = 'read-only';
         state.pendingPermissions = [];
         removeActivities(state.messages);
         if (!hasAssistantReplyAfterLastUser(state.messages)) {
@@ -213,9 +241,11 @@ export async function createTranscriptState(
 
     async finishStopped(): Promise<void> {
       if (!state.running) return flush();
+      clearPendingAssistantPrefix(pending);
       mutate(() => {
         state.running = false;
         state.permissionMode = 'manual';
+        if (state.sandboxMode === 'danger-full-access') state.sandboxMode = 'read-only';
         state.pendingPermissions = [];
         removeActivities(state.messages);
         state.messages.push({ role: 'system', text: '已停止' });
@@ -225,9 +255,11 @@ export async function createTranscriptState(
 
     async finishError(message: string): Promise<void> {
       if (!state.running) return flush();
+      clearPendingAssistantPrefix(pending);
       mutate(() => {
         state.running = false;
         state.permissionMode = 'manual';
+        if (state.sandboxMode === 'danger-full-access') state.sandboxMode = 'read-only';
         state.pendingPermissions = [];
         removeActivities(state.messages);
         state.messages.push({ role: 'system', text: `错误：${message}` });
@@ -236,10 +268,12 @@ export async function createTranscriptState(
     },
 
     async clear(): Promise<void> {
+      clearPendingAssistantPrefix(pending);
       mutate(() => {
         state.running = false;
-        state.claudeSessionId = undefined;
+        state.engineSessionId = undefined;
         state.permissionMode = 'manual';
+        state.sandboxMode = undefined;
         state.pendingPermissions = [];
         state.sessionInfo = {};
         state.messages = [];
@@ -266,14 +300,22 @@ function emptySnapshot(): TranscriptSnapshot {
 
 async function loadState(statePath: string): Promise<TranscriptSnapshot> {
   try {
-    const parsed = JSON.parse(await readFile(statePath, 'utf8')) as Partial<TranscriptSnapshot>;
+    const parsed = JSON.parse(await readFile(statePath, 'utf8')) as
+      Partial<TranscriptSnapshot> & { claudeSessionId?: unknown };
     if (parsed.version !== SCHEMA_VERSION || !Array.isArray(parsed.messages)) return emptySnapshot();
     return {
       version: SCHEMA_VERSION,
       revision: typeof parsed.revision === 'number' ? parsed.revision : 0,
       running: parsed.running === true,
       updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : Date.now(),
-      claudeSessionId: typeof parsed.claudeSessionId === 'string' ? parsed.claudeSessionId : undefined,
+      engineSessionId: typeof parsed.engineSessionId === 'string'
+        ? parsed.engineSessionId
+        : typeof parsed.claudeSessionId === 'string'
+          ? parsed.claudeSessionId
+          : undefined,
+      sandboxMode: isCodexSandboxMode(parsed.sandboxMode)
+        ? parsed.sandboxMode
+        : undefined,
       permissionMode: isPermissionMode(parsed.permissionMode) ? parsed.permissionMode : 'manual',
       pendingPermissions: Array.isArray(parsed.pendingPermissions)
         ? parsed.pendingPermissions.filter(isTranscriptPermissionRequest)
@@ -320,7 +362,12 @@ function hasAssistantReplyAfterLastUser(messages: TranscriptMessage[]): boolean 
       break;
     }
   }
-  return lastUser < 0 || messages.slice(lastUser + 1).some(message => message.role === 'assistant');
+  return (
+    lastUser < 0 ||
+    messages
+      .slice(lastUser + 1)
+      .some(message => message.role === 'assistant' && message.text.trim().length > 0)
+  );
 }
 
 function cloneSnapshot(snapshot: TranscriptSnapshot): TranscriptSnapshot {
@@ -355,6 +402,12 @@ function isPermissionMode(value: unknown): value is ClaudePermissionMode {
     || value === 'dontAsk'
     || value === 'plan'
     || value === 'bypassPermissions';
+}
+
+function isCodexSandboxMode(value: unknown): value is CodexSandboxMode {
+  return value === 'read-only'
+    || value === 'workspace-write'
+    || value === 'danger-full-access';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

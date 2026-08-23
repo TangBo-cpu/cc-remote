@@ -5,10 +5,13 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:markdown/markdown.dart' as md;
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'attachments.dart';
 import 'camera_permission.dart';
@@ -17,6 +20,7 @@ import 'data/api_client.dart';
 import 'data/permission_mode.dart';
 import 'data/remote_models.dart';
 import 'data/websocket_client.dart';
+import 'effort_preference.dart';
 import 'model_preference.dart';
 import 'notification_service.dart';
 import 'reading_font_size.dart';
@@ -38,6 +42,13 @@ bool shouldPreserveLiveWebSocket({
   return !forceReconnect && wsReady && !remoteOffline && hasChannel;
 }
 
+bool shouldForceReconnectAfterBackground({
+  required Duration? backgroundDuration,
+  required Duration livenessThreshold,
+}) {
+  return backgroundDuration != null && backgroundDuration >= livenessThreshold;
+}
+
 class CcRemoteApp extends StatefulWidget {
   const CcRemoteApp({
     super.key,
@@ -46,6 +57,7 @@ class CcRemoteApp extends StatefulWidget {
     this.notificationService,
     this.notificationPreferenceStore,
     this.modelPreferenceStore,
+    this.effortPreferenceStore,
     this.chatBackgroundPreferenceStore,
     this.readingFontSizePreferenceStore,
     this.chatBackgroundImageService,
@@ -57,6 +69,7 @@ class CcRemoteApp extends StatefulWidget {
   final BackgroundNotificationService? notificationService;
   final NotificationPreferenceStore? notificationPreferenceStore;
   final ClaudeModelPreferenceStore? modelPreferenceStore;
+  final ClaudeEffortPreferenceStore? effortPreferenceStore;
   final ChatBackgroundPreferenceStore? chatBackgroundPreferenceStore;
   final ReadingFontSizePreferenceStore? readingFontSizePreferenceStore;
   final ChatBackgroundImageService? chatBackgroundImageService;
@@ -129,6 +142,7 @@ class _CcRemoteAppState extends State<CcRemoteApp> {
         notificationService: widget.notificationService,
         notificationPreferenceStore: widget.notificationPreferenceStore,
         modelPreferenceStore: widget.modelPreferenceStore,
+        effortPreferenceStore: widget.effortPreferenceStore,
         chatBackgroundPreferenceStore: widget.chatBackgroundPreferenceStore,
         chatBackgroundImageService: widget.chatBackgroundImageService,
         cameraPermissionService: widget.cameraPermissionService,
@@ -147,6 +161,7 @@ class DemoShell extends StatefulWidget {
     this.notificationService,
     this.notificationPreferenceStore,
     this.modelPreferenceStore,
+    this.effortPreferenceStore,
     this.chatBackgroundPreferenceStore,
     this.chatBackgroundImageService,
     this.cameraPermissionService,
@@ -164,6 +179,7 @@ class DemoShell extends StatefulWidget {
   final BackgroundNotificationService? notificationService;
   final NotificationPreferenceStore? notificationPreferenceStore;
   final ClaudeModelPreferenceStore? modelPreferenceStore;
+  final ClaudeEffortPreferenceStore? effortPreferenceStore;
   final ChatBackgroundPreferenceStore? chatBackgroundPreferenceStore;
   final ChatBackgroundImageService? chatBackgroundImageService;
   final CameraPermissionService? cameraPermissionService;
@@ -178,6 +194,22 @@ class DemoShell extends StatefulWidget {
 
   @override
   State<DemoShell> createState() => _DemoShellState();
+}
+
+class TranscriptJumpRequest {
+  const TranscriptJumpRequest({
+    required this.generation,
+    required this.sessionId,
+    required this.messageIndex,
+    required this.role,
+    required this.snippet,
+  });
+
+  final int generation;
+  final String sessionId;
+  final int messageIndex;
+  final RemoteSessionSearchRole role;
+  final String snippet;
 }
 
 class _StaticReadingFontScaleListenable implements ValueListenable<double> {
@@ -195,6 +227,7 @@ class _StaticReadingFontScaleListenable implements ValueListenable<double> {
 
 class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   static const networkTimeout = Duration(seconds: 12);
+  static const backgroundReconnectThreshold = Duration(seconds: 60);
   static const interruptedRunMessage = '上次任务可能仍在电脑端运行，请重连确认';
   static const disconnectedRunMessage = '连接已断开，正在等待电脑端状态';
   static const sessionScopedMessageTypes = <String>{
@@ -231,6 +264,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   bool handlingQr = false;
   bool wsReady = false;
   bool remoteOffline = false;
+  RemoteConnectionSnapshot reconnectSnapshot =
+      const RemoteConnectionSnapshot.idle();
   String? pausedQrRaw;
   String? pairError;
   String? modelName;
@@ -247,6 +282,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   bool currentRunFailed = false;
   bool uploadingAttachments = false;
   ClaudeModelPreference selectedModel = ClaudeModelPreference.followComputer;
+  ClaudeEffortPreference selectedEffort = ClaudeEffortPreference.automatic;
+  CodexSandboxMode selectedCodexSandboxMode = CodexSandboxMode.readOnly;
+  CodexSandboxMode activeCodexSandboxMode = CodexSandboxMode.readOnly;
   ChatBackgroundPreference chatBackground =
       ChatBackgroundPreference.defaultValue;
   PermissionMode selectedPermissionMode = PermissionMode.manual;
@@ -269,6 +307,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   Future<void>? refreshConnectionInFlight;
   bool refreshConnectionForcesReconnect = false;
   int connectionRefreshGeneration = 0;
+  DateTime? appBackgroundedAt;
   // ponytail: batch stream paint/persist; tighten if first glyph feels late
   static const streamTextBatchInterval = Duration(milliseconds: 40);
   static const streamPersistInterval = Duration(milliseconds: 1500);
@@ -278,17 +317,28 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   DateTime? lastStreamPersistAt;
   late final Future<void> modelPreferenceInitialization;
   int modelPreferenceRevision = 0;
+  late final Future<void> effortPreferenceInitialization;
+  int effortPreferenceRevision = 0;
   int chatBackgroundRevision = 0;
+  int transcriptJumpGeneration = 0;
+  TranscriptJumpRequest? transcriptJumpRequest;
   late final BackgroundNotificationService notificationService;
   late final NotificationPreferenceStore notificationPreferenceStore;
   late final BackgroundNotificationController notificationController;
   late final ClaudeModelPreferenceStore modelPreferenceStore;
+  late final ClaudeEffortPreferenceStore effortPreferenceStore;
   late final ChatBackgroundPreferenceStore chatBackgroundPreferenceStore;
   late final ChatBackgroundImageService chatBackgroundImageService;
   late final CameraPermissionService cameraPermissionService;
   String? pendingNotificationSessionId;
 
   Object? get ws => wsClient.channel;
+  SessionEngine get activeSessionEngine {
+    for (final item in remoteSessions) {
+      if (item.id == activeSessionId) return item.engine;
+    }
+    return SessionEngine.claude;
+  }
 
   @override
   void initState() {
@@ -299,6 +349,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         widget.notificationPreferenceStore ?? NotificationPreferenceStore();
     modelPreferenceStore =
         widget.modelPreferenceStore ?? ClaudeModelPreferenceStore();
+    effortPreferenceStore =
+        widget.effortPreferenceStore ?? ClaudeEffortPreferenceStore();
     chatBackgroundPreferenceStore =
         widget.chatBackgroundPreferenceStore ?? ChatBackgroundPreferenceStore();
     chatBackgroundImageService =
@@ -312,6 +364,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     unawaited(initializePermissions());
     modelPreferenceInitialization = initializeModelPreference();
     unawaited(modelPreferenceInitialization);
+    effortPreferenceInitialization = initializeEffortPreference();
+    unawaited(effortPreferenceInitialization);
     unawaited(initializeChatBackground());
     bootstrap();
   }
@@ -330,12 +384,29 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     notificationController.lifecycleState = state;
-    if (state != AppLifecycleState.resumed) return;
+
+    if (state != AppLifecycleState.resumed) {
+      if (state == AppLifecycleState.inactive ||
+          state == AppLifecycleState.hidden ||
+          state == AppLifecycleState.paused ||
+          state == AppLifecycleState.detached) {
+        appBackgroundedAt ??= DateTime.now();
+      }
+      return;
+    }
+
+    final backgroundDuration = appBackgroundedAt == null
+        ? null
+        : DateTime.now().difference(appBackgroundedAt!);
+    appBackgroundedAt = null;
+    final forceReconnect = shouldForceReconnectAfterBackground(
+      backgroundDuration: backgroundDuration,
+      livenessThreshold: backgroundReconnectThreshold,
+    );
+
     unawaited(cancelNotifications());
     openPendingNotificationSession();
-    // Notification shade / attachment pickers also resume the app. Keep a
-    // healthy socket; only force-reconnect when already offline.
-    unawaited(refreshConnection(forceReconnect: false));
+    unawaited(refreshConnection(forceReconnect: forceReconnect));
   }
 
   Future<void> initializeNotifications() async {
@@ -418,6 +489,32 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         context,
       ).showSnackBar(const SnackBar(content: Text('模型设置保存失败，请重试')));
     }
+  }
+
+  Future<void> initializeEffortPreference() async {
+    final revision = effortPreferenceRevision;
+    final preference = await effortPreferenceStore.load();
+    if (!mounted || revision != effortPreferenceRevision) return;
+    setState(() => selectedEffort = preference);
+  }
+
+  Future<void> setEffortPreference(ClaudeEffortPreference preference) async {
+    effortPreferenceRevision += 1;
+    try {
+      await effortPreferenceStore.save(preference);
+      if (mounted) setState(() => selectedEffort = preference);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('思考强度保存失败，请重试')));
+    }
+  }
+
+  void resetSessionOnlyEffort() {
+    if (selectedEffort != ClaudeEffortPreference.max) return;
+    effortPreferenceRevision += 1;
+    selectedEffort = ClaudeEffortPreference.automatic;
   }
 
   Future<void> initializeChatBackground() async {
@@ -608,6 +705,15 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   bool acceptWsMessage(Map<String, dynamic> decoded) {
     final type = decoded['type'];
     if (type is! String) return false;
+
+    if (type == 'permission_capabilities') {
+      final messageSessionId = decoded['sessionId'];
+      if (messageSessionId is String &&
+          activeSessionId != null &&
+          messageSessionId != activeSessionId) {
+        return false;
+      }
+    }
 
     if (sessionScopedMessageTypes.contains(type)) {
       final messageSessionId = decoded['sessionId'];
@@ -841,6 +947,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   void closeWs() {
     wsClient.close();
     wsReady = false;
+    reconnectSnapshot = const RemoteConnectionSnapshot.idle();
   }
 
   void connectWs(SavedSession saved) {
@@ -858,10 +965,32 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         onMessage: handleWsMessage,
         onError: (Object err) => handleWsClosed('连接错误：$err'),
         onDone: () => handleWsClosed('连接已断开'),
+        onState: handleWsConnectionState,
       );
     } catch (err) {
       handleWsClosed('连接失败：$err');
     }
+  }
+
+  void handleWsConnectionState(RemoteConnectionSnapshot snapshot) {
+    reconnectSnapshot = snapshot;
+    if (!mounted || route != ShellRoute.chat) return;
+    setState(() => reconnectSnapshot = snapshot);
+  }
+
+  void reconnectNow() {
+    if (widget.demoMode || route != ShellRoute.chat || session == null) return;
+    connectionRefreshGeneration += 1;
+    refreshConnectionInFlight = null;
+    refreshConnectionForcesReconnect = false;
+    if (wsClient.reconnect()) {
+      setState(() {
+        wsReady = false;
+        remoteOffline = true;
+      });
+      return;
+    }
+    unawaited(refreshConnection(forceReconnect: true));
   }
 
   void handleWsMessage(dynamic data) {
@@ -958,6 +1087,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           contextWindow = snapshot.contextWindow;
           remainingContext = snapshot.remainingContext;
           activePermissionMode = snapshot.permissionMode;
+          activeCodexSandboxMode = snapshot.codexSandboxMode;
+          selectedCodexSandboxMode = snapshot.codexSandboxMode;
           pendingPermissions
             ..clear()
             ..addAll(snapshot.pendingPermissions);
@@ -1167,6 +1298,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   void queueAssistantText(String text) {
     if (text.isEmpty) return;
+    // Keep whitespace deltas for streaming merge, but never start a blank bubble.
     pendingAssistantText += text;
     streamTextFlushTimer ??= Timer(
       streamTextBatchInterval,
@@ -1178,8 +1310,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     streamTextFlushTimer?.cancel();
     streamTextFlushTimer = null;
     final text = pendingAssistantText;
-    pendingAssistantText = '';
     if (text.isEmpty) return;
+    // Hold a pure whitespace prefix until visible text arrives so indent is kept.
+    if (text.trim().isEmpty) {
+      final lastIsAssistant =
+          messages.isNotEmpty && messages.last.role == MessageRole.assistant;
+      if (!lastIsAssistant) return;
+    }
+    pendingAssistantText = '';
     appendAssistantText(text, persist: false);
     scheduleStreamPersist();
   }
@@ -1218,6 +1356,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   void appendAssistantText(String text, {bool persist = true}) {
     if (text.isEmpty) return;
+    final lastIsAssistant =
+        messages.isNotEmpty && messages.last.role == MessageRole.assistant;
+    // Prefix-only whitespace must not open a bubble or finish thinking yet.
+    if (!lastIsAssistant && text.trim().isEmpty) {
+      return;
+    }
     setState(() {
       final start =
           messages.lastIndexWhere(
@@ -1232,7 +1376,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       );
       if (messages.isNotEmpty && messages.last.role == MessageRole.assistant) {
         final last = messages.removeLast();
-        messages.add(TranscriptMessage.assistant(last.text + text));
+        final merged = last.text + text;
+        if (merged.trim().isEmpty) return;
+        messages.add(TranscriptMessage.assistant(merged));
       } else {
         messages.add(TranscriptMessage.assistant(text));
       }
@@ -1245,8 +1391,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     if (text.isEmpty && pendingAttachments.isEmpty) {
       return;
     }
-    await modelPreferenceInitialization;
+    await Future.wait([
+      modelPreferenceInitialization,
+      effortPreferenceInitialization,
+    ]);
     if (!mounted || running || uploadingAttachments) return;
+    final engine = activeSessionEngine;
 
     if (widget.demoMode) {
       setState(() {
@@ -1284,6 +1434,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     }
 
     final drafts = List<AttachmentDraft>.from(pendingAttachments);
+    if (engine == SessionEngine.codex &&
+        drafts.any((attachment) => !attachment.isImage)) {
+      showAttachmentError(const AttachmentException('codex_images_only'));
+      return;
+    }
     var uploaded = const <RemoteAttachment>[];
     if (drafts.isNotEmpty) {
       setState(() => uploadingAttachments = true);
@@ -1317,6 +1472,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     }
 
     final permissionMode = selectedPermissionMode;
+    final codexSandboxMode = selectedCodexSandboxMode;
     final sent = wsClient.sendPrompt(
       buildPromptMessage(
         promptId: createPromptId(),
@@ -1325,6 +1481,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         permissionMode: permissionMode,
         sessionId: currentSessionId,
         model: selectedModel,
+        effort: selectedEffort,
+        engine: engine,
+        codexSandboxMode: codexSandboxMode,
       ),
       expectedConnection: channel,
     );
@@ -1345,9 +1504,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       runStartedAt = DateTime.now();
       currentRunFailed = false;
       activePermissionMode = permissionMode;
+      activeCodexSandboxMode = codexSandboxMode;
       beginPrompt(messages, text, attachments: uploaded);
       if (permissionMode == PermissionMode.bypassPermissions) {
         selectedPermissionMode = PermissionMode.manual;
+      }
+      if (codexSandboxMode == CodexSandboxMode.dangerFullAccess) {
+        selectedCodexSandboxMode = CodexSandboxMode.readOnly;
       }
     });
     persistTranscriptSnapshotLater();
@@ -1360,7 +1523,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       return;
     }
     FocusScope.of(context).unfocus();
-    final source = await showAttachmentSourceSheet(context);
+    final engine = activeSessionEngine;
+    final source = await showAttachmentSourceSheet(
+      context,
+      imagesOnly: engine == SessionEngine.codex,
+    );
     if (source == null || !mounted) return;
     try {
       if (source == AttachmentSource.camera) {
@@ -1375,6 +1542,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         AttachmentSource.photos => await attachmentPicker.pickPhotos(),
         AttachmentSource.files => await attachmentPicker.pickFiles(),
       };
+      if (engine == SessionEngine.codex &&
+          picked.any((attachment) => !attachment.isImage)) {
+        throw const AttachmentException('codex_images_only');
+      }
       if (!mounted || picked.isEmpty) return;
       final oversized = picked.where(
         (attachment) => attachment.size > maxAttachmentBytes,
@@ -1439,6 +1610,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       'attachment_too_large' => '单个附件不能超过 25MB',
       'attachment_empty' => '不能发送空文件',
       'upload_aborted' => '上传已中断，请重试',
+      'codex_images_only' => 'Codex 会话只支持图片附件',
       _ => '附件上传失败，请重试',
     };
     ScaffoldMessenger.of(context)
@@ -1452,6 +1624,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       return;
     }
     setState(() => selectedPermissionMode = mode);
+  }
+
+  void selectCodexSandboxMode(CodexSandboxMode mode) {
+    if (running) return;
+    setState(() => selectedCodexSandboxMode = mode);
   }
 
   void respondToPermission(RemotePermissionRequest request, String decision) {
@@ -1533,13 +1710,25 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   Future<void> beginNewConversation() async {
     if (running || uploadingAttachments) return;
+    var engine = SessionEngine.claude;
+    if (!widget.demoMode) {
+      final selected = await showSessionEnginePicker(
+        context,
+        selected: activeSessionEngine,
+      );
+      if (selected == null || !mounted) return;
+      engine = selected;
+      if (running || uploadingAttachments) return;
+    }
 
     if (widget.demoMode) {
       setState(() {
+        resetSessionOnlyEffort();
         modelName = null;
         contextWindow = null;
         remainingContext = null;
         clearStreamTextBatch(apply: false);
+        transcriptJumpRequest = null;
         messages
           ..clear()
           ..add(TranscriptMessage.system('已开启新对话'));
@@ -1558,6 +1747,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         current.origin,
         '/api/new-conversation',
         token: current.token,
+        body: jsonEncode({'engine': engine.wireName}),
+        jsonBody: true,
         timeout: networkTimeout,
       );
       if (res.statusCode == 401) {
@@ -1572,6 +1763,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       if (!mounted || session != current) return;
       final body = jsonDecode(res.body);
       setState(() {
+        resetSessionOnlyEffort();
         if (body is Map<String, dynamic> && body['sessionId'] is String) {
           activeSessionId = body['sessionId'] as String;
         }
@@ -1582,6 +1774,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         contextWindow = null;
         remainingContext = null;
         clearStreamTextBatch(apply: false);
+        transcriptJumpRequest = null;
         messages.clear();
         pendingAttachments.clear();
         uploadingAttachments = false;
@@ -1619,6 +1812,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       contextWindow = null;
       remainingContext = null;
       clearStreamTextBatch(apply: false);
+      transcriptJumpRequest = null;
       messages.clear();
       commands.clear();
       projects.clear();
@@ -1733,15 +1927,83 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       activeSessionId: activeSessionId,
       running: running || uploadingAttachments,
       onSelect: selectRemoteSession,
+      onSearchResult: openRemoteSearchResult,
       onCreate: createRemoteSession,
       onRename: renameRemoteSession,
       onArchive: archiveRemoteSession,
       onDelete: deleteRemoteSession,
+      onSearch: searchRemoteSessions,
     );
   }
 
+  Future<List<RemoteSessionSearchResult>> searchRemoteSessions(
+    String query,
+  ) async {
+    if (widget.demoMode) return const [];
+    final current = session;
+    if (current == null) return const [];
+    final encodedQuery = Uri(
+      queryParameters: {'q': query, 'limit': '50'},
+    ).query;
+    final res = await apiClient.get(
+      current.origin,
+      '/api/search/sessions?$encodedQuery',
+      token: current.token,
+      timeout: networkTimeout,
+    );
+    if (res.statusCode == 401) {
+      await recoverUnauthorizedSession();
+      throw const UnauthorizedSession();
+    }
+    if (res.statusCode != 200) throw StateError('session_search_failed');
+    final body = jsonDecode(res.body);
+    if (body is! Map<String, dynamic> || body['results'] is! List) {
+      throw const FormatException('bad_session_search_response');
+    }
+    return (body['results'] as List)
+        .whereType<Map>()
+        .map(
+          (item) => RemoteSessionSearchResult.tryParse(
+            Map<String, dynamic>.from(item),
+          ),
+        )
+        .whereType<RemoteSessionSearchResult>()
+        .toList();
+  }
+
   void selectRemoteSession(String sessionId) {
-    if (running || uploadingAttachments || sessionId == activeSessionId) return;
+    selectRemoteSessionWithJump(sessionId);
+  }
+
+  void openRemoteSearchResult(RemoteSessionSearchResult result) {
+    final jump = result.messageIndex < 0
+        ? null
+        : TranscriptJumpRequest(
+            generation: ++transcriptJumpGeneration,
+            sessionId: result.sessionId,
+            messageIndex: result.messageIndex,
+            role: result.role,
+            snippet: result.snippet,
+          );
+    if (result.sessionId == activeSessionId && jump == null) {
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(const SnackBar(content: Text('当前已在这个会话')));
+      return;
+    }
+    selectRemoteSessionWithJump(result.sessionId, jump: jump);
+  }
+
+  bool selectRemoteSessionWithJump(
+    String sessionId, {
+    TranscriptJumpRequest? jump,
+  }) {
+    if (sessionId == activeSessionId) {
+      if (jump == null) return false;
+      setState(() => transcriptJumpRequest = jump);
+      return true;
+    }
+    if (running || uploadingAttachments || !wsReady) return false;
     RemoteSessionSummary? target;
     for (final item in remoteSessions) {
       if (item.id == sessionId) {
@@ -1749,11 +2011,30 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         break;
       }
     }
-    if (target?.archived == true) return;
-    wsClient.send({'type': 'select_session', 'sessionId': sessionId});
+    if (target == null || target.archived) return false;
+    final sent = wsClient.send({
+      'type': 'select_session',
+      'sessionId': sessionId,
+    });
+    if (!sent) return false;
+    setState(() {
+      transcriptJumpRequest = jump;
+      if (selectedEffort == ClaudeEffortPreference.max) {
+        resetSessionOnlyEffort();
+      }
+    });
+    return true;
   }
 
-  Future<void> createRemoteSession(String projectId) async {
+  void handleTranscriptJumpHandled(TranscriptJumpRequest request) {
+    if (transcriptJumpRequest?.generation != request.generation) return;
+    setState(() => transcriptJumpRequest = null);
+  }
+
+  Future<void> createRemoteSession(
+    String projectId,
+    SessionEngine engine,
+  ) async {
     if (running || uploadingAttachments) return;
     final current = session;
     if (current == null) return;
@@ -1762,6 +2043,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         current.origin,
         '/api/projects/$projectId/sessions',
         token: current.token,
+        body: jsonEncode({'engine': engine.wireName}),
+        jsonBody: true,
         timeout: networkTimeout,
       );
       if (res.statusCode == 401) throw const UnauthorizedSession();
@@ -1960,22 +2243,29 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             uploadingAttachments: uploadingAttachments,
             connected: wsReady,
             offline: remoteOffline,
+            reconnectSnapshot: reconnectSnapshot,
             modelName: modelName,
             selectedModel: selectedModel,
+            engine: activeSessionEngine,
+            selectedEffort: selectedEffort,
             contextWindow: contextWindow,
             remainingContext: remainingContext,
             messages: messages,
+            transcriptJumpRequest: transcriptJumpRequest,
             commands: commands,
             permissionMode: running
                 ? activePermissionMode
                 : selectedPermissionMode,
             allowBypassPermissions: allowBypassPermissions,
+            codexSandboxMode: running
+                ? activeCodexSandboxMode
+                : selectedCodexSandboxMode,
             pendingPermissions: pendingPermissions,
             respondingPermissionIds: respondingPermissionIds,
             promptController: promptController,
             pendingAttachments: pendingAttachments,
             onFillPrompt: fillPrompt,
-            onReconnect: refreshConnection,
+            onReconnect: reconnectNow,
             onOpenSettings: () => showSettingsSheet(
               context,
               session,
@@ -1993,14 +2283,17 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
               logoutPairedDevice,
             ),
             onOpenModelPicker: () => openModelPicker(context),
+            onEffortSelected: (effort) =>
+                unawaited(setEffortPreference(effort)),
             onNewConversation: beginNewConversation,
             onOpenSessions: openSessions,
             onOpenWorkspace: openWorkspace,
+            onTranscriptJumpHandled: handleTranscriptJumpHandled,
             onPermissionModeSelected: selectPermissionMode,
+            onCodexSandboxModeSelected: selectCodexSandboxMode,
             onPermissionAllow: (request) =>
                 respondToPermission(request, 'allow'),
-            onPermissionDeny: (request) =>
-                respondToPermission(request, 'deny'),
+            onPermissionDeny: (request) => respondToPermission(request, 'deny'),
             onAddAttachment: chooseAttachments,
             onRemoveAttachment: removePendingAttachment,
             onSend: sendPrompt,
@@ -2787,7 +3080,7 @@ class ConsolePresentation {
   };
 
   String get inputHint => switch (phase) {
-    ConsolePhase.connecting => '正在连接电脑端',
+    ConsolePhase.connecting => '连接后可以继续输入',
     ConsolePhase.connected ||
     ConsolePhase.stopped ||
     ConsolePhase.failed => '输入要发给 Claude Code 的内容',
@@ -2879,6 +3172,69 @@ bool hasCurrentFailureEvidence(List<TranscriptMessage> messages) {
       );
 }
 
+String? currentFailureDetail(List<TranscriptMessage> messages) {
+  for (final message in messages.reversed) {
+    if (message.role == MessageRole.user) break;
+    if (message.role != MessageRole.system || !message.text.startsWith('错误：')) {
+      continue;
+    }
+    final detail = message.text.substring('错误：'.length).trim();
+    return detail.isEmpty ? null : detail;
+  }
+  return null;
+}
+
+String? lastUserPromptText(List<TranscriptMessage> messages) {
+  for (final message in messages.reversed) {
+    if (message.role == MessageRole.user && message.text.trim().isNotEmpty) {
+      return message.text;
+    }
+  }
+  return null;
+}
+
+String? safeConnectionError(Object? error) {
+  if (error == null) return null;
+  final normalized = error.toString().toLowerCase();
+  if (normalized.contains('timed out') || normalized.contains('timeout')) {
+    return '连接电脑端超时';
+  }
+  if (normalized.contains('connection refused') ||
+      normalized.contains('actively refused')) {
+    return '电脑端拒绝连接';
+  }
+  if (normalized.contains('failed host lookup') ||
+      normalized.contains('name or service not known')) {
+    return '无法解析电脑端地址';
+  }
+  if (normalized.contains('handshake') || normalized.contains('certificate')) {
+    return '安全连接握手失败';
+  }
+  if (normalized.contains('connection reset') ||
+      normalized.contains('broken pipe') ||
+      normalized.contains('closed before')) {
+    return '网络连接被中断';
+  }
+  return '暂时无法建立网络连接';
+}
+
+String reconnectTimingLabel(DateTime? nextRetryAt) {
+  if (nextRetryAt == null) return '即将再次尝试';
+  final remaining = nextRetryAt.difference(DateTime.now()).inMilliseconds;
+  final seconds = max(0, (remaining / 1000).ceil());
+  return seconds == 0 ? '即将再次尝试' : '约 $seconds 秒后再次尝试';
+}
+
+String preservedConnectionEvidence({
+  required bool hasTranscript,
+  required bool hasDraft,
+}) {
+  if (hasTranscript && hasDraft) return '对话记录已保留，当前输入仍在编辑框中';
+  if (hasTranscript) return '对话记录已保留';
+  if (hasDraft) return '当前输入仍在编辑框中';
+  return '连接恢复后会同步电脑端状态';
+}
+
 class ChatScreen extends StatelessWidget {
   const ChatScreen({
     super.key,
@@ -2890,14 +3246,19 @@ class ChatScreen extends StatelessWidget {
     this.uploadingAttachments = false,
     required this.connected,
     required this.offline,
+    this.reconnectSnapshot = const RemoteConnectionSnapshot.idle(),
     required this.modelName,
     this.selectedModel = ClaudeModelPreference.followComputer,
+    this.engine = SessionEngine.claude,
+    this.selectedEffort = ClaudeEffortPreference.automatic,
     required this.contextWindow,
     required this.remainingContext,
     required this.messages,
+    this.transcriptJumpRequest,
     required this.commands,
     required this.permissionMode,
     required this.allowBypassPermissions,
+    this.codexSandboxMode = CodexSandboxMode.readOnly,
     required this.pendingPermissions,
     required this.respondingPermissionIds,
     required this.promptController,
@@ -2906,10 +3267,13 @@ class ChatScreen extends StatelessWidget {
     required this.onReconnect,
     required this.onOpenSettings,
     required this.onOpenModelPicker,
+    this.onEffortSelected,
     required this.onNewConversation,
     required this.onOpenSessions,
     required this.onOpenWorkspace,
+    this.onTranscriptJumpHandled,
     required this.onPermissionModeSelected,
+    this.onCodexSandboxModeSelected,
     required this.onPermissionAllow,
     required this.onPermissionDeny,
     this.onAddAttachment,
@@ -2926,14 +3290,19 @@ class ChatScreen extends StatelessWidget {
   final bool uploadingAttachments;
   final bool connected;
   final bool offline;
+  final RemoteConnectionSnapshot reconnectSnapshot;
   final String? modelName;
   final ClaudeModelPreference selectedModel;
+  final SessionEngine engine;
+  final ClaudeEffortPreference selectedEffort;
   final int? contextWindow;
   final int? remainingContext;
   final List<TranscriptMessage> messages;
+  final TranscriptJumpRequest? transcriptJumpRequest;
   final List<String> commands;
   final PermissionMode permissionMode;
   final bool allowBypassPermissions;
+  final CodexSandboxMode codexSandboxMode;
   final List<RemotePermissionRequest> pendingPermissions;
   final Set<String> respondingPermissionIds;
   final TextEditingController promptController;
@@ -2942,10 +3311,13 @@ class ChatScreen extends StatelessWidget {
   final VoidCallback onReconnect;
   final VoidCallback onOpenSettings;
   final VoidCallback onOpenModelPicker;
+  final ValueChanged<ClaudeEffortPreference>? onEffortSelected;
   final VoidCallback onNewConversation;
   final VoidCallback onOpenSessions;
   final VoidCallback onOpenWorkspace;
+  final ValueChanged<TranscriptJumpRequest>? onTranscriptJumpHandled;
   final ValueChanged<PermissionMode> onPermissionModeSelected;
+  final ValueChanged<CodexSandboxMode>? onCodexSandboxModeSelected;
   final ValueChanged<RemotePermissionRequest> onPermissionAllow;
   final ValueChanged<RemotePermissionRequest> onPermissionDeny;
   final VoidCallback? onAddAttachment;
@@ -2966,6 +3338,11 @@ class ChatScreen extends StatelessWidget {
       stopped: hasConfirmedStopEvidence(messages),
       failed: hasCurrentFailureEvidence(messages),
     );
+    final previousPrompt = lastUserPromptText(messages);
+    final canRestorePreviousPrompt =
+        presentation.phase == ConsolePhase.failed &&
+        previousPrompt != null &&
+        promptController.text.trim().isEmpty;
     final header = RepaintBoundary(
       child: ConnectionHeader(
         session: session,
@@ -2988,6 +3365,7 @@ class ChatScreen extends StatelessWidget {
     final transcript = RepaintBoundary(
       child: TranscriptView(
         messages: messages,
+        jumpRequest: transcriptJumpRequest,
         session: session,
         activeSessionId: activeSessionId,
         running: running,
@@ -3000,63 +3378,106 @@ class ChatScreen extends StatelessWidget {
         onReconnect: onReconnect,
         onPermissionAllow: onPermissionAllow,
         onPermissionDeny: onPermissionDeny,
+        onJumpHandled: onTranscriptJumpHandled,
       ),
     );
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        const reservedHeight = 292.0;
-        final suggestionMaxHeight = (constraints.maxHeight - reservedHeight)
-            .clamp(44.0, 292.0);
-        return SafeArea(
-          key: const ValueKey('chat'),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 8, 14, 8),
-            child: Column(
-              children: [
-                header,
-                if (ConsoleStatusStrip.shouldShow(presentation)) ...[
-                  const SizedBox(height: 8),
-                  ConsoleStatusStrip(
-                    presentation: presentation,
-                    hostLabel: session?.deviceName,
-                  ),
+    final showComposer =
+        !(offline && messages.isEmpty && pendingPermissions.isEmpty);
+    // Edge-to-edge: use viewPadding so the float clears the home indicator
+    // even when MediaQuery.padding.bottom is 0.
+    final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final bottomInset = MediaQuery.viewPaddingOf(context).bottom;
+    final composerBottomGap = keyboardVisible
+        ? 0.0
+        : (bottomInset > 0 ? bottomInset : 8.0);
+    return SafeArea(
+      key: const ValueKey('chat'),
+      bottom: false,
+      child: Padding(
+        // Tighter sides → wider bubbles; bottom handled on the float.
+        padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+        child: Column(
+          children: [
+            header,
+            if (ConsoleStatusStrip.shouldShow(presentation)) ...[
+              const SizedBox(height: 8),
+              ConsoleStatusStrip(
+                presentation: presentation,
+                hostLabel: session?.deviceName,
+              ),
+            ],
+            if (!keyboardVisible &&
+                RecoveryStatePanel.shouldShow(presentation)) ...[
+              const SizedBox(height: 8),
+              RecoveryStatePanel(
+                presentation: presentation,
+                hostLabel: session?.deviceName,
+                failureDetail: currentFailureDetail(messages),
+                reconnectSnapshot: reconnectSnapshot,
+                hasTranscript: messages.isNotEmpty,
+                hasDraft:
+                    promptController.text.trim().isNotEmpty ||
+                    pendingAttachments.isNotEmpty,
+                onReconnect: onReconnect,
+                onStop: onStop,
+                onOpenWorkspace: onOpenWorkspace,
+                onEditPreviousPrompt: canRestorePreviousPrompt
+                    ? () => onFillPrompt(previousPrompt)
+                    : null,
+              ),
+            ],
+            const SizedBox(height: 12),
+            Expanded(
+              child: Stack(
+                // Let transcript paint under the floating composer.
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned.fill(child: transcript),
+                  if (showComposer)
+                    Align(
+                      alignment: Alignment.bottomCenter,
+                      child: Padding(
+                        padding: EdgeInsets.only(bottom: composerBottomGap),
+                        child: RepaintBoundary(
+                          child: PromptBar(
+                            controller: promptController,
+                            attachments: pendingAttachments,
+                            commands: commands,
+                            running: running,
+                            stopping: stopping,
+                            uploading: uploadingAttachments,
+                            connected: connected,
+                            offline: offline,
+                            permissionMode: permissionMode,
+                            allowBypassPermissions: allowBypassPermissions,
+                            modelName: modelName,
+                            engine: engine,
+                            selectedModel: selectedModel,
+                            selectedEffort: selectedEffort,
+                            codexSandboxMode: codexSandboxMode,
+                            presentation: presentation,
+                            onPermissionModeSelected: onPermissionModeSelected,
+                            onCodexSandboxModeSelected:
+                                onCodexSandboxModeSelected,
+                            onCommandSelected: (command) =>
+                                onFillPrompt('/$command '),
+                            onAddAttachment: onAddAttachment,
+                            onRemoveAttachment: onRemoveAttachment,
+                            onModelPressed: onOpenModelPicker,
+                            onEffortSelected: onEffortSelected,
+                            onReconnect: onReconnect,
+                            onSend: onSend,
+                            onStop: onStop,
+                          ),
+                        ),
+                      ),
+                    ),
                 ],
-                const SizedBox(height: 12),
-                Expanded(child: transcript),
-                if (!(offline &&
-                    messages.isEmpty &&
-                    pendingPermissions.isEmpty)) ...[
-                  const SizedBox(height: 7),
-                  PromptBar(
-                    controller: promptController,
-                    attachments: pendingAttachments,
-                    commands: commands,
-                    running: running,
-                    stopping: stopping,
-                    uploading: uploadingAttachments,
-                    connected: connected,
-                    offline: offline,
-                    permissionMode: permissionMode,
-                    allowBypassPermissions: allowBypassPermissions,
-                    modelName: modelName,
-                    selectedModel: selectedModel,
-                    presentation: presentation,
-                    suggestionMaxHeight: suggestionMaxHeight,
-                    onPermissionModeSelected: onPermissionModeSelected,
-                    onCommandSelected: (command) => onFillPrompt('/$command '),
-                    onAddAttachment: onAddAttachment,
-                    onRemoveAttachment: onRemoveAttachment,
-                    onModelPressed: onOpenModelPicker,
-                    onReconnect: onReconnect,
-                    onSend: onSend,
-                    onStop: onStop,
-                  ),
-                ],
-              ],
+              ),
             ),
-          ),
-        );
-      },
+          ],
+        ),
+      ),
     );
   }
 }
@@ -3172,7 +3593,7 @@ class ConsoleStatusStrip extends StatelessWidget {
   final String? hostLabel;
 
   static bool shouldShow(ConsolePresentation presentation) {
-    return presentation.phase != ConsolePhase.connected;
+    return presentation.phase == ConsolePhase.awaitingPermission;
   }
 
   @override
@@ -3252,6 +3673,270 @@ class ConsoleStatusStrip extends StatelessWidget {
       ),
     );
   }
+}
+
+class RecoveryStatePanel extends StatelessWidget {
+  const RecoveryStatePanel({
+    super.key,
+    required this.presentation,
+    this.hostLabel,
+    this.failureDetail,
+    this.reconnectSnapshot = const RemoteConnectionSnapshot.idle(),
+    this.hasTranscript = false,
+    this.hasDraft = false,
+    required this.onReconnect,
+    required this.onStop,
+    required this.onOpenWorkspace,
+    this.onEditPreviousPrompt,
+  });
+
+  final ConsolePresentation presentation;
+  final String? hostLabel;
+  final String? failureDetail;
+  final RemoteConnectionSnapshot reconnectSnapshot;
+  final bool hasTranscript;
+  final bool hasDraft;
+  final VoidCallback onReconnect;
+  final VoidCallback onStop;
+  final VoidCallback onOpenWorkspace;
+  final VoidCallback? onEditPreviousPrompt;
+
+  static bool shouldShow(ConsolePresentation presentation) {
+    return switch (presentation.phase) {
+      ConsolePhase.connecting ||
+      ConsolePhase.stopping ||
+      ConsolePhase.stopTimedOut ||
+      ConsolePhase.stopped ||
+      ConsolePhase.failed ||
+      ConsolePhase.offline => true,
+      _ => false,
+    };
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final host = hostLabel?.trim();
+    final hostName = host == null || host.isEmpty ? '电脑端' : host;
+    final reconnectAttempt = reconnectSnapshot.attempt;
+    final reconnecting =
+        reconnectSnapshot.phase == RemoteConnectionPhase.retrying ||
+        (reconnectSnapshot.phase == RemoteConnectionPhase.connecting &&
+            reconnectAttempt > 0);
+    final connectionError = safeConnectionError(reconnectSnapshot.lastError);
+    final preservation = preservedConnectionEvidence(
+      hasTranscript: hasTranscript,
+      hasDraft: hasDraft,
+    );
+    final reconnectDetail = switch (reconnectSnapshot.phase) {
+      RemoteConnectionPhase.retrying =>
+        '自动重连第 $reconnectAttempt 次，'
+            '${reconnectTimingLabel(reconnectSnapshot.nextRetryAt)}。',
+      RemoteConnectionPhase.connecting when reconnectAttempt > 0 =>
+        '自动重连第 $reconnectAttempt 次正在进行，等待 $hostName 响应。',
+      _ => '暂时无法连接 $hostName。恢复后会继续同步电脑端状态。',
+    };
+    final reconnectDetailWithError = connectionError == null
+        ? reconnectDetail
+        : '$reconnectDetail\n最近状态：$connectionError';
+    final content = switch (presentation.phase) {
+      ConsolePhase.connecting => _RecoveryPanelContent(
+        title: '正在连接电脑端',
+        detail: '正在获取最新会话状态，无需重复操作。',
+        evidence: preservation,
+        icon: LucideIcons.monitor,
+        loading: true,
+      ),
+      ConsolePhase.offline => _RecoveryPanelContent(
+        title: reconnectAttempt >= 6
+            ? '连接仍未恢复'
+            : reconnecting
+            ? '正在自动重连'
+            : '连接已断开',
+        detail: reconnectDetailWithError,
+        evidence: reconnectAttempt >= 6
+            ? '$preservation；请检查电脑端服务和网络'
+            : preservation,
+        icon: LucideIcons.unlink,
+        actionLabel: '立即重连',
+        actionIcon: LucideIcons.refreshCw,
+        action: onReconnect,
+      ),
+      ConsolePhase.stopping => const _RecoveryPanelContent(
+        title: '停止请求已发送',
+        detail: '正在等待电脑端确认，请不要重复点击。',
+        evidence: '确认前任务仍按运行中处理',
+        icon: LucideIcons.square,
+      ),
+      ConsolePhase.stopTimedOut => _RecoveryPanelContent(
+        title: '停止尚未确认',
+        detail: '电脑端没有在预期时间内返回确认，任务可能仍在运行。',
+        evidence: '对话记录和工作区状态已保留',
+        icon: LucideIcons.square,
+        actionLabel: '再次停止',
+        actionIcon: LucideIcons.square,
+        action: onStop,
+        danger: true,
+      ),
+      ConsolePhase.stopped => _RecoveryPanelContent(
+        title: '任务已停止',
+        detail: '电脑端已确认停止。你可以检查变更，或继续给 Claude 新指令。',
+        evidence: '对话记录和工作区状态已保留',
+        icon: LucideIcons.circlePause,
+        actionLabel: '查看工作区',
+        actionIcon: LucideIcons.folderOpen,
+        action: onOpenWorkspace,
+      ),
+      ConsolePhase.failed => _RecoveryPanelContent(
+        title: '任务执行失败',
+        detail: failureDetail?.trim().isNotEmpty == true
+            ? failureDetail!.trim()
+            : 'Claude Code 没有完成这次任务。请检查错误后重试。',
+        evidence: '对话记录和工作区变更仍保留',
+        icon: LucideIcons.circleAlert,
+        actionLabel: onEditPreviousPrompt == null ? null : '重新编辑上条指令',
+        actionIcon: onEditPreviousPrompt == null ? null : LucideIcons.pencil,
+        action: onEditPreviousPrompt,
+      ),
+      _ => null,
+    };
+    if (content == null) return const SizedBox.shrink();
+
+    final toneColor = switch (presentation.tone) {
+      ConsoleTone.active => AppColors.terracottaDeep,
+      ConsoleTone.danger => AppColors.danger,
+      ConsoleTone.neutral => AppColors.muted,
+    };
+    return Semantics(
+      liveRegion: true,
+      container: true,
+      label:
+          '${content.title}，${content.detail}，${content.evidence}'
+          '${content.actionLabel == null ? '' : '，${content.actionLabel}'}',
+      child: Material(
+        key: ValueKey('recovery-state-${presentation.phase.name}'),
+        color: AppColors.surface,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppRadii.surface),
+          side: const BorderSide(color: AppColors.line),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: AppSizes.iconControl,
+                    height: AppSizes.iconControl,
+                    decoration: BoxDecoration(
+                      color: AppColors.control,
+                      borderRadius: BorderRadius.circular(AppRadii.control),
+                    ),
+                    alignment: Alignment.center,
+                    child: content.loading
+                        ? SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: toneColor,
+                            ),
+                          )
+                        : Icon(content.icon, size: 20, color: toneColor),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          content.title,
+                          style: const TextStyle(
+                            fontSize: 16,
+                            height: 1.3,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: -0.2,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          content.detail,
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: AppColors.muted,
+                            fontSize: 13,
+                            height: 1.45,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Text(
+                content.evidence,
+                style: const TextStyle(
+                  color: AppColors.muted,
+                  fontSize: 12,
+                  height: 1.4,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (content.action != null && content.actionLabel != null) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: AppSizes.touchTarget,
+                  child: SignalPressEffect(
+                    child: FilledButton.icon(
+                      onPressed: content.action,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: content.danger
+                            ? AppColors.danger
+                            : AppColors.cta,
+                        foregroundColor: AppColors.onCta,
+                        minimumSize: const Size.fromHeight(
+                          AppSizes.touchTarget,
+                        ),
+                      ),
+                      icon: Icon(content.actionIcon, size: 18),
+                      label: Text(content.actionLabel!),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RecoveryPanelContent {
+  const _RecoveryPanelContent({
+    required this.title,
+    required this.detail,
+    required this.evidence,
+    required this.icon,
+    this.loading = false,
+    this.actionLabel,
+    this.actionIcon,
+    this.action,
+    this.danger = false,
+  });
+
+  final String title;
+  final String detail;
+  final String evidence;
+  final IconData icon;
+  final bool loading;
+  final String? actionLabel;
+  final IconData? actionIcon;
+  final VoidCallback? action;
+  final bool danger;
 }
 
 class _HeaderIconButton extends StatelessWidget {
@@ -3484,6 +4169,93 @@ Future<void> showSettingsSheet(
   );
 }
 
+Future<SessionEngine?> showSessionEnginePicker(
+  BuildContext context, {
+  SessionEngine selected = SessionEngine.claude,
+}) {
+  return showModalBottomSheet<SessionEngine>(
+    context: context,
+    showDragHandle: true,
+    builder: (sheetContext) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '选择会话引擎',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              '每个会话独立保存引擎，创建后可在会话面板中切换。',
+              style: TextStyle(color: AppColors.muted, fontSize: 13),
+            ),
+            const SizedBox(height: 10),
+            for (final engine in SessionEngine.values)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: ListTile(
+                  key: ValueKey('session-engine-${engine.wireName}'),
+                  selected: engine == selected,
+                  selectedColor: AppColors.ink,
+                  tileColor: AppColors.surfaceElevated,
+                  selectedTileColor: AppColors.composerControlFill,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 4,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppRadii.surface),
+                    side: BorderSide(
+                      color: engine == selected
+                          ? AppColors.terracottaDeep
+                          : AppColors.line,
+                    ),
+                  ),
+                  leading: Container(
+                    key: ValueKey('session-engine-icon-${engine.wireName}'),
+                    width: 48,
+                    height: 48,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceElevated,
+                      borderRadius: BorderRadius.circular(AppRadii.control),
+                    ),
+                    child: Image.asset(
+                      engine == SessionEngine.claude
+                          ? 'assets/brands/claude-mark.png'
+                          : 'assets/brands/openai-mark.png',
+                      excludeFromSemantics: true,
+                      filterQuality: FilterQuality.high,
+                    ),
+                  ),
+                  title: Text(
+                    engine == SessionEngine.claude ? 'Claude Code' : 'Codex',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  subtitle: Text(
+                    engine == SessionEngine.claude
+                        ? '使用 Claude Code'
+                        : '使用 Codex CLI',
+                  ),
+                  trailing: engine == selected
+                      ? const Icon(
+                          LucideIcons.circleCheck,
+                          color: AppColors.terracottaDeep,
+                        )
+                      : null,
+                  onTap: () => Navigator.pop(sheetContext, engine),
+                ),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
 Future<void> showSessionNavigator(
   BuildContext context, {
   required List<RemoteProjectSummary> projects,
@@ -3492,10 +4264,13 @@ Future<void> showSessionNavigator(
   required String? activeSessionId,
   required bool running,
   required ValueChanged<String> onSelect,
-  required ValueChanged<String> onCreate,
+  required ValueChanged<RemoteSessionSearchResult> onSearchResult,
+  required void Function(String projectId, SessionEngine engine) onCreate,
   required Future<void> Function(String sessionId, String title) onRename,
   required Future<void> Function(String sessionId) onArchive,
   required Future<void> Function(String sessionId) onDelete,
+  required Future<List<RemoteSessionSearchResult>> Function(String query)
+  onSearch,
 }) {
   return showModalBottomSheet<void>(
     context: context,
@@ -3511,9 +4286,13 @@ Future<void> showSessionNavigator(
         Navigator.pop(sheetContext);
         onSelect(sessionId);
       },
-      onCreate: (projectId) {
+      onSearchResult: (result) {
         Navigator.pop(sheetContext);
-        onCreate(projectId);
+        onSearchResult(result);
+      },
+      onCreate: (projectId, engine) {
+        Navigator.pop(sheetContext);
+        onCreate(projectId, engine);
       },
       onRename: (sessionId, title) async {
         Navigator.pop(sheetContext);
@@ -3527,6 +4306,7 @@ Future<void> showSessionNavigator(
         Navigator.pop(sheetContext);
         await onDelete(sessionId);
       },
+      onSearch: onSearch,
     ),
   );
 }
@@ -3540,10 +4320,12 @@ class SessionNavigatorSheet extends StatefulWidget {
     required this.activeSessionId,
     required this.running,
     required this.onSelect,
+    required this.onSearchResult,
     required this.onCreate,
     required this.onRename,
     required this.onArchive,
     required this.onDelete,
+    required this.onSearch,
   });
 
   final List<RemoteProjectSummary> projects;
@@ -3552,10 +4334,12 @@ class SessionNavigatorSheet extends StatefulWidget {
   final String? activeSessionId;
   final bool running;
   final ValueChanged<String> onSelect;
-  final ValueChanged<String> onCreate;
+  final ValueChanged<RemoteSessionSearchResult> onSearchResult;
+  final void Function(String projectId, SessionEngine engine) onCreate;
   final Future<void> Function(String sessionId, String title) onRename;
   final Future<void> Function(String sessionId) onArchive;
   final Future<void> Function(String sessionId) onDelete;
+  final Future<List<RemoteSessionSearchResult>> Function(String query) onSearch;
 
   @override
   State<SessionNavigatorSheet> createState() => _SessionNavigatorSheetState();
@@ -3564,6 +4348,13 @@ class SessionNavigatorSheet extends StatefulWidget {
 class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
   late String selectedProjectId =
       widget.activeProjectId ?? widget.projects.first.id;
+  final TextEditingController searchController = TextEditingController();
+  Timer? searchDebounce;
+  int searchGeneration = 0;
+  String searchQuery = '';
+  bool searching = false;
+  String? searchError;
+  List<RemoteSessionSearchResult> searchResults = const [];
 
   RemoteProjectSummary? get selectedProject {
     for (final project in widget.projects) {
@@ -3573,11 +4364,389 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  void dispose() {
+    searchDebounce?.cancel();
+    searchController.dispose();
+    super.dispose();
+  }
+
+  void handleSearchChanged(String value) {
+    searchDebounce?.cancel();
+    final query = value.trim();
+    final generation = ++searchGeneration;
+    setState(() {
+      searchQuery = query;
+      searchError = null;
+      searching = query.isNotEmpty;
+      if (query.isEmpty) searchResults = const [];
+    });
+    if (query.isEmpty) return;
+    searchDebounce = Timer(
+      const Duration(milliseconds: 300),
+      () => runSearch(query, generation),
+    );
+  }
+
+  void submitSearch(String value) {
+    searchDebounce?.cancel();
+    final query = value.trim();
+    if (query.isEmpty) return;
+    final generation = ++searchGeneration;
+    setState(() {
+      searchQuery = query;
+      searchError = null;
+      searching = true;
+    });
+    unawaited(runSearch(query, generation));
+  }
+
+  Future<void> runSearch(String query, int generation) async {
+    try {
+      final results = await widget.onSearch(query);
+      if (!mounted || generation != searchGeneration || query != searchQuery) {
+        return;
+      }
+      setState(() {
+        searchResults = results;
+        searching = false;
+        searchError = null;
+      });
+    } catch (_) {
+      if (!mounted || generation != searchGeneration || query != searchQuery) {
+        return;
+      }
+      setState(() {
+        searchResults = const [];
+        searching = false;
+        searchError = '搜索失败，请重试';
+      });
+    }
+  }
+
+  void clearSearch() {
+    searchController.clear();
+    handleSearchChanged('');
+  }
+
+  Future<void> createSession() async {
+    if (widget.running) return;
+    var selectedEngine = SessionEngine.claude;
+    for (final session in widget.sessions) {
+      if (session.id == widget.activeSessionId) {
+        selectedEngine = session.engine;
+        break;
+      }
+    }
+    final engine = await showSessionEnginePicker(
+      context,
+      selected: selectedEngine,
+    );
+    if (engine == null || !mounted) return;
+    widget.onCreate(selectedProjectId, engine);
+  }
+
+  String projectName(String projectId) {
+    for (final project in widget.projects) {
+      if (project.id == projectId) return project.name;
+    }
+    return '未知项目';
+  }
+
+  Widget buildProjectBrowser() {
     final projectSessions = widget.sessions
         .where((session) => session.projectId == selectedProjectId)
         .toList();
     final selectedProject = this.selectedProject;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              for (final project in widget.projects) ...[
+                ChoiceChip(
+                  key: ValueKey('project-${project.id}'),
+                  selected: project.id == selectedProjectId,
+                  label: Text(project.name),
+                  avatar: project.running
+                      ? const SizedBox.square(
+                          dimension: 12,
+                          child: CircularProgressIndicator(strokeWidth: 1.6),
+                        )
+                      : null,
+                  onSelected: (_) =>
+                      setState(() => selectedProjectId = project.id),
+                ),
+                const SizedBox(width: 8),
+              ],
+            ],
+          ),
+        ),
+        if (selectedProject != null) ...[
+          const SizedBox(height: 10),
+          Text(
+            selectedProject.path,
+            key: const ValueKey('selected-project-path'),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 12,
+              height: 1.3,
+              color: AppColors.muted,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+        const SizedBox(height: 12),
+        Expanded(
+          child: projectSessions.isEmpty
+              ? const Center(child: Text('这个项目还没有会话'))
+              : ListView.separated(
+                  itemCount: projectSessions.length,
+                  separatorBuilder: (_, _) => const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final item = projectSessions[index];
+                    final active = item.id == widget.activeSessionId;
+                    final canMutate = !widget.running && !item.running;
+                    return ListTile(
+                      key: ValueKey('session-${item.id}'),
+                      enabled: (!widget.running || active) && !item.archived,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                      leading: Icon(
+                        item.archived
+                            ? LucideIcons.archive
+                            : item.running
+                            ? LucideIcons.clock
+                            : LucideIcons.messageCircle,
+                        color: item.running
+                            ? AppColors.accent
+                            : AppColors.muted,
+                      ),
+                      title: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              item.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          buildEngineBadge(
+                            item,
+                            enabled:
+                                (!widget.running || active) && !item.archived,
+                          ),
+                        ],
+                      ),
+                      subtitle: Text(
+                        item.summary,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (canMutate)
+                            PopupMenuButton<String>(
+                              key: ValueKey('session-menu-${item.id}'),
+                              onSelected: (value) async {
+                                if (value == 'rename') {
+                                  final next = await promptSessionTitle(
+                                    context,
+                                    initial: item.title,
+                                  );
+                                  if (next == null || next.trim().isEmpty) {
+                                    return;
+                                  }
+                                  await widget.onRename(item.id, next);
+                                  if (mounted) setState(() {});
+                                } else if (value == 'archive') {
+                                  await widget.onArchive(item.id);
+                                } else if (value == 'delete') {
+                                  final confirmed = await confirmSessionDelete(
+                                    context,
+                                    item.title,
+                                  );
+                                  if (confirmed == true) {
+                                    await widget.onDelete(item.id);
+                                  }
+                                }
+                              },
+                              itemBuilder: (context) => [
+                                const PopupMenuItem(
+                                  value: 'rename',
+                                  child: Text('重命名'),
+                                ),
+                                if (!item.archived)
+                                  const PopupMenuItem(
+                                    value: 'archive',
+                                    child: Text('归档'),
+                                  ),
+                                const PopupMenuItem(
+                                  value: 'delete',
+                                  child: Text('删除'),
+                                ),
+                              ],
+                            ),
+                          if (active)
+                            const Icon(
+                              LucideIcons.circleCheck,
+                              color: AppColors.accent,
+                            )
+                          else
+                            const Icon(LucideIcons.chevronRight),
+                        ],
+                      ),
+                      onTap: active || widget.running || item.archived
+                          ? null
+                          : () => widget.onSelect(item.id),
+                    );
+                  },
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget buildEngineBadge(
+    RemoteSessionSummary session, {
+    required bool enabled,
+  }) {
+    return Opacity(
+      opacity: enabled ? 1 : 0.38,
+      child: Container(
+        key: ValueKey(
+          'session-engine-badge-${session.engine.wireName}-${session.id}',
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        decoration: BoxDecoration(
+          color: AppColors.composerControlFill,
+          borderRadius: BorderRadius.circular(AppRadii.pill),
+        ),
+        child: Text(
+          session.engine.label,
+          style: const TextStyle(
+            fontSize: 11,
+            height: 1.2,
+            fontWeight: FontWeight.w700,
+            color: AppColors.muted,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget buildSearchBody() {
+    if (searchError != null) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(LucideIcons.searchX, color: AppColors.muted),
+            const SizedBox(height: 8),
+            Text(searchError!),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: () => submitSearch(searchController.text),
+              icon: const Icon(LucideIcons.refreshCw, size: 17),
+              label: const Text('重试'),
+            ),
+          ],
+        ),
+      );
+    }
+    if (searching && searchResults.isEmpty) {
+      return const Center(child: Text('正在搜索所有会话…'));
+    }
+    if (searchResults.isEmpty) {
+      return const Center(child: Text('没有找到匹配内容'));
+    }
+    return ListView.separated(
+      itemCount: searchResults.length,
+      separatorBuilder: (_, _) => const Divider(height: 1),
+      itemBuilder: (context, index) {
+        final result = searchResults[index];
+        final active = result.sessionId == widget.activeSessionId;
+        final canOpen = !result.archived && (!widget.running || active);
+        return ListTile(
+          key: ValueKey('search-session-${result.sessionId}'),
+          enabled: canOpen,
+          isThreeLine: true,
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 4,
+            vertical: 4,
+          ),
+          leading: Icon(
+            result.archived ? LucideIcons.archive : LucideIcons.messageCircle,
+            color: AppColors.muted,
+          ),
+          title: Text(
+            result.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 3),
+              buildHighlightedSnippet(result),
+              const SizedBox(height: 4),
+              Text(
+                '${projectName(result.projectId)} · ${result.roleLabel} · '
+                '${result.matchCount} 条匹配内容${result.archived ? ' · 已归档' : ''}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: AppColors.muted,
+                  fontSize: 12,
+                  height: 1.3,
+                ),
+              ),
+            ],
+          ),
+          trailing: active
+              ? const Icon(LucideIcons.circleCheck, color: AppColors.accent)
+              : const Icon(LucideIcons.chevronRight),
+          onTap: canOpen ? () => widget.onSearchResult(result) : null,
+        );
+      },
+    );
+  }
+
+  Widget buildHighlightedSnippet(RemoteSessionSearchResult result) {
+    final start = result.matchStart.clamp(0, result.snippet.length);
+    final end = result.matchEnd.clamp(start, result.snippet.length);
+    const baseStyle = TextStyle(
+      color: AppColors.ink,
+      fontSize: 13,
+      height: 1.4,
+    );
+    return Text.rich(
+      TextSpan(
+        style: baseStyle,
+        children: [
+          if (start > 0) TextSpan(text: result.snippet.substring(0, start)),
+          TextSpan(
+            text: result.snippet.substring(start, end),
+            style: const TextStyle(
+              color: AppColors.terracottaDeep,
+              backgroundColor: AppColors.composerControlFill,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          if (end < result.snippet.length)
+            TextSpan(text: result.snippet.substring(end)),
+        ],
+      ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return SafeArea(
       child: SizedBox(
         height: MediaQuery.sizeOf(context).height * 0.72,
@@ -3599,155 +4768,45 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
                   ),
                   FilledButton.tonalIcon(
                     key: const ValueKey('create-session'),
-                    onPressed: widget.running
-                        ? null
-                        : () => widget.onCreate(selectedProjectId),
+                    onPressed: widget.running ? null : createSession,
                     icon: const Icon(LucideIcons.plus, size: 18),
                     label: const Text('新会话'),
                   ),
                 ],
               ),
               const SizedBox(height: 14),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
-                  children: [
-                    for (final project in widget.projects) ...[
-                      ChoiceChip(
-                        key: ValueKey('project-${project.id}'),
-                        selected: project.id == selectedProjectId,
-                        label: Text(project.name),
-                        avatar: project.running
-                            ? const SizedBox.square(
-                                dimension: 12,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 1.6,
-                                ),
-                              )
-                            : null,
-                        onSelected: (_) =>
-                            setState(() => selectedProjectId = project.id),
-                      ),
-                      const SizedBox(width: 8),
-                    ],
-                  ],
+              TextField(
+                key: const ValueKey('session-search-field'),
+                controller: searchController,
+                maxLength: 200,
+                buildCounter:
+                    (
+                      context, {
+                      required currentLength,
+                      required isFocused,
+                      required maxLength,
+                    }) => null,
+                textInputAction: TextInputAction.search,
+                onChanged: handleSearchChanged,
+                onSubmitted: submitSearch,
+                decoration: InputDecoration(
+                  hintText: '搜索所有会话内容',
+                  prefixIcon: const Icon(LucideIcons.search, size: 19),
+                  suffixIcon: searchQuery.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: '清除搜索',
+                          onPressed: clearSearch,
+                          icon: const Icon(LucideIcons.x, size: 18),
+                        ),
                 ),
               ),
-              if (selectedProject != null) ...[
-                const SizedBox(height: 10),
-                Text(
-                  selectedProject.path,
-                  key: const ValueKey('selected-project-path'),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    height: 1.3,
-                    color: AppColors.muted,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
+              if (searching) const LinearProgressIndicator(minHeight: 2),
               const SizedBox(height: 12),
               Expanded(
-                child: projectSessions.isEmpty
-                    ? const Center(child: Text('这个项目还没有会话'))
-                    : ListView.separated(
-                        itemCount: projectSessions.length,
-                        separatorBuilder: (_, _) => const Divider(height: 1),
-                        itemBuilder: (context, index) {
-                          final item = projectSessions[index];
-                          final active = item.id == widget.activeSessionId;
-                          final canMutate = !widget.running && !item.running;
-                          return ListTile(
-                            key: ValueKey('session-${item.id}'),
-                            enabled:
-                                (!widget.running || active) && !item.archived,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 4,
-                            ),
-                            leading: Icon(
-                              item.archived
-                                  ? LucideIcons.archive
-                                  : item.running
-                                  ? LucideIcons.clock
-                                  : LucideIcons.messageCircle,
-                              color: item.running
-                                  ? AppColors.accent
-                                  : AppColors.muted,
-                            ),
-                            title: Text(
-                              item.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(
-                              item.summary,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (canMutate)
-                                  PopupMenuButton<String>(
-                                    key: ValueKey('session-menu-${item.id}'),
-                                    onSelected: (value) async {
-                                      if (value == 'rename') {
-                                        final next = await promptSessionTitle(
-                                          context,
-                                          initial: item.title,
-                                        );
-                                        if (next == null ||
-                                            next.trim().isEmpty) {
-                                          return;
-                                        }
-                                        await widget.onRename(item.id, next);
-                                        if (mounted) setState(() {});
-                                      } else if (value == 'archive') {
-                                        await widget.onArchive(item.id);
-                                      } else if (value == 'delete') {
-                                        final confirmed =
-                                            await confirmSessionDelete(
-                                              context,
-                                              item.title,
-                                            );
-                                        if (confirmed == true) {
-                                          await widget.onDelete(item.id);
-                                        }
-                                      }
-                                    },
-                                    itemBuilder: (context) => [
-                                      const PopupMenuItem(
-                                        value: 'rename',
-                                        child: Text('重命名'),
-                                      ),
-                                      if (!item.archived)
-                                        const PopupMenuItem(
-                                          value: 'archive',
-                                          child: Text('归档'),
-                                        ),
-                                      const PopupMenuItem(
-                                        value: 'delete',
-                                        child: Text('删除'),
-                                      ),
-                                    ],
-                                  ),
-                                if (active)
-                                  const Icon(
-                                    LucideIcons.circleCheck,
-                                    color: AppColors.accent,
-                                  )
-                                else
-                                  const Icon(LucideIcons.chevronRight),
-                              ],
-                            ),
-                            onTap: active || widget.running || item.archived
-                                ? null
-                                : () => widget.onSelect(item.id),
-                          );
-                        },
-                      ),
+                child: searchQuery.isEmpty
+                    ? buildProjectBrowser()
+                    : buildSearchBody(),
               ),
             ],
           ),
@@ -4187,6 +5246,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
     );
   }
 }
+
 class _SettingsCloseButton extends StatelessWidget {
   const _SettingsCloseButton({required this.onPressed});
 
@@ -4898,7 +5958,10 @@ class InfoRow extends StatelessWidget {
   }
 }
 
-Future<AttachmentSource?> showAttachmentSourceSheet(BuildContext context) {
+Future<AttachmentSource?> showAttachmentSourceSheet(
+  BuildContext context, {
+  bool imagesOnly = false,
+}) {
   return showModalBottomSheet<AttachmentSource>(
     context: context,
     showDragHandle: true,
@@ -4911,7 +5974,7 @@ Future<AttachmentSource?> showAttachmentSourceSheet(BuildContext context) {
             ListTile(
               leading: const Icon(LucideIcons.camera),
               title: const Text('拍照'),
-              subtitle: const Text('拍一张照片发送给 Claude Code'),
+              subtitle: const Text('拍一张照片作为附件'),
               onTap: () => Navigator.pop(context, AttachmentSource.camera),
             ),
             ListTile(
@@ -4920,12 +5983,13 @@ Future<AttachmentSource?> showAttachmentSourceSheet(BuildContext context) {
               subtitle: const Text('从相册选择一张或多张图片'),
               onTap: () => Navigator.pop(context, AttachmentSource.photos),
             ),
-            ListTile(
-              leading: const Icon(LucideIcons.folderOpen),
-              title: const Text('选择文件'),
-              subtitle: const Text('发送代码、日志、文档或压缩包'),
-              onTap: () => Navigator.pop(context, AttachmentSource.files),
-            ),
+            if (!imagesOnly)
+              ListTile(
+                leading: const Icon(LucideIcons.folderOpen),
+                title: const Text('选择文件'),
+                subtitle: const Text('发送代码、日志、文档或压缩包'),
+                onTap: () => Navigator.pop(context, AttachmentSource.files),
+              ),
           ],
         ),
       ),
@@ -4966,10 +6030,11 @@ Future<void> confirmLogout(BuildContext context, VoidCallback onLogout) async {
   onLogout();
 }
 
-class TranscriptView extends StatelessWidget {
+class TranscriptView extends StatefulWidget {
   const TranscriptView({
     super.key,
     required this.messages,
+    this.jumpRequest,
     this.session,
     this.activeSessionId,
     this.running = false,
@@ -4982,9 +6047,11 @@ class TranscriptView extends StatelessWidget {
     required this.onReconnect,
     required this.onPermissionAllow,
     required this.onPermissionDeny,
+    this.onJumpHandled,
   });
 
   final List<TranscriptMessage> messages;
+  final TranscriptJumpRequest? jumpRequest;
   final SavedSession? session;
   final String? activeSessionId;
   final bool running;
@@ -4997,76 +6064,359 @@ class TranscriptView extends StatelessWidget {
   final VoidCallback onReconnect;
   final ValueChanged<RemotePermissionRequest> onPermissionAllow;
   final ValueChanged<RemotePermissionRequest> onPermissionDeny;
+  final ValueChanged<TranscriptJumpRequest>? onJumpHandled;
+
+  @override
+  State<TranscriptView> createState() => _TranscriptViewState();
+}
+
+class _VisibleTranscriptRow {
+  const _VisibleTranscriptRow(this.rawIndex, this.message);
+
+  final int rawIndex;
+  final TranscriptMessage message;
+}
+
+class _ActivityGroupRow {
+  const _ActivityGroupRow(this.rows);
+
+  final List<_VisibleTranscriptRow> rows;
+
+  TranscriptMessage get message => rows.first.message;
+
+  int get rawIndex => rows.first.rawIndex;
+}
+
+List<Object> _groupTranscriptRows(List<_VisibleTranscriptRow> rows) {
+  final items = <Object>[];
+  var index = 0;
+  while (index < rows.length) {
+    final row = rows[index];
+    final isToolActivity = row.message.role == MessageRole.activity &&
+        row.message.activityKind == ActivityKind.tool;
+    if (!isToolActivity) {
+      items.add(row);
+      index++;
+      continue;
+    }
+    final group = <_VisibleTranscriptRow>[row];
+    index++;
+    while (index < rows.length) {
+      final next = rows[index];
+      if (next.message.role != MessageRole.activity ||
+          next.message.activityKind != ActivityKind.tool) {
+        break;
+      }
+      group.add(next);
+      index++;
+    }
+    items.add(_ActivityGroupRow(group));
+  }
+  return items;
+}
+
+class _TranscriptViewState extends State<TranscriptView> {
+  static const highlightDuration = Duration(milliseconds: 1600);
+  static const maxJumpAttempts = 48;
+
+  final ScrollController scrollController = ScrollController();
+  final Map<int, GlobalKey> rowKeys = {};
+  Timer? highlightTimer;
+  int? highlightedRawIndex;
+  int? handledJumpGeneration;
+  int? jumpInFlightGeneration;
+  bool jumpScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    scheduleJump();
+  }
+
+  @override
+  void didUpdateWidget(covariant TranscriptView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.activeSessionId != widget.activeSessionId) {
+      highlightTimer?.cancel();
+      highlightedRawIndex = null;
+      rowKeys.clear();
+    }
+    scheduleJump();
+  }
+
+  @override
+  void dispose() {
+    highlightTimer?.cancel();
+    scrollController.dispose();
+    super.dispose();
+  }
+
+  List<_VisibleTranscriptRow> visibleRows() {
+    final rows = <_VisibleTranscriptRow>[];
+    for (var index = 0; index < widget.messages.length; index++) {
+      final message = widget.messages[index];
+      if (isBlankAssistantMessage(message) ||
+          isHiddenThinkingActivity(message)) {
+        continue;
+      }
+      rows.add(_VisibleTranscriptRow(index, message));
+    }
+    return rows;
+  }
+
+  void scheduleJump() {
+    final request = widget.jumpRequest;
+    if (request == null ||
+        request.sessionId != widget.activeSessionId ||
+        request.generation == handledJumpGeneration ||
+        request.generation == jumpInFlightGeneration ||
+        jumpScheduled) {
+      return;
+    }
+    jumpScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      jumpScheduled = false;
+      if (!mounted) return;
+      unawaited(performJump());
+    });
+  }
+
+  Future<void> performJump() async {
+    final request = widget.jumpRequest;
+    if (request == null ||
+        request.sessionId != widget.activeSessionId ||
+        request.generation == handledJumpGeneration ||
+        request.generation == jumpInFlightGeneration ||
+        widget.messages.isEmpty) {
+      return;
+    }
+
+    final targetRawIndex = resolveTargetRawIndex(request);
+    if (targetRawIndex == null) {
+      finishJump(request, found: false);
+      return;
+    }
+    final rows = visibleRows();
+    final targetRowIndex = rows.indexWhere(
+      (row) => row.rawIndex == targetRawIndex,
+    );
+    if (targetRowIndex < 0) {
+      finishJump(request, found: false);
+      return;
+    }
+
+    jumpInFlightGeneration = request.generation;
+    final found = await scrollToRow(
+      request,
+      rows,
+      targetRowIndex,
+      targetRawIndex,
+    );
+    if (!mounted || widget.jumpRequest?.generation != request.generation) {
+      jumpInFlightGeneration = null;
+      return;
+    }
+    finishJump(request, found: found, rawIndex: targetRawIndex);
+  }
+
+  int? resolveTargetRawIndex(TranscriptJumpRequest request) {
+    final expectedRole = switch (request.role) {
+      RemoteSessionSearchRole.user => MessageRole.user,
+      RemoteSessionSearchRole.assistant => MessageRole.assistant,
+      RemoteSessionSearchRole.title => null,
+    };
+    if (expectedRole == null) return null;
+    final normalizedSnippet = request.snippet
+        .replaceFirst(RegExp(r'^…\s*'), '')
+        .replaceFirst(RegExp(r'\s*…$'), '')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+
+    bool matches(int index) {
+      if (index < 0 || index >= widget.messages.length) return false;
+      final message = widget.messages[index];
+      if (message.role != expectedRole) return false;
+      if (normalizedSnippet.isEmpty) return true;
+      final normalizedText = message.text
+          .replaceAll(RegExp(r'\s+'), ' ')
+          .trim();
+      return normalizedText.contains(normalizedSnippet);
+    }
+
+    if (matches(request.messageIndex)) return request.messageIndex;
+
+    int? closest;
+    var closestDistance = 1 << 30;
+    for (var index = 0; index < widget.messages.length; index++) {
+      if (!matches(index)) continue;
+      final distance = (index - request.messageIndex).abs();
+      if (distance < closestDistance) {
+        closest = index;
+        closestDistance = distance;
+      }
+    }
+    return closest;
+  }
+
+  Future<bool> scrollToRow(
+    TranscriptJumpRequest request,
+    List<_VisibleTranscriptRow> rows,
+    int targetRowIndex,
+    int targetRawIndex,
+  ) async {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    for (var attempt = 0; attempt < maxJumpAttempts; attempt++) {
+      if (!mounted || widget.jumpRequest?.generation != request.generation) {
+        return false;
+      }
+      final targetContext = rowKeys[targetRawIndex]?.currentContext;
+      if (targetContext != null && targetContext.mounted) {
+        await Scrollable.ensureVisible(
+          targetContext,
+          alignment: 0.18,
+          duration: reduceMotion ? Duration.zero : AppMotion.standard,
+          curve: AppMotion.enter,
+        );
+        return true;
+      }
+
+      if (!scrollController.hasClients) {
+        await WidgetsBinding.instance.endOfFrame;
+        continue;
+      }
+
+      final position = scrollController.position;
+      final builtRows = <({int index, double height})>[];
+      for (var index = 0; index < rows.length; index++) {
+        final rowContext = rowKeys[rows[index].rawIndex]?.currentContext;
+        final renderObject = rowContext?.findRenderObject();
+        if (renderObject is RenderBox && renderObject.hasSize) {
+          builtRows.add((index: index, height: renderObject.size.height));
+        }
+      }
+
+      double nextOffset;
+      if (builtRows.isEmpty) {
+        final fraction = rows.length <= 1
+            ? 0.0
+            : targetRowIndex / (rows.length - 1);
+        nextOffset = position.maxScrollExtent * fraction;
+      } else {
+        final firstIndex = builtRows.first.index;
+        final lastIndex = builtRows.last.index;
+        final averageHeight =
+            builtRows.fold<double>(0, (sum, row) => sum + row.height) /
+            builtRows.length;
+        if (targetRowIndex < firstIndex) {
+          nextOffset =
+              position.pixels - (firstIndex - targetRowIndex) * averageHeight;
+        } else if (targetRowIndex > lastIndex) {
+          nextOffset =
+              position.pixels + (targetRowIndex - lastIndex) * averageHeight;
+        } else {
+          final fraction = rows.length <= 1
+              ? 0.0
+              : targetRowIndex / (rows.length - 1);
+          nextOffset = position.maxScrollExtent * fraction;
+        }
+      }
+
+      nextOffset = nextOffset
+          .clamp(position.minScrollExtent, position.maxScrollExtent)
+          .toDouble();
+      if ((nextOffset - position.pixels).abs() < 1 &&
+          position.maxScrollExtent > position.minScrollExtent) {
+        final direction =
+            builtRows.isNotEmpty && targetRowIndex < builtRows.first.index
+            ? -1.0
+            : 1.0;
+        nextOffset =
+            (position.pixels + direction * position.viewportDimension * 0.8)
+                .clamp(position.minScrollExtent, position.maxScrollExtent)
+                .toDouble();
+      }
+      scrollController.jumpTo(nextOffset);
+      await WidgetsBinding.instance.endOfFrame;
+    }
+    return rowKeys[targetRawIndex]?.currentContext != null;
+  }
+
+  void finishJump(
+    TranscriptJumpRequest request, {
+    required bool found,
+    int? rawIndex,
+  }) {
+    jumpInFlightGeneration = null;
+    handledJumpGeneration = request.generation;
+    if (found && rawIndex != null) {
+      highlightTimer?.cancel();
+      setState(() => highlightedRawIndex = rawIndex);
+      highlightTimer = Timer(highlightDuration, () {
+        if (!mounted || highlightedRawIndex != rawIndex) return;
+        setState(() => highlightedRawIndex = null);
+      });
+    } else {
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(const SnackBar(content: Text('原消息可能已变化，已打开对应会话')));
+    }
+    widget.onJumpHandled?.call(request);
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (messages.isEmpty && pendingPermissions.isEmpty) {
+    if (widget.messages.isEmpty && widget.pendingPermissions.isEmpty) {
+      scheduleJump();
+      if (!widget.connected) return const SizedBox.expand();
       return LayoutBuilder(
         builder: (context, constraints) {
           return SingleChildScrollView(
             child: ConstrainedBox(
               constraints: BoxConstraints(minHeight: constraints.maxHeight),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(2, 1, 2, 12),
+                // Extra bottom inset so empty-state chips clear the floating composer.
+                padding: const EdgeInsets.fromLTRB(0, 1, 0, 188),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.start,
                   children: [
-                    if (connected) ...[
-                      const Text(
-                        '下一件事',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: -0.2,
-                        ),
+                    const Text(
+                      '下一件事',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.2,
                       ),
-                      const SizedBox(height: 4),
-                      const Text(
-                        '从下方输入，或先点一个快捷任务',
-                        style: TextStyle(color: AppColors.muted, fontSize: 14),
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          Expanded(
-                            flex: 7,
-                            child: PromptChip(
-                              icon: LucideIcons.arrowUpRight,
-                              label: '检查项目',
-                              caption: '看看哪里需要处理',
-                              onTap: () => onFillPrompt('检查这个项目'),
-                            ),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      '从下方输入，或先点一个快捷任务',
+                      style: TextStyle(color: AppColors.muted, fontSize: 14),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          flex: 7,
+                          child: PromptChip(
+                            icon: LucideIcons.arrowUpRight,
+                            label: '检查项目',
+                            caption: '看看哪里需要处理',
+                            onTap: () => widget.onFillPrompt('检查这个项目'),
                           ),
-                          const SizedBox(width: 9),
-                          Expanded(
-                            flex: 5,
-                            child: PromptChip(
-                              icon: LucideIcons.play,
-                              label: '运行测试',
-                              caption: '跑完告诉我结果',
-                              onTap: () => onFillPrompt('运行测试并总结结果'),
-                            ),
+                        ),
+                        const SizedBox(width: 9),
+                        Expanded(
+                          flex: 5,
+                          child: PromptChip(
+                            icon: LucideIcons.play,
+                            label: '运行测试',
+                            caption: '跑完告诉我结果',
+                            onTap: () => widget.onFillPrompt('运行测试并总结结果'),
                           ),
-                        ],
-                      ),
-                    ] else if (offline) ...[
-                      SizedBox(
-                        height: (constraints.maxHeight - 14).clamp(
-                          224.0,
-                          320.0,
                         ),
-                        child: _OfflineReconnectCard(onReconnect: onReconnect),
-                      ),
-                    ] else ...[
-                      SizedBox(
-                        height: (constraints.maxHeight - 14).clamp(
-                          180.0,
-                          260.0,
-                        ),
-                        child: const _ConnectingStatusCard(),
-                      ),
-                    ],
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -5076,185 +6426,96 @@ class TranscriptView extends StatelessWidget {
       );
     }
 
-    final items = <Object>[...messages, ...pendingPermissions];
-    final workspaceDir = session?.workspaceDir;
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(4, 14, 4, 16),
+    final visibleMessages = visibleRows();
+    final visibleRawIndices = visibleMessages
+        .map((row) => row.rawIndex)
+        .toSet();
+    rowKeys.removeWhere((rawIndex, _) => !visibleRawIndices.contains(rawIndex));
+    for (final row in visibleMessages) {
+      rowKeys.putIfAbsent(row.rawIndex, GlobalKey.new);
+    }
+    scheduleJump();
+    final items = <Object>[
+      ..._groupTranscriptRows(visibleMessages),
+      ...widget.pendingPermissions,
+    ];
+    final workspaceDir = widget.session?.workspaceDir;
+    final lastVisible = visibleMessages.isNotEmpty
+        ? visibleMessages.last.message
+        : null;
+    return ListView.builder(
+      controller: scrollController,
+      // Tall bottom padding: last bubble can rest above the dock, while
+      // earlier lines still scroll *under* the floating composer.
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 188),
+      // Keep prefetch small so long markdown rows are not all built at once.
+      cacheExtent: 180,
+      addAutomaticKeepAlives: false,
+      addRepaintBoundaries: true,
       itemCount: items.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 14),
       itemBuilder: (context, index) {
         final item = items[index];
-        if (item is TranscriptMessage) {
-          return MessageBlock(
-            message: item,
-            session: session,
-            activeSessionId: activeSessionId,
-            runStartedAt: runStartedAt,
+        Widget row;
+        int? rawIndex;
+        if (item is _VisibleTranscriptRow) {
+          rawIndex = item.rawIndex;
+          final highlighted = highlightedRawIndex == rawIndex;
+          row = MessageBlock(
+            key: ValueKey(transcriptRowKey(item.message, rawIndex)),
+            message: item.message,
+            session: widget.session,
+            activeSessionId: widget.activeSessionId,
+            runStartedAt: widget.runStartedAt,
+            searchHighlighted: highlighted,
             streaming:
-                running &&
-                item.role == MessageRole.assistant &&
-                identical(item, messages.isNotEmpty ? messages.last : null),
+                widget.running &&
+                item.message.role == MessageRole.assistant &&
+                identical(item.message, lastVisible),
+          );
+          if (highlighted) {
+            row = Semantics(
+              key: ValueKey('transcript-search-hit-$rawIndex'),
+              label: '搜索命中消息',
+              child: row,
+            );
+          }
+        } else if (item is _ActivityGroupRow) {
+          row = ActivityTimelineCard(
+            key: ValueKey('activity-timeline-${item.rawIndex}'),
+            activities: [
+              for (final groupRow in item.rows) groupRow.message,
+            ],
+          );
+        } else {
+          final request = item as RemotePermissionRequest;
+          row = PermissionRequestCard(
+            key: ValueKey('perm-${request.requestId}'),
+            request: request,
+            responding: widget.respondingPermissionIds.contains(
+              request.requestId,
+            ),
+            connected: widget.connected,
+            workspaceDir: workspaceDir,
+            onAllow: () => widget.onPermissionAllow(request),
+            onDeny: () => widget.onPermissionDeny(request),
           );
         }
-        final request = item as RemotePermissionRequest;
-        return PermissionRequestCard(
-          request: request,
-          responding: respondingPermissionIds.contains(request.requestId),
-          connected: connected,
-          workspaceDir: workspaceDir,
-          onAllow: () => onPermissionAllow(request),
-          onDeny: () => onPermissionDeny(request),
+        Object gapItem(Object value) {
+          if (value is _VisibleTranscriptRow) return value.message;
+          if (value is _ActivityGroupRow) return value.message;
+          return value;
+        }
+        final gap = index == items.length - 1
+            ? 0.0
+            : transcriptGapBetween(gapItem(item), gapItem(items[index + 1]));
+        // Spacing without ListView.separated (one less child per gap).
+        final paddedRow = Padding(
+          padding: EdgeInsets.only(bottom: gap),
+          child: row,
         );
+        if (rawIndex == null) return paddedRow;
+        return SizedBox(key: rowKeys[rawIndex], child: paddedRow);
       },
-    );
-  }
-}
-
-class _ConnectingStatusCard extends StatelessWidget {
-  const _ConnectingStatusCard();
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      key: const ValueKey('connecting-status-card'),
-      color: AppColors.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.surface),
-        side: const BorderSide(color: AppColors.line),
-      ),
-      child: const Padding(
-        padding: EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: AppSizes.iconControl,
-              height: AppSizes.iconControl,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: AppColors.control,
-                  borderRadius: BorderRadius.all(
-                    Radius.circular(AppRadii.control),
-                  ),
-                ),
-                child: Center(
-                  child: SizedBox.square(
-                    dimension: 18,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: AppColors.terracottaDeep,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            SizedBox(height: 16),
-            Text(
-              '正在重新连接',
-              style: TextStyle(
-                fontSize: 18,
-                height: 1.25,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.28,
-              ),
-            ),
-            SizedBox(height: 6),
-            Text(
-              '正在联系电脑端，会话记录会保留。',
-              style: TextStyle(
-                color: AppColors.muted,
-                fontSize: 14,
-                height: 1.5,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _OfflineReconnectCard extends StatelessWidget {
-  const _OfflineReconnectCard({required this.onReconnect});
-
-  final VoidCallback onReconnect;
-
-  @override
-  Widget build(BuildContext context) {
-    return Material(
-      key: const ValueKey('offline-reconnect-card'),
-      color: AppColors.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.surface),
-        side: const BorderSide(color: AppColors.line),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(AppSpacing.md),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              width: AppSizes.iconControl,
-              height: AppSizes.iconControl,
-              decoration: BoxDecoration(
-                color: AppColors.control,
-                borderRadius: BorderRadius.circular(AppRadii.control),
-              ),
-              alignment: Alignment.center,
-              child: const Icon(
-                LucideIcons.unlink,
-                size: 20,
-                color: AppColors.danger,
-              ),
-            ),
-            const SizedBox(height: 16),
-            const Text(
-              '让电脑重新上线',
-              style: TextStyle(
-                fontSize: 18,
-                height: 1.25,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.28,
-              ),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              '在电脑端重新运行 CC Remote，手机会自动接回这次会话。',
-              style: TextStyle(
-                color: AppColors.muted,
-                fontSize: 14,
-                height: 1.5,
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              '会话和输入内容都会保留',
-              style: TextStyle(
-                color: AppColors.muted,
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-            const Spacer(),
-            const SizedBox(height: 16),
-            SizedBox(
-              height: 52,
-              child: SignalPressEffect(
-                child: FilledButton.icon(
-                  onPressed: onReconnect,
-                  style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.cta,
-                    foregroundColor: AppColors.onCta,
-                    minimumSize: const Size.fromHeight(52),
-                  ),
-                  icon: const Icon(LucideIcons.refreshCw, size: 18),
-                  label: const Text('立即重连'),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
@@ -5300,7 +6561,9 @@ class PermissionRequestCard extends StatelessWidget {
     if (tool.contains('bash') || tool.contains('shell')) {
       return '可能在桌面主机执行命令';
     }
-    if (tool.contains('read') || tool.contains('glob') || tool.contains('grep')) {
+    if (tool.contains('read') ||
+        tool.contains('glob') ||
+        tool.contains('grep')) {
       return '可能读取工作区内容';
     }
     return '按工具说明执行一次性操作';
@@ -5315,8 +6578,7 @@ class PermissionRequestCard extends StatelessWidget {
         : tool.contains('bash') || tool.contains('shell')
         ? AppColors.terracottaDeep
         : AppColors.terracottaDeep;
-    final summary =
-        request.detail?.trim().isNotEmpty == true
+    final summary = request.detail?.trim().isNotEmpty == true
         ? request.detail!.trim()
         : (request.description?.trim().isNotEmpty == true
               ? request.description!.trim()
@@ -5529,6 +6791,315 @@ class _PermissionSectionLabel extends StatelessWidget {
   }
 }
 
+String transcriptRowKey(TranscriptMessage message, int index) {
+  final activityId = message.activityId;
+  if (activityId != null && activityId.isNotEmpty) {
+    return 'act-$activityId';
+  }
+  // Index + role keeps identity stable while streaming only mutates last row.
+  return 'msg-$index-${message.role.name}';
+}
+
+Color transcriptSearchHighlightFill(Color base) {
+  return Color.alphaBlend(AppColors.terracotta.withValues(alpha: 0.18), base);
+}
+
+double transcriptGapBetween(Object current, Object next) {
+  if (current is! TranscriptMessage || next is! TranscriptMessage) return 10;
+  if (current.role == MessageRole.system || next.role == MessageRole.system) {
+    return 8;
+  }
+  // Two-tier rhythm: a new round breathes wide, work inside one turn binds tight.
+  if (next.role == MessageRole.user) return 14;
+  if (current.role == MessageRole.user) return 9;
+  if (current.role == MessageRole.assistant &&
+      next.role == MessageRole.activity) {
+    return 12;
+  }
+  if (current.role == MessageRole.activity ||
+      next.role == MessageRole.activity) {
+    return 4;
+  }
+  return 6;
+}
+
+/// Shared once — rebuilding MarkdownStyleSheet.fromTheme per bubble is costly
+/// while scrolling long assistant transcripts.
+final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
+  p: const TextStyle(
+    fontFamily: AppTypography.assistantFontFamily,
+    fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
+    height: AppTypography.assistantBodyHeight,
+    fontSize: AppTypography.assistantBodySize,
+    color: AppColors.ink,
+    letterSpacing: 0.1,
+  ),
+  pPadding: EdgeInsets.zero,
+  a: const TextStyle(color: AppColors.terracottaDeep),
+  code: const TextStyle(
+    fontFamily: AppTypography.codeFontFamily,
+    fontFamilyFallback: AppTypography.codeFontFamilyFallback,
+    fontSize: 12.5,
+    height: 1.5,
+    color: AppColors.ink,
+  ),
+  h1: const TextStyle(
+    fontFamily: AppTypography.assistantFontFamily,
+    fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
+    fontSize: 21,
+    fontWeight: FontWeight.w700,
+    height: 1.3,
+    color: AppColors.ink,
+  ),
+  h1Padding: const EdgeInsets.only(top: 8, bottom: 2),
+  h2: const TextStyle(
+    fontFamily: AppTypography.assistantFontFamily,
+    fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
+    fontSize: 18.5,
+    fontWeight: FontWeight.w700,
+    height: 1.35,
+    color: AppColors.ink,
+  ),
+  h2Padding: const EdgeInsets.only(top: 6, bottom: 2),
+  h3: const TextStyle(
+    fontFamily: AppTypography.assistantFontFamily,
+    fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
+    fontSize: 16.5,
+    fontWeight: FontWeight.w700,
+    height: 1.4,
+    color: AppColors.ink,
+  ),
+  h3Padding: const EdgeInsets.only(top: 4),
+  blockSpacing: 5,
+  listIndent: 20,
+  listBulletPadding: const EdgeInsets.only(right: 6),
+  // Intrinsic widths keep every column readable (no char-per-line squeezing);
+  // flutter_markdown wraps wide tables in a horizontal scroll automatically.
+  // Tables are rare and row-bounded, so intrinsic measurement cost is fine
+  // here even though Flex would be cheaper.
+  tableColumnWidth: const IntrinsicColumnWidth(),
+  tableCellsPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+  blockquotePadding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
+  blockquoteDecoration: const BoxDecoration(
+    border: Border(left: BorderSide(color: AppColors.terracotta, width: 1)),
+  ),
+  horizontalRuleDecoration: const BoxDecoration(
+    border: Border(top: BorderSide(color: AppColors.line)),
+  ),
+);
+
+const TextStyle _kAssistantPlainStyle = TextStyle(
+  fontFamily: AppTypography.assistantFontFamily,
+  fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
+  height: AppTypography.assistantBodyHeight,
+  fontSize: AppTypography.assistantBodySize,
+  color: AppColors.ink,
+  letterSpacing: 0.1,
+);
+
+/// Replaces the default `pre` rendering with a card that carries a language
+/// label and a copy button (RikkaHub-style code block toolbar).
+class _CodeBlockBuilder extends MarkdownElementBuilder {
+  String? language;
+  String code = '';
+
+  @override
+  void visitElementBefore(md.Element element) {
+    language = null;
+    code = '';
+    final children = element.children;
+    if (children != null && children.isNotEmpty) {
+      final first = children.first;
+      if (first is md.Element) {
+        final cls = first.attributes['class'];
+        if (cls != null && cls.startsWith('language-')) {
+          language = cls.substring('language-'.length);
+        }
+      }
+    }
+  }
+
+  @override
+  Widget? visitText(md.Text text, TextStyle? preferredStyle) {
+    code += text.text;
+    return const SizedBox.shrink();
+  }
+
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    return _CodeBlockCard(language: language, code: trimCodeBlock(code));
+  }
+
+  static String trimCodeBlock(String raw) {
+    var text = raw;
+    if (text.endsWith('\n')) text = text.substring(0, text.length - 1);
+    return text;
+  }
+}
+
+class _CodeBlockCard extends StatefulWidget {
+  const _CodeBlockCard({this.language, required this.code});
+
+  final String? language;
+  final String code;
+
+  @override
+  State<_CodeBlockCard> createState() => _CodeBlockCardState();
+}
+
+class _CodeBlockCardState extends State<_CodeBlockCard> {
+  Timer? copiedResetTimer;
+  bool copied = false;
+
+  @override
+  void dispose() {
+    copiedResetTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> copyCode() async {
+    await Clipboard.setData(ClipboardData(text: widget.code));
+    if (!mounted) return;
+    setState(() => copied = true);
+    copiedResetTimer?.cancel();
+    copiedResetTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => copied = false);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const ValueKey('code-block-card'),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        color: AppColors.control,
+        borderRadius: BorderRadius.circular(AppRadii.control),
+        border: Border.all(color: AppColors.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            color: AppColors.surface,
+            padding: const EdgeInsets.fromLTRB(12, 5, 6, 5),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    widget.language ?? '代码',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.muted,
+                      fontFamily: AppTypography.codeFontFamily,
+                      fontFamilyFallback: AppTypography.codeFontFamilyFallback,
+                    ),
+                  ),
+                ),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 150),
+                  transitionBuilder: (child, animation) =>
+                      FadeTransition(opacity: animation, child: child),
+                  child: copied
+                      ? const Text(
+                          '已复制',
+                          key: ValueKey('code-copied-label'),
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppColors.terracottaDeep,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        )
+                      : const SizedBox.shrink(),
+                ),
+                IconButton(
+                  key: const ValueKey('code-copy-button'),
+                  tooltip: '复制代码',
+                  visualDensity: VisualDensity.compact,
+                  iconSize: 15,
+                  color: AppColors.muted,
+                  onPressed: copyCode,
+                  icon: Icon(copied ? LucideIcons.check : LucideIcons.copy),
+                ),
+              ],
+            ),
+          ),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            child: Text(
+              widget.code,
+              style: const TextStyle(
+                fontFamily: AppTypography.codeFontFamily,
+                fontFamilyFallback: AppTypography.codeFontFamilyFallback,
+                fontSize: 12.5,
+                height: 1.5,
+                color: AppColors.ink,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+const TextStyle _kUserBubbleStyle = TextStyle(
+  fontFamily: AppTypography.fontFamily,
+  fontFamilyFallback: AppTypography.fontFamilyFallback,
+  height: AppTypography.userBodyHeight,
+  fontSize: AppTypography.userBodySize,
+  color: AppColors.ink,
+  fontWeight: FontWeight.w400,
+);
+
+bool assistantTextLooksPlain(String text) {
+  // Fast path: skip Markdown parser for plain replies (majority of short turns).
+  return !text.contains('*') &&
+      !text.contains('`') &&
+      !text.contains('#') &&
+      !text.contains('[') &&
+      !text.contains('|') &&
+      !text.contains('>') &&
+      !text.contains('- ') &&
+      !text.contains('1.') &&
+      !text.contains('http');
+}
+
+Uri? searchSourceUri(String? href) {
+  final uri = href == null ? null : Uri.tryParse(href);
+  if (uri == null ||
+      (uri.scheme != 'http' && uri.scheme != 'https') ||
+      uri.host.isEmpty) {
+    return null;
+  }
+  return uri;
+}
+
+Future<void> openSearchSource(BuildContext context, String? href) async {
+  final uri = searchSourceUri(href);
+  if (uri == null) return;
+
+  var opened = false;
+  try {
+    opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (_) {}
+  if (!opened && context.mounted) {
+    ScaffoldMessenger.maybeOf(
+      context,
+    )?.showSnackBar(const SnackBar(content: Text('无法打开来源链接')));
+  }
+}
+
 class MessageBlock extends StatelessWidget {
   const MessageBlock({
     super.key,
@@ -5537,6 +7108,7 @@ class MessageBlock extends StatelessWidget {
     this.activeSessionId,
     this.runStartedAt,
     this.streaming = false,
+    this.searchHighlighted = false,
   });
 
   final TranscriptMessage message;
@@ -5544,6 +7116,7 @@ class MessageBlock extends StatelessWidget {
   final String? activeSessionId;
   final DateTime? runStartedAt;
   final bool streaming;
+  final bool searchHighlighted;
 
   @override
   Widget build(BuildContext context) {
@@ -5562,140 +7135,65 @@ class MessageBlock extends StatelessWidget {
 
     final isUser = message.role == MessageRole.user;
     if (!isUser) {
-      // ponytail: plain text while streaming; markdown only after done
-      final assistantBody = streaming
-          ? SelectableText(
-              message.text,
-              style: const TextStyle(
-                fontFamily: AppTypography.assistantFontFamily,
-                fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
-                height: AppTypography.assistantBodyHeight,
-                fontSize: AppTypography.assistantBodySize,
-                color: AppColors.ink,
-                letterSpacing: 0.1,
-              ),
-            )
-          : MarkdownBody(
-              data: message.text,
-              selectable: true,
-              softLineBreak: true,
-              styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
-                  .copyWith(
-                    p: const TextStyle(
-                      fontFamily: AppTypography.assistantFontFamily,
-                      fontFamilyFallback:
-                          AppTypography.assistantFontFamilyFallback,
-                      height: AppTypography.assistantBodyHeight,
-                      fontSize: AppTypography.assistantBodySize,
-                      color: AppColors.ink,
-                      letterSpacing: 0.1,
-                    ),
-                    a: const TextStyle(color: AppColors.terracottaDeep),
-                    code: const TextStyle(
-                      fontFamily: AppTypography.codeFontFamily,
-                      fontFamilyFallback: AppTypography.codeFontFamilyFallback,
-                      fontSize: 12.5,
-                      height: 1.5,
-                      color: AppColors.ink,
-                    ),
-                    h1: const TextStyle(
-                      fontFamily: AppTypography.assistantFontFamily,
-                      fontFamilyFallback:
-                          AppTypography.assistantFontFamilyFallback,
-                      fontSize: 21,
-                      fontWeight: FontWeight.w700,
-                      height: 1.3,
-                      color: AppColors.ink,
-                    ),
-                    h2: const TextStyle(
-                      fontFamily: AppTypography.assistantFontFamily,
-                      fontFamilyFallback:
-                          AppTypography.assistantFontFamilyFallback,
-                      fontSize: 18.5,
-                      fontWeight: FontWeight.w700,
-                      height: 1.35,
-                      color: AppColors.ink,
-                    ),
-                    h3: const TextStyle(
-                      fontFamily: AppTypography.assistantFontFamily,
-                      fontFamilyFallback:
-                          AppTypography.assistantFontFamilyFallback,
-                      fontSize: 16.5,
-                      fontWeight: FontWeight.w700,
-                      height: 1.4,
-                      color: AppColors.ink,
-                    ),
-                    blockSpacing: 10,
-                    listIndent: 22,
-                    tableColumnWidth: const IntrinsicColumnWidth(),
-                    tableCellsPadding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 6,
-                    ),
-                    codeblockPadding: const EdgeInsets.all(12),
-                    codeblockDecoration: BoxDecoration(
-                      color: AppColors.control,
-                      borderRadius: BorderRadius.circular(AppRadii.compact),
-                      border: Border.all(color: AppColors.line),
-                    ),
-                    blockquotePadding: const EdgeInsets.fromLTRB(12, 6, 10, 6),
-                    blockquoteDecoration: const BoxDecoration(
-                      border: Border(
-                        left: BorderSide(color: AppColors.terracotta, width: 1),
-                      ),
-                    ),
-                  ),
-            );
+      if (message.text.trim().isEmpty) {
+        return const SizedBox.shrink();
+      }
+      // Streaming / plain text: cheap Text. Markdown only when markers present.
+      final Widget assistantBody;
+      if (streaming || assistantTextLooksPlain(message.text)) {
+        assistantBody = Text(message.text, style: _kAssistantPlainStyle);
+      } else {
+        assistantBody = MarkdownBody(
+          data: message.text,
+          selectable: false,
+          softLineBreak: true,
+          onTapLink: (_, href, _) => unawaited(openSearchSource(context, href)),
+          styleSheet: kAssistantMarkdownStyleSheet,
+          builders: <String, MarkdownElementBuilder>{
+            'pre': _CodeBlockBuilder(),
+          },
+        );
+      }
       return AssistantBubbleFrame(
         bubbleKey: const ValueKey('assistant-message'),
+        searchHighlighted: searchHighlighted,
         child: assistantBody,
       );
     }
 
-    final maxWidth = MediaQuery.sizeOf(context).width * 0.82;
+    final maxWidth = MediaQuery.sizeOf(context).width * 0.88;
     return Align(
       alignment: Alignment.centerRight,
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth),
-        child: Container(
+        child: DecoratedBox(
           key: const ValueKey('user-message'),
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
           decoration: BoxDecoration(
-            color: AppColors.control,
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(AppRadii.bubble),
-              topRight: Radius.circular(AppRadii.bubble),
-              bottomLeft: Radius.circular(AppRadii.bubble),
-              bottomRight: Radius.circular(8),
+            color: searchHighlighted
+                ? transcriptSearchHighlightFill(AppColors.userBubble)
+                : AppColors.userBubble,
+            borderRadius: const BorderRadius.all(
+              Radius.circular(AppRadii.bubble),
             ),
-            border: Border.all(color: AppColors.line.withValues(alpha: 0.75)),
-            boxShadow: AppElevation.softBubble(alpha: 0.04),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (message.attachments.isNotEmpty)
-                AttachmentMessageGrid(
-                  attachments: message.attachments,
-                  session: session,
-                  activeSessionId: activeSessionId,
-                ),
-              if (message.attachments.isNotEmpty && message.text.isNotEmpty)
-                const SizedBox(height: 9),
-              if (message.text.isNotEmpty)
-                Text(
-                  message.text,
-                  style: const TextStyle(
-                    fontFamily: AppTypography.fontFamily,
-                    fontFamilyFallback: AppTypography.fontFamilyFallback,
-                    height: AppTypography.userBodyHeight,
-                    fontSize: AppTypography.userBodySize,
-                    color: AppColors.ink,
-                    fontWeight: FontWeight.w400,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 7, 16, 7),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (message.attachments.isNotEmpty)
+                  AttachmentMessageGrid(
+                    attachments: message.attachments,
+                    session: session,
+                    activeSessionId: activeSessionId,
                   ),
-                ),
-            ],
+                if (message.attachments.isNotEmpty && message.text.isNotEmpty)
+                  const SizedBox(height: 9),
+                if (message.text.isNotEmpty)
+                  Text(message.text, style: _kUserBubbleStyle),
+              ],
+            ),
           ),
         ),
       ),
@@ -5842,35 +7340,39 @@ class AssistantBubbleFrame extends StatelessWidget {
     required this.child,
     this.bubbleKey,
     this.compact = false,
+    this.searchHighlighted = false,
   });
 
   final Widget child;
   final Key? bubbleKey;
   final bool compact;
+  final bool searchHighlighted;
 
   @override
   Widget build(BuildContext context) {
-    // Fill the transcript column; parent padding already sets reading margins.
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        key: bubbleKey,
-        width: double.infinity,
-        padding: compact
-            ? const EdgeInsets.fromLTRB(14, 12, 16, 12)
-            : const EdgeInsets.fromLTRB(16, 14, 16, 14),
-        decoration: BoxDecoration(
-          color: AppColors.surfaceElevated,
-          borderRadius: const BorderRadius.only(
-            topLeft: Radius.circular(AppRadii.bubble),
-            topRight: Radius.circular(AppRadii.bubble),
-            bottomLeft: Radius.circular(8),
-            bottomRight: Radius.circular(AppRadii.bubble),
+    // Narrower than the column: extra paper margin on each side keeps the
+    // surface card from reading as a full-bleed band.
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: DecoratedBox(
+          key: bubbleKey,
+          decoration: BoxDecoration(
+            color: searchHighlighted
+                ? transcriptSearchHighlightFill(AppColors.surface)
+                : AppColors.surface,
+            borderRadius: const BorderRadius.all(
+              Radius.circular(AppRadii.bubble),
+            ),
           ),
-          border: Border.all(color: AppColors.line.withValues(alpha: 0.7)),
-          boxShadow: AppElevation.softBubble(),
+          child: Padding(
+            padding: compact
+                ? const EdgeInsets.fromLTRB(14, 8, 16, 8)
+                : const EdgeInsets.fromLTRB(16, 9, 16, 9),
+            child: SizedBox(width: double.infinity, child: child),
+          ),
         ),
-        child: child,
       ),
     );
   }
@@ -5883,6 +7385,9 @@ Map<String, Object> buildPromptMessage({
   required PermissionMode permissionMode,
   required String sessionId,
   required ClaudeModelPreference model,
+  ClaudeEffortPreference effort = ClaudeEffortPreference.automatic,
+  SessionEngine engine = SessionEngine.claude,
+  CodexSandboxMode codexSandboxMode = CodexSandboxMode.readOnly,
 }) {
   final attachments = attachmentIds.toList(growable: false);
   return {
@@ -5890,9 +7395,14 @@ Map<String, Object> buildPromptMessage({
     'promptId': promptId,
     'text': text,
     if (attachments.isNotEmpty) 'attachmentIds': attachments,
-    'permissionMode': permissionMode.wireName,
+    'engine': engine.wireName,
+    if (engine == SessionEngine.claude)
+      'permissionMode': permissionMode.wireName,
+    if (engine == SessionEngine.codex) 'sandboxMode': codexSandboxMode.wireName,
     'sessionId': sessionId,
-    'model': ?model.wireName,
+    if (engine == SessionEngine.claude && model.wireName != null)
+      'model': model.wireName!,
+    'effort': effort.wireName,
   };
 }
 
@@ -5913,50 +7423,15 @@ class ActivityBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (message.activityKind == ActivityKind.thinking) {
-      if (message.activityState == ActivityState.running) {
-        return TaskRailFrame(
-          color: AppColors.terracotta,
-          active: true,
-          compact: true,
-          child: AssistantBubbleFrame(
-            bubbleKey: const ValueKey('thinking-bubble'),
-            compact: true,
-            child: ThinkingIndicator(
-              initialElapsedSeconds: elapsedSecondsSince(runStartedAt),
-            ),
-          ),
-        );
+      // Only live thinking is useful; done/error thinking is noise next to replies.
+      if (message.activityState != ActivityState.running) {
+        return const SizedBox.shrink();
       }
-      final thinkingTone = message.activityState == ActivityState.error
-          ? AppColors.danger
-          : AppColors.inactive;
-      return TaskRailFrame(
-        color: thinkingTone,
-        compact: true,
-        child: AssistantBubbleFrame(
-          bubbleKey: const ValueKey('thinking-complete'),
-          compact: true,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                message.activityState == ActivityState.error
-                    ? LucideIcons.circleAlert
-                    : LucideIcons.check,
-                size: 17,
-                color: thinkingTone,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                message.text,
-                style: const TextStyle(
-                  color: AppColors.muted,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
+      return Padding(
+        key: const ValueKey('thinking-bubble'),
+        padding: const EdgeInsets.fromLTRB(8, 2, 8, 2),
+        child: ThinkingIndicator(
+          initialElapsedSeconds: elapsedSecondsSince(runStartedAt),
         ),
       );
     }
@@ -6097,7 +7572,7 @@ class ActivityBlock extends StatelessWidget {
             children: [
               Align(
                 alignment: Alignment.centerLeft,
-                child: SelectableText(
+                child: Text(
                   detail,
                   style: const TextStyle(
                     color: AppColors.ink,
@@ -6111,6 +7586,224 @@ class ActivityBlock extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class ActivityTimelineCard extends StatefulWidget {
+  const ActivityTimelineCard({super.key, required this.activities});
+
+  final List<TranscriptMessage> activities;
+
+  @override
+  State<ActivityTimelineCard> createState() => _ActivityTimelineCardState();
+}
+
+class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
+  static const collapsedVisibleCount = 2;
+
+  bool expanded = false;
+  final Set<String> expandedDetails = <String>{};
+
+  bool hasDetail(TranscriptMessage message) =>
+      (message.activityDetail ?? '').trim().isNotEmpty;
+
+  void toggleDetail(String activityId) {
+    setState(() {
+      if (!expandedDetails.add(activityId)) expandedDetails.remove(activityId);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final activities = widget.activities;
+    final hiddenCount =
+        expanded || activities.length <= collapsedVisibleCount
+        ? 0
+        : activities.length - collapsedVisibleCount;
+    return Material(
+      color: AppColors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppRadii.surface),
+        side: const BorderSide(color: AppColors.line),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(10, 6, 12, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (hiddenCount > 0)
+              InkWell(
+                key: const ValueKey('activity-timeline-expand'),
+                onTap: () => setState(() => expanded = true),
+                borderRadius: BorderRadius.circular(AppRadii.control),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(
+                        LucideIcons.history,
+                        size: 13,
+                        color: AppColors.terracottaDeep,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        '显示之前 $hiddenCount 步',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.terracottaDeep,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            for (var i = hiddenCount; i < activities.length; i++)
+              _buildStep(
+                activities[i],
+                isFirst: i == hiddenCount,
+                isLast: i == activities.length - 1,
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStep(
+    TranscriptMessage activity, {
+    required bool isFirst,
+    required bool isLast,
+  }) {
+    final detail = activity.activityDetail;
+    final hasVisibleDetail = hasDetail(activity);
+    final activityId = activity.activityId ?? activity.text;
+    final isOpen = expandedDetails.contains(activityId);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        InkWell(
+          onTap: hasVisibleDetail ? () => toggleDetail(activityId) : null,
+          borderRadius: BorderRadius.circular(AppRadii.control),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(
+                  width: 21,
+                  child: Stack(
+                    children: [
+                      // Connector segment spans the full row so adjacent
+                      // steps form one continuous line without an outer
+                      // Stack; detail text stays outside this row.
+                      Positioned(
+                        top: isFirst ? 14 : 0,
+                        bottom: isLast ? 14 : 0,
+                        left: 10,
+                        width: 1,
+                        child: const ColoredBox(color: AppColors.line),
+                      ),
+                      // Opaque backdrop masks the line behind the icon.
+                      Center(
+                        child: Container(
+                          color: AppColors.surface,
+                          padding: const EdgeInsets.symmetric(vertical: 3),
+                          child: _activityIcon(activity),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(7, 5, 0, 5),
+                    child: Row(
+                      children: [
+                        Expanded(child: _activityTitle(activity)),
+                        if (hasVisibleDetail)
+                          Icon(
+                            isOpen
+                                ? LucideIcons.chevronUp
+                                : LucideIcons.chevronDown,
+                            size: 15,
+                            color: AppColors.muted,
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (isOpen && hasVisibleDetail)
+          Padding(
+            key: ValueKey('activity-detail-$activityId'),
+            padding: const EdgeInsets.only(left: 28, top: 1, bottom: 4),
+            child: Text(
+              detail!,
+              style: const TextStyle(
+                color: AppColors.ink,
+                fontSize: 12,
+                height: 1.45,
+                fontFamily: AppTypography.codeFontFamily,
+                fontFamilyFallback: AppTypography.codeFontFamilyFallback,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _activityIcon(TranscriptMessage activity) {
+    return switch (activity.activityState) {
+      // Keep Material spinner: reliable dispose in tests, no pending timers.
+      ActivityState.running => const SizedBox.square(
+        dimension: 15,
+        child: CircularProgressIndicator(
+          strokeWidth: 1.8,
+          color: AppColors.terracotta,
+        ),
+      ),
+      ActivityState.done => const Icon(
+        LucideIcons.check,
+        size: 15,
+        color: AppColors.muted,
+      ),
+      ActivityState.error => const Icon(
+        LucideIcons.circleAlert,
+        size: 15,
+        color: AppColors.danger,
+      ),
+      ActivityState.stopped => const Icon(
+        LucideIcons.square,
+        size: 14,
+        color: AppColors.muted,
+      ),
+      null => const SizedBox.square(dimension: 15),
+    };
+  }
+
+  Widget _activityTitle(TranscriptMessage activity) {
+    final isError = activity.activityState == ActivityState.error;
+    return Text(
+      activity.text,
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      style: TextStyle(
+        color: isError ? AppColors.danger : AppColors.muted,
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+        height: 1.35,
       ),
     );
   }
@@ -6138,7 +7831,7 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
     elapsedSeconds = widget.initialElapsedSeconds;
     animation = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 850),
+      duration: AppMotion.signal,
     );
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => elapsedSeconds += 1);
@@ -6164,7 +7857,7 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
         ..stop()
         ..value = 0.5;
     } else if (!animation.isAnimating) {
-      animation.repeat(reverse: true);
+      animation.repeat();
     }
   }
 
@@ -6177,57 +7870,113 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
 
   @override
   Widget build(BuildContext context) {
-    final body = Semantics(
-      liveRegion: true,
-      label: '正在思考，已用 $elapsedSeconds 秒',
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          AnimatedBuilder(
+    final elapsedLabel = elapsedSeconds <= 0
+        ? '本轮刚开始'
+        : '本轮已运行 $elapsedSeconds 秒';
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Semantics(
+          liveRegion: true,
+          label: '正在思考',
+          excludeSemantics: true,
+          child: AnimatedBuilder(
             animation: animation,
-            builder: (context, child) {
-              final value = animation.value;
-              return Opacity(
-                opacity: 0.52 + value * 0.48,
-                child: Transform.rotate(
-                  angle: (value - 0.5) * 0.18,
-                  child: Transform.scale(
-                    scale: 0.88 + value * 0.12,
-                    child: child,
-                  ),
-                ),
+            builder: (context, _) {
+              final frame = (animation.value * 12)
+                  .floor()
+                  .clamp(0, 11)
+                  .toInt();
+              return CustomPaint(
+                key: const ValueKey('thinking-icon'),
+                size: const Size.square(16),
+                painter: _ThinkingBloomPainter(frame),
               );
             },
-            child: const Icon(
-              LucideIcons.brain,
-              key: ValueKey('thinking-icon'),
-              size: 18,
-              color: AppColors.terracotta,
-            ),
           ),
-          const SizedBox(width: 9),
-          const Text(
-            '正在思考',
-            style: TextStyle(
-              color: AppColors.ink,
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(width: 9),
-          Text(
-            '$elapsedSeconds 秒',
+        ),
+        const SizedBox(width: 7),
+        Semantics(
+          label: elapsedLabel,
+          excludeSemantics: true,
+          child: Text(
+            elapsedSeconds <= 0 ? '思考中' : '思考中 · $elapsedLabel',
             key: const ValueKey('thinking-elapsed'),
             style: const TextStyle(
               color: AppColors.muted,
-              fontSize: 12,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              height: 1.3,
               fontFeatures: [FontFeature.tabularFigures()],
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
-    return body;
+  }
+}
+
+class _ThinkingBloomPainter extends CustomPainter {
+  const _ThinkingBloomPainter(this.frame);
+
+  final int frame;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final stage = frame <= 5 ? frame : 11 - frame;
+    final center = size.center(Offset.zero);
+    if (stage == 0) {
+      canvas.drawCircle(
+        center,
+        1.45,
+        Paint()..color = AppColors.terracotta,
+      );
+      return;
+    }
+
+    final spokes = switch (stage) {
+      1 => 4,
+      2 || 4 => 8,
+      _ => 6,
+    };
+    final radius = switch (stage) {
+      1 => 4.1,
+      2 => 4.8,
+      3 => 5.2,
+      4 => 5.5,
+      _ => 5.8,
+    };
+    final rotation = switch (stage) {
+      1 => pi / 4,
+      2 => pi / 8,
+      3 => pi / 6,
+      _ => 0.0,
+    };
+    final paint = Paint()
+      ..color = AppColors.terracotta
+      ..strokeCap = StrokeCap.round
+      ..strokeWidth = stage == 5 ? 1.9 : 1.55;
+
+    for (var index = 0; index < spokes; index++) {
+      final angle = rotation + index * 2 * pi / spokes;
+      final direction = Offset(cos(angle), sin(angle));
+      final lengthFactor = spokes == 8 && index.isOdd ? 0.74 : 1.0;
+      canvas.drawLine(
+        center + direction * 1.35,
+        center + direction * radius * lengthFactor,
+        paint,
+      );
+    }
+    canvas.drawCircle(
+      center,
+      1.05,
+      Paint()..color = AppColors.terracotta,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ThinkingBloomPainter oldDelegate) {
+    return oldDelegate.frame != frame;
   }
 }
 
@@ -6251,14 +8000,19 @@ class PromptBar extends StatelessWidget {
     required this.permissionMode,
     required this.allowBypassPermissions,
     this.modelName,
+    this.engine = SessionEngine.claude,
+    this.codexSandboxMode = CodexSandboxMode.readOnly,
     this.selectedModel = ClaudeModelPreference.followComputer,
+    this.selectedEffort = ClaudeEffortPreference.automatic,
     this.presentation,
     this.suggestionMaxHeight = 292,
     required this.onPermissionModeSelected,
+    this.onCodexSandboxModeSelected,
     required this.onCommandSelected,
     this.onAddAttachment,
     this.onRemoveAttachment,
     this.onModelPressed,
+    this.onEffortSelected,
     required this.onReconnect,
     required this.onSend,
     required this.onStop,
@@ -6275,20 +8029,33 @@ class PromptBar extends StatelessWidget {
   final PermissionMode permissionMode;
   final bool allowBypassPermissions;
   final String? modelName;
+  final SessionEngine engine;
+  final CodexSandboxMode codexSandboxMode;
   final ClaudeModelPreference selectedModel;
+  final ClaudeEffortPreference selectedEffort;
   final ConsolePresentation? presentation;
   final double suggestionMaxHeight;
   final ValueChanged<PermissionMode> onPermissionModeSelected;
+  final ValueChanged<CodexSandboxMode>? onCodexSandboxModeSelected;
   final ValueChanged<String> onCommandSelected;
   final VoidCallback? onAddAttachment;
   final ValueChanged<AttachmentDraft>? onRemoveAttachment;
   final VoidCallback? onModelPressed;
+  final ValueChanged<ClaudeEffortPreference>? onEffortSelected;
   final VoidCallback onReconnect;
   final VoidCallback onSend;
   final VoidCallback onStop;
 
   @override
   Widget build(BuildContext context) {
+    final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
+    final composerRadius = BorderRadius.vertical(
+      top: const Radius.circular(AppRadii.composerFloat),
+      bottom: Radius.circular(keyboardVisible ? 0 : AppRadii.composerFloat),
+    );
+    final composerShadow = keyboardVisible
+        ? const <BoxShadow>[]
+        : AppElevation.floatingComposer();
     final console =
         presentation ??
         ConsolePresentation.resolve(
@@ -6306,7 +8073,7 @@ class PromptBar extends StatelessWidget {
           color: Colors.transparent,
           child: InkWell(
             onTap: onReconnect,
-            borderRadius: BorderRadius.circular(AppRadii.surface),
+            borderRadius: composerRadius,
             child: Ink(
               key: const ValueKey('composer'),
               width: double.infinity,
@@ -6314,9 +8081,11 @@ class PromptBar extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 10),
               decoration: BoxDecoration(
                 color: AppColors.surfaceElevated,
-                borderRadius: BorderRadius.circular(AppRadii.surface),
-                border: Border.all(color: AppColors.line.withValues(alpha: 0.8)),
-                boxShadow: AppElevation.softCard(alpha: 0.05),
+                borderRadius: composerRadius,
+                border: Border.all(
+                  color: AppColors.line.withValues(alpha: 0.40),
+                ),
+                boxShadow: composerShadow,
               ),
               child: Row(
                 children: [
@@ -6381,23 +8150,29 @@ class PromptBar extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               if (showSuggestions) ...[
-                CommandSuggestions(
-                  commands: matchingCommands,
-                  loading: commands.isEmpty,
-                  maxHeight: suggestionMaxHeight,
-                  onSelected: onCommandSelected,
+                Flexible(
+                  fit: FlexFit.loose,
+                  child: CommandSuggestions(
+                    commands: matchingCommands,
+                    loading: commands.isEmpty,
+                    maxHeight: suggestionMaxHeight,
+                    onSelected: onCommandSelected,
+                  ),
                 ),
                 const SizedBox(height: 6),
               ],
               Container(
                 key: const ValueKey('composer'),
                 constraints: const BoxConstraints(minHeight: AppSizes.composer),
-                padding: const EdgeInsets.fromLTRB(14, 12, 10, 8),
+                padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
                 decoration: BoxDecoration(
+                  // Opaque dock: translucent blend over scrolling text tanks FPS.
                   color: AppColors.surfaceElevated,
-                  borderRadius: BorderRadius.circular(AppRadii.surface),
-                  border: Border.all(color: AppColors.line.withValues(alpha: 0.8)),
-                  boxShadow: AppElevation.softCard(alpha: 0.05),
+                  borderRadius: composerRadius,
+                  border: Border.all(
+                    color: AppColors.line.withValues(alpha: 0.40),
+                  ),
+                  boxShadow: composerShadow,
                 ),
                 // Pin content to the box edges: text up top, tools on the floor.
                 alignment: Alignment.bottomCenter,
@@ -6444,27 +8219,78 @@ class PromptBar extends StatelessWidget {
                       children: [
                         _ComposerIconButton(
                           key: const ValueKey('composer-expand-button'),
-                          tooltip: '添加内容和设置权限',
+                          tooltip: '添加附件',
                           icon: LucideIcons.plus,
                           onPressed: console.canCompose
-                              ? () => showComposerToolsSheet(
-                                  context,
-                                  permissionMode: permissionMode,
-                                  allowBypassPermissions:
-                                      allowBypassPermissions,
-                                  onPermissionModeSelected:
-                                      onPermissionModeSelected,
-                                  onAddAttachment: onAddAttachment,
-                                )
+                              ? onAddAttachment
                               : null,
                         ),
-                        const SizedBox(width: AppSpacing.xs),
-                        _ComposerModelButton(
-                          modelName: modelName,
-                          selectedModel: selectedModel,
-                          onPressed: onModelPressed,
+                        _ComposerEffortButton(
+                          effort: selectedEffort,
+                          enabled:
+                              console.canCompose && onEffortSelected != null,
+                          onPressed: () => showClaudeEffortPicker(
+                            context,
+                            selected: selectedEffort,
+                            engine: engine,
+                            onSelected: onEffortSelected!,
+                          ),
                         ),
-                        const Spacer(),
+                        const SizedBox(width: AppSpacing.xxs),
+                        // One flex slot: keep model + permission chips adjacent
+                        // (two sibling Flexibles split free space and look far apart).
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(
+                                  child: _ComposerModelButton(
+                                    engine: engine,
+                                    modelName: modelName,
+                                    selectedModel: selectedModel,
+                                    onPressed: engine == SessionEngine.claude
+                                        ? onModelPressed
+                                        : null,
+                                  ),
+                                ),
+                                const SizedBox(width: AppSpacing.xxs),
+                                if (engine == SessionEngine.codex)
+                                  Flexible(
+                                    child: _ComposerPermissionButton(
+                                      sandboxMode: codexSandboxMode,
+                                      enabled:
+                                          console.canCompose &&
+                                          onCodexSandboxModeSelected != null,
+                                      onPressed: () =>
+                                          showCodexSandboxModePicker(
+                                            context,
+                                            selected: codexSandboxMode,
+                                            onSelected:
+                                                onCodexSandboxModeSelected!,
+                                          ),
+                                    ),
+                                  )
+                                else
+                                  Flexible(
+                                    child: _ComposerPermissionButton(
+                                      mode: permissionMode,
+                                      enabled: console.canCompose,
+                                      onPressed: () => showPermissionModePicker(
+                                        context,
+                                        selected: permissionMode,
+                                        allowBypassPermissions:
+                                            allowBypassPermissions,
+                                        onSelected: onPermissionModeSelected,
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: AppSpacing.xs),
                         if (console.showsStop)
                           SignalPressEffect(
                             enabled: console.canStop,
@@ -6583,18 +8409,58 @@ class _ComposerIconButton extends StatelessWidget {
           width: AppSizes.iconControl,
           height: AppSizes.iconControl,
           decoration: BoxDecoration(
-            color: enabled
-                ? AppColors.composerControlFill
-                : AppColors.paper,
+            color: enabled ? AppColors.composerControlFill : AppColors.paper,
             shape: BoxShape.circle,
           ),
           alignment: Alignment.center,
           child: Icon(
             icon,
             size: 20,
-            color: enabled
-                ? AppColors.composerControlInk
-                : AppColors.inactive,
+            color: enabled ? AppColors.composerControlInk : AppColors.inactive,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ComposerEffortButton extends StatelessWidget {
+  const _ComposerEffortButton({
+    required this.effort,
+    required this.enabled,
+    required this.onPressed,
+  });
+
+  final ClaudeEffortPreference effort;
+  final bool enabled;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final explicit = effort != ClaudeEffortPreference.automatic;
+    return SizedBox.square(
+      dimension: AppSizes.touchTarget,
+      child: IconButton(
+        key: const ValueKey('composer-effort-button'),
+        onPressed: enabled ? onPressed : null,
+        tooltip: '思考强度：${effort.label}',
+        padding: EdgeInsets.zero,
+        icon: Container(
+          width: AppSizes.iconControl,
+          height: AppSizes.iconControl,
+          decoration: BoxDecoration(
+            color: enabled ? AppColors.composerControlFill : AppColors.paper,
+            shape: BoxShape.circle,
+          ),
+          alignment: Alignment.center,
+          child: Icon(
+            LucideIcons.lightbulb,
+            size: 20,
+            color: !enabled
+                ? AppColors.inactive
+                : explicit
+                ? AppColors.terracottaDeep
+                : AppColors.composerControlInk,
           ),
         ),
       ),
@@ -6604,24 +8470,33 @@ class _ComposerIconButton extends StatelessWidget {
 
 class _ComposerModelButton extends StatelessWidget {
   const _ComposerModelButton({
+    required this.engine,
     required this.modelName,
     required this.selectedModel,
     this.onPressed,
   });
 
+  final SessionEngine engine;
   final String? modelName;
   final ClaudeModelPreference selectedModel;
   final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
-    final label = selectedModel == ClaudeModelPreference.followComputer
+    final label = engine == SessionEngine.codex
+        ? modelName == null
+              ? 'Codex'
+              : formatModelName(modelName!)
+        : selectedModel == ClaudeModelPreference.followComputer
         ? modelName == null
               ? '模型'
               : formatModelName(modelName!)
         : selectedModel.label;
     return ConstrainedBox(
-      constraints: const BoxConstraints(minHeight: AppSizes.touchTarget),
+      constraints: const BoxConstraints(
+        minHeight: AppSizes.touchTarget,
+        maxWidth: 148,
+      ),
       child: TextButton(
         key: const ValueKey('composer-model-button'),
         onPressed: onPressed,
@@ -6631,7 +8506,7 @@ class _ComposerModelButton extends StatelessWidget {
           disabledForegroundColor: AppColors.inactive,
           disabledBackgroundColor: AppColors.paper,
           minimumSize: const Size(0, AppSizes.iconControl),
-          maximumSize: const Size(148, AppSizes.touchTarget),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           padding: const EdgeInsets.symmetric(horizontal: 12),
           visualDensity: VisualDensity.compact,
           textStyle: const TextStyle(
@@ -6647,63 +8522,153 @@ class _ComposerModelButton extends StatelessWidget {
   }
 }
 
-Future<void> showComposerToolsSheet(
+Future<void> showClaudeEffortPicker(
   BuildContext context, {
-  required PermissionMode permissionMode,
-  required bool allowBypassPermissions,
-  required ValueChanged<PermissionMode> onPermissionModeSelected,
-  VoidCallback? onAddAttachment,
+  required ClaudeEffortPreference selected,
+  required ValueChanged<ClaudeEffortPreference> onSelected,
+  SessionEngine engine = SessionEngine.claude,
 }) async {
-  final action = await showModalBottomSheet<String>(
+  final effort = await showModalBottomSheet<ClaudeEffortPreference>(
     context: context,
     showDragHandle: true,
+    isScrollControlled: true,
     builder: (sheetContext) => SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
-              '输入选项',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            Text(
+              engine == SessionEngine.codex ? 'Codex 思考强度' : 'Claude Code 思考强度',
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
             ),
-            const SizedBox(height: 8),
-            ListTile(
-              key: const ValueKey('composer-add-attachment'),
-              contentPadding: EdgeInsets.zero,
-              enabled: onAddAttachment != null,
-              leading: const Icon(LucideIcons.paperclip),
-              title: const Text('添加附件'),
-              onTap: onAddAttachment == null
-                  ? null
-                  : () => Navigator.pop(sheetContext, 'attachment'),
+            const SizedBox(height: 4),
+            Text(
+              engine == SessionEngine.codex
+                  ? '映射到 Codex 的 model_reasoning_effort 配置。'
+                  : '与 /effort 对齐；模型不支持某档时由 Claude Code 自动降级。',
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontSize: 13,
+                height: 1.4,
+              ),
             ),
-            ListTile(
-              key: const ValueKey('permission-mode-chip'),
-              contentPadding: EdgeInsets.zero,
-              leading: Icon(permissionMode.icon),
-              title: const Text('权限模式'),
-              subtitle: Text(permissionMode.label),
-              trailing: const Icon(LucideIcons.chevronRight),
-              onTap: () => Navigator.pop(sheetContext, 'permission'),
-            ),
+            const SizedBox(height: 10),
+            for (final item in ClaudeEffortPreference.values)
+              ListTile(
+                key: ValueKey('effort-option-${item.wireName}'),
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  LucideIcons.lightbulb,
+                  color: item == ClaudeEffortPreference.automatic
+                      ? AppColors.muted
+                      : AppColors.accent,
+                ),
+                title: Row(
+                  children: [
+                    Text(item.label),
+                    const SizedBox(width: 8),
+                    Text(
+                      item.wireName,
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 12,
+                        fontFamily: AppTypography.codeFontFamily,
+                        fontFamilyFallback:
+                            AppTypography.codeFontFamilyFallback,
+                      ),
+                    ),
+                  ],
+                ),
+                subtitle: Text(
+                  effortPreferenceDescription(
+                    item,
+                    engineLabel: engine == SessionEngine.codex
+                        ? 'Codex'
+                        : 'Claude Code',
+                  ),
+                ),
+                trailing: item == selected
+                    ? const Icon(LucideIcons.check, color: AppColors.accent)
+                    : null,
+                onTap: () => Navigator.pop(sheetContext, item),
+              ),
           ],
         ),
       ),
     ),
   );
-  if (!context.mounted || action == null) return;
-  if (action == 'attachment') {
-    onAddAttachment?.call();
-    return;
+  if (effort == null || !context.mounted) return;
+  onSelected(effort);
+}
+
+class _ComposerPermissionButton extends StatelessWidget {
+  const _ComposerPermissionButton({
+    this.mode,
+    this.sandboxMode,
+    required this.enabled,
+    required this.onPressed,
+  });
+
+  final PermissionMode? mode;
+  final CodexSandboxMode? sandboxMode;
+  final bool enabled;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final danger =
+        mode == PermissionMode.bypassPermissions ||
+        sandboxMode == CodexSandboxMode.dangerFullAccess;
+    final icon = sandboxMode?.icon ?? mode?.icon ?? LucideIcons.shield;
+    final label = sandboxMode?.label ?? mode?.label ?? '权限';
+    final ink = !enabled
+        ? AppColors.inactive
+        : danger
+        ? AppColors.stop
+        : AppColors.composerControlInk;
+    final fill = !enabled
+        ? AppColors.paper
+        : danger
+        ? AppColors.stop.withValues(alpha: 0.12)
+        : AppColors.composerControlFill;
+    return ConstrainedBox(
+      constraints: const BoxConstraints(
+        minHeight: AppSizes.touchTarget,
+        maxWidth: 132,
+      ),
+      child: TextButton(
+        key: const ValueKey('permission-mode-chip'),
+        onPressed: enabled ? onPressed : null,
+        style: TextButton.styleFrom(
+          foregroundColor: ink,
+          backgroundColor: fill,
+          disabledForegroundColor: AppColors.inactive,
+          disabledBackgroundColor: AppColors.paper,
+          minimumSize: const Size(0, AppSizes.iconControl),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          visualDensity: VisualDensity.compact,
+          textStyle: const TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            height: 1.2,
+          ),
+          shape: const StadiumBorder(),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: ink),
+            const SizedBox(width: 5),
+            Flexible(
+              child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+            ),
+          ],
+        ),
+      ),
+    );
   }
-  await showPermissionModePicker(
-    context,
-    selected: permissionMode,
-    allowBypassPermissions: allowBypassPermissions,
-    onSelected: onPermissionModeSelected,
-  );
 }
 
 class PendingAttachmentStrip extends StatelessWidget {
@@ -6837,76 +8802,12 @@ extension PermissionModePresentation on PermissionMode {
   };
 }
 
-class PermissionModeChip extends StatelessWidget {
-  const PermissionModeChip({
-    super.key,
-    required this.mode,
-    required this.enabled,
-    required this.onPressed,
-    this.inverted = false,
-  });
-
-  final PermissionMode mode;
-  final bool enabled;
-  final VoidCallback onPressed;
-  final bool inverted;
-
-  @override
-  Widget build(BuildContext context) {
-    final danger = mode == PermissionMode.bypassPermissions;
-    final tone = danger ? AppColors.stop : AppColors.accent;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        key: const ValueKey('permission-mode-chip'),
-        onTap: enabled ? onPressed : null,
-        borderRadius: BorderRadius.circular(AppRadii.pill),
-        child: Ink(
-          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
-          decoration: BoxDecoration(
-            color: enabled
-                ? inverted
-                      ? const Color(0xFF2A2A27)
-                      : AppColors.porcelainMuted
-                : AppColors.line.withValues(alpha: 0.54),
-            borderRadius: BorderRadius.circular(AppRadii.pill),
-            border: Border.all(
-              color: inverted
-                  ? Colors.white.withValues(alpha: 0.12)
-                  : tone.withValues(alpha: 0.16),
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(mode.icon, size: 15, color: tone),
-              const SizedBox(width: 6),
-              Text(
-                mode.label,
-                style: TextStyle(
-                  color: danger
-                      ? AppColors.stop
-                      : inverted
-                      ? AppColors.porcelain
-                      : AppColors.ink,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(width: 2),
-              Icon(
-                LucideIcons.chevronDown,
-                size: 16,
-                color: inverted
-                    ? AppColors.codeMuted
-                    : AppColors.muted.withValues(alpha: 0.8),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
+extension CodexSandboxModePresentation on CodexSandboxMode {
+  IconData get icon => switch (this) {
+    CodexSandboxMode.readOnly => LucideIcons.eye,
+    CodexSandboxMode.workspaceWrite => LucideIcons.pencil,
+    CodexSandboxMode.dangerFullAccess => LucideIcons.triangleAlert,
+  };
 }
 
 Future<void> showPermissionModePicker(
@@ -6971,6 +8872,83 @@ Future<void> showPermissionModePicker(
       builder: (dialogContext) => AlertDialog(
         title: const Text('本次任务跳过权限检查'),
         content: const Text('Claude Code 将能直接修改文件和执行命令。任务结束后会自动恢复询问权限。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: FilledButton.styleFrom(backgroundColor: AppColors.stop),
+            child: const Text('仅本次开启'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+  }
+  onSelected(mode);
+}
+
+Future<void> showCodexSandboxModePicker(
+  BuildContext context, {
+  required CodexSandboxMode selected,
+  required ValueChanged<CodexSandboxMode> onSelected,
+}) async {
+  final mode = await showModalBottomSheet<CodexSandboxMode>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (sheetContext) => SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Codex 沙箱模式',
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Codex 非交互执行不会在任务中途弹出权限审批。',
+              style: TextStyle(
+                color: AppColors.muted,
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 10),
+            for (final item in CodexSandboxMode.values)
+              ListTile(
+                key: ValueKey('codex-sandbox-${item.wireName}'),
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  item.icon,
+                  color: item == CodexSandboxMode.dangerFullAccess
+                      ? AppColors.stop
+                      : AppColors.accent,
+                ),
+                title: Text(item.label),
+                subtitle: Text(item.description),
+                trailing: item == selected
+                    ? const Icon(LucideIcons.check, color: AppColors.accent)
+                    : null,
+                onTap: () => Navigator.pop(sheetContext, item),
+              ),
+          ],
+        ),
+      ),
+    ),
+  );
+  if (mode == null || !context.mounted) return;
+  if (mode == CodexSandboxMode.dangerFullAccess) {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('为本次任务关闭沙箱'),
+        content: const Text('Codex 将能访问工作区外的文件和命令。任务发送后会恢复为只读。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
@@ -7275,12 +9253,20 @@ class _KeyboardResizeBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final media = MediaQuery.of(context);
+    final bottomInset = media.viewInsets.bottom;
+    final stableViewInsets = EdgeInsets.fromLTRB(
+      media.viewInsets.left > 0 ? 1 : 0,
+      media.viewInsets.top > 0 ? 1 : 0,
+      media.viewInsets.right > 0 ? 1 : 0,
+      bottomInset > 0 ? 1 : 0,
+    );
     return Padding(
       padding: EdgeInsets.only(bottom: bottomInset),
-      child: MediaQuery.removeViewInsets(
-        context: context,
-        removeBottom: true,
+      child: MediaQuery(
+        // Descendants only need keyboard visibility. Keeping the animated
+        // height here would rebuild the full transcript on every IME frame.
+        data: media.copyWith(viewInsets: stableViewInsets),
         child: child,
       ),
     );
@@ -7631,6 +9617,16 @@ String errorText(Object err) {
   return '配对失败，请重新生成二维码';
 }
 
+bool isBlankAssistantMessage(TranscriptMessage message) {
+  return message.role == MessageRole.assistant && message.text.trim().isEmpty;
+}
+
+bool isHiddenThinkingActivity(TranscriptMessage message) {
+  return message.role == MessageRole.activity &&
+      message.activityKind == ActivityKind.thinking &&
+      message.activityState != ActivityState.running;
+}
+
 bool hasAssistantReplyAfterLastUser(List<TranscriptMessage> messages) {
   final lastUser = messages.lastIndexWhere(
     (message) => message.role == MessageRole.user,
@@ -7638,7 +9634,11 @@ bool hasAssistantReplyAfterLastUser(List<TranscriptMessage> messages) {
   if (lastUser < 0) return true;
   return messages
       .skip(lastUser + 1)
-      .any((message) => message.role == MessageRole.assistant);
+      .any(
+        (message) =>
+            message.role == MessageRole.assistant &&
+            message.text.trim().isNotEmpty,
+      );
 }
 
 void beginPrompt(

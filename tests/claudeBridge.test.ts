@@ -10,6 +10,7 @@ import {
   extractClaudePermissionRequest,
   extractClaudeSessionInfo,
   isMissingConversationError,
+  normalizeClaudeEffort,
   normalizeClaudeModel,
   permissionControlResponse,
   restoreClaudeSessionInfo,
@@ -33,12 +34,13 @@ test('ClaudeBridge reports a missing CLI as a run result instead of throwing', a
   assert.equal(bridge.isRunning(), false);
 });
 
-test('ClaudeBridge resumes the session id returned by the previous run', async () => {
+test('ClaudeBridge reuses one streaming process across turns', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-remote-bridge-resume-'));
   const logPath = join(dir, 'args.jsonl');
   const fixture = join(process.cwd(), 'tests', 'fixtures', 'fakeClaude.mjs');
+  let bridge: ClaudeBridge | undefined;
   try {
-    const bridge = new ClaudeBridge({
+    bridge = new ClaudeBridge({
       claudeBin: process.execPath,
       claudeArgs: [fixture, `--fake-log=${logPath}`],
       workspaceDir: dir,
@@ -58,7 +60,6 @@ test('ClaudeBridge resumes the session id returned by the previous run', async (
     const second = await bridge.run({
       ...callbacks,
       sessionId: first.sessionId,
-      model: 'opus',
     });
     assert.equal(second.exitCode, 0);
 
@@ -66,13 +67,10 @@ test('ClaudeBridge resumes the session id returned by the previous run', async (
       .trim()
       .split(/\r?\n/)
       .map(line => JSON.parse(line) as string[]);
-    assert.deepEqual(invocations[1].slice(-4), [
-      '--model',
-      'opus',
-      '--resume',
-      'fake-session-id',
-    ]);
+    assert.equal(invocations.length, 1);
+    assert.equal(invocations[0].includes('--resume'), false);
   } finally {
+    bridge?.close();
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   }
 });
@@ -109,6 +107,46 @@ test('Claude model overrides reject unsafe CLI values', () => {
   assert.equal(normalizeClaudeModel(undefined), undefined);
   assert.throws(() => normalizeClaudeModel('--dangerously-skip-permissions'));
   assert.throws(() => normalizeClaudeModel('opus sonnet'));
+});
+
+test('Claude effort accepts only Claude Code effort levels', () => {
+  assert.equal(normalizeClaudeEffort('auto'), 'auto');
+  assert.equal(normalizeClaudeEffort('xhigh'), 'xhigh');
+  assert.equal(normalizeClaudeEffort(undefined), undefined);
+  assert.throws(() => normalizeClaudeEffort('ultracode'));
+  assert.throws(() => normalizeClaudeEffort('--model'));
+});
+
+test('ClaudeBridge resets automatic effort through the Claude Code environment', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-bridge-effort-'));
+  const envLogPath = join(dir, 'env.jsonl');
+  const fixture = join(process.cwd(), 'tests', 'fixtures', 'fakeClaude.mjs');
+  let bridge: ClaudeBridge | undefined;
+  try {
+    bridge = new ClaudeBridge({
+      claudeBin: process.execPath,
+      claudeArgs: [fixture, `--fake-envlog=${envLogPath}`],
+      workspaceDir: dir,
+    });
+    await bridge.run({
+      prompt: 'test',
+      effort: 'auto',
+      permissionMode: 'manual',
+      onEvent: () => {},
+      onText: () => {},
+      onSessionId: () => {},
+      onPermissionRequest: () => {},
+      onPermissionClosed: () => {},
+    });
+
+    const environment = JSON.parse((await readFile(envLogPath, 'utf8')).trim()) as {
+      effort: string | null;
+    };
+    assert.equal(environment.effort, 'auto');
+  } finally {
+    bridge?.close();
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
 });
 
 test('ClaudeBridge stop removes the full Claude process tree on Windows', {

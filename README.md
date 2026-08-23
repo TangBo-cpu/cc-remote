@@ -4,27 +4,20 @@
 
 扫码配对后，你就能在 Warm Console 里发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更——电脑端 daemon 继续跑 Claude Code CLI，手机只是随身控制台。
 
-[下载 Android APK · v1.2.0](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.2.0/cc-remote-v1.2.0-android.apk)
+[下载 Android APK · v1.3.0](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.0/cc-remote-v1.3.0-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.2.0)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.3.0)
 
 ```text
-手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI
+手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
 ```
-
-<p align="center">
-  <img src="docs/images/warm-console-home.png" alt="Warm Console 主界面" width="280" />
-</p>
-
-<p align="center"><sub>Warm Console · 已连接空状态：快捷任务 + 贴底 Composer</sub></p>
-
----
 
 ## 它能做什么
 
 | 场景 | 体验 |
 | --- | --- |
 | 出门前丢一条任务 | 手机发 prompt，桌面 Claude 继续跑；流式回复实时回传 |
+| 想换引擎 | 新建会话时选 Claude 或 Codex；Codex 会话用三档沙箱模式控制写入范围 |
 | 工具要权限 | 手机弹出决策卡：看命令摘要与工作目录，拒绝或仅本次允许 |
 | 想确认改了什么 | 只读工作区 + Git diff，手机不提交、不改文件 |
 | 断线了 | transcript 与草稿保留，自动重连；回来后从权威快照继续 |
@@ -38,22 +31,6 @@
 
 ---
 
-## 界面一览
-
-真机截图（v1.2.0 Warm Console）。
-
-| 主控制台 | 项目与会话 | 更多菜单 |
-| :---: | :---: | :---: |
-| <img src="docs/images/warm-console-home.png" width="220" alt="主控制台" /> | <img src="docs/images/06-sessions.png" width="220" alt="项目与会话" /> | <img src="docs/images/02-more-menu.png" width="220" alt="更多菜单" /> |
-
-| 设置（字号滑杆） | 工作区文件 | Git 修改 |
-| :---: | :---: | :---: |
-| <img src="docs/images/03-settings.png" width="220" alt="设置" /> | <img src="docs/images/04-workspace.png" width="220" alt="工作区" /> | <img src="docs/images/05-diff.png" width="220" alt="Diff" /> |
-
-暖白纸感背景、衬线阅读正文、更宽助手气泡、`terracotta-deep` 发送按钮；顶部只有圆形菜单 + 新建/更多胶囊，模型放在 Composer。设计规格见 [`DESIGN.md`](DESIGN.md)。
-
----
-
 ## 三分钟上手
 
 ### 前提
@@ -62,6 +39,7 @@
 | --- | --- |
 | Node.js 20+ | 跑 daemon（`npm install` / `npm run dev`） |
 | [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) | 本机已能执行 `claude` |
+| [Codex CLI](https://developers.openai.com/codex/cli) | 可选；使用 Codex 会话时需包含 `app-server` 命令 |
 | [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/) | 默认公网隧道；仅本机调试可加 `-NoTunnel` |
 | Android 手机 | 安装下方 APK（测试签名） |
 
@@ -100,7 +78,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v1.2.0 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.2.0/cc-remote-v1.2.0-android.apk)（测试签名，个人使用）
+1. 安装 [v1.3.0 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.0/cc-remote-v1.3.0-android.apk)（测试签名，个人使用）
 2. 允许「未知来源」安装
 3. 打开 App → 扫终端二维码 → 确认电脑名与服务地址 → 进入控制台
 
@@ -117,16 +95,21 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 - 扫码配对 / Secure Storage / 启动恢复
 - WebSocket 鉴权、自动重连、活动任务恢复
 - 多项目、多会话；完整项目路径展示
+- 会话级引擎切换：Claude Code 或 Codex CLI（新建会话时选择）
 - 会话 transcript 持久化与恢复
+- 跨项目会话全文搜索、匹配片段高亮与命中消息精确跳转
 
 **对话与控制**
 
 - 流式输出（合批推送 + 手机端轻渲染）
-- 停止任务、思考计时、安全化工具活动
+- Claude Streaming Input 与 Codex App Server 常驻复用，后续轮次不重复启动 CLI
+- 助手 Markdown 中的搜索来源 / 引用链接可点击，仅允许 `http` / `https` 并交给系统浏览器打开
+- 停止任务、暖陶花形思考状态与本轮运行计时、安全化工具活动
 - Claude Code 斜杠指令
 - 模型选择（Composer 暖色胶囊）
 - 六种权限模式 + 一次性工具审批
-- 图片 / 文件附件（每轮最多 5 个，单文件 ≤ 25MB）
+- Codex 沙箱模式三档（read-only / workspace-write / danger-full-access），danger 发送一次后自动回落 read-only
+- 图片 / 文件附件（每轮最多 5 个，单文件 ≤ 25MB；Codex 会话仅支持图片）
 
 **工作区（只读）**
 
@@ -142,7 +125,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 **当前不做 / 限制**
 
 - 单设备授权（多设备列表与单设备撤销未做）
-- 无会话全文搜索、无 FCM（进程被杀后无法推送）
+- 无 FCM（进程被杀后无法推送）
 - 工作区不可编辑、暂存、提交
 - APK 为测试签名，非应用商店包
 
@@ -200,12 +183,17 @@ cc-remote -DisableBypassPermissions
 | `WORKSPACE_DIR` | 当前目录 | 启动时注册并激活的项目 |
 | `DEVICE_NAME` | 主机名 | 配对显示名 |
 | `ALLOW_BYPASS_PERMISSIONS` | `1` | 是否允许手机选「跳过权限」 |
-| `CLAUDE_BIN` | `claude` | CLI 路径 |
+| `CLAUDE_BIN` | `claude` | Claude CLI 路径 |
+| `CODEX_BIN` / `CODEX_ARGS` | PATH 中的 `codex` | Codex CLI 路径与附加参数（`|` 分隔） |
+| `MAX_WS_CONNECTIONS` | `16` | WebSocket 同时连接上限；合法范围 `1–64`，非法值回退默认值 |
+| `WS_AUTH_TIMEOUT_MS` | `10000` | WebSocket 鉴权超时（毫秒）；合法范围 `1000–60000`，非法值回退默认值 |
+| `WS_HEARTBEAT_INTERVAL_MS` | `30000` | WebSocket heartbeat 间隔（毫秒）；合法范围 `1000–120000`，非法值回退默认值 |
+| `WS_CLOSE_TIMEOUT_MS` | `1000` | 授权变化后的关闭兜底超时（毫秒）；合法范围 `100–10000`，非法值回退默认值 |
 
 ### 协议与 API
 
 - 配对：终端一次性 JSON 二维码（5 分钟、单次）→ `POST /api/pair` → token 仅返回一次
-- 实时：`/ws` 首条必须 `{ "type": "auth", "token": "..." }`，之后 `prompt` / `stop` / `permission_response` 等
+- 实时：`/ws` 首条必须 `{ "type": "auth", "token": "..." }`，之后 `prompt` / `stop` / `permission_response` 等；prompt 可带 `engine`（须与会话引擎一致），Codex 会话另带 `sandboxMode`
 - HTTP：健康检查无需鉴权；项目、会话、附件、工作区等需 Bearer
 - 本地项目注册：`POST /api/local/projects/register` 仅本机脚本，不对手机开放
 
@@ -224,7 +212,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v1.2.0](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.2.0)**  
-APK：[`cc-remote-v1.2.0-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.2.0/cc-remote-v1.2.0-android.apk)
+当前公开版：**[v1.3.0](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.3.0)**
+APK：[`cc-remote-v1.3.0-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.0/cc-remote-v1.3.0-android.apk)
 
-Warm Console：暖白连续背景、Noto 衬线、elevated 助手气泡、连续字号、轻拟态、内容优先 transcript 与贴底 Composer。
+`v1.3.0` 在 Warm Console 基础上加入 Codex 引擎与沙箱模式、跨项目会话搜索、来源链接跳转、任务恢复状态、时间线与代码块工具栏，并通过 Claude Streaming Input 与 Codex App Server 常驻复用缩短后续轮次响应时间。

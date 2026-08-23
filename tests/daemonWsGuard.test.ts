@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
@@ -53,6 +55,169 @@ test('invalid first WebSocket frame closes the unauthenticated socket', async ()
   assert.equal(code, 1008);
 });
 
+test('malformed WebSocket frame does not terminate daemon', async () => {
+  const raw = await openRawWebSocket(daemon.baseUrl);
+
+  try {
+    const mask = Buffer.from([0x01, 0x02, 0x03, 0x04]);
+    const invalidUtf8 = Buffer.from([0xc0, 0xaf]);
+    const maskedPayload = Buffer.from(
+      invalidUtf8.map((value, index) => value ^ mask[index]),
+    );
+
+    raw.socket.write(Buffer.concat([
+      Buffer.from([0x81, 0x80 | maskedPayload.length]),
+      mask,
+      maskedPayload,
+    ]));
+
+    await new Promise(resolveTimeout => setTimeout(resolveTimeout, 500));
+
+    assert.equal(daemon.child.exitCode, null);
+  } finally {
+    raw.socket.destroy();
+  }
+});
+
+test('heartbeat terminates a peer that does not answer ping', async () => {
+  const heartbeatDaemon = await startGuardDaemon({
+    WS_HEARTBEAT_INTERVAL_MS: '1000',
+    WS_AUTH_TIMEOUT_MS: '5000',
+  });
+  let raw: Awaited<ReturnType<typeof openRawWebSocket>> | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    raw = await openRawWebSocket(heartbeatDaemon.baseUrl);
+    await Promise.race([
+      raw.closed,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('heartbeat_timeout')), 3000);
+      }),
+    ]);
+
+    assert.equal(heartbeatDaemon.child.exitCode, null);
+  } finally {
+    if (timeout != null) clearTimeout(timeout);
+    raw?.socket.destroy();
+    heartbeatDaemon.child.kill();
+    await Promise.race([
+      once(heartbeatDaemon.child, 'exit'),
+      new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
+    ]);
+    await rm(heartbeatDaemon.root, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+      retryDelay: 50,
+    });
+  }
+});
+
+test('invalid heartbeat interval falls back instead of creating a busy loop', async () => {
+  const invalidConfigDaemon = await startGuardDaemon({
+    WS_HEARTBEAT_INTERVAL_MS: 'NaN',
+    WS_AUTH_TIMEOUT_MS: '5000',
+  });
+  let raw: Awaited<ReturnType<typeof openRawWebSocket>> | undefined;
+  let keepAliveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    raw = await openRawWebSocket(invalidConfigDaemon.baseUrl);
+    const closedEarly = await Promise.race([
+      raw.closed.then(() => true),
+      new Promise<false>(resolveOpen => {
+        keepAliveTimer = setTimeout(() => resolveOpen(false), 500);
+      }),
+    ]);
+
+    assert.equal(closedEarly, false);
+    assert.equal(invalidConfigDaemon.child.exitCode, null);
+  } finally {
+    if (keepAliveTimer != null) clearTimeout(keepAliveTimer);
+    raw?.socket.destroy();
+    invalidConfigDaemon.child.kill();
+    await Promise.race([
+      once(invalidConfigDaemon.child, 'exit'),
+      new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
+    ]);
+    await rm(invalidConfigDaemon.root, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+      retryDelay: 50,
+    });
+  }
+});
+
+test('authorization close fallback releases the final connection slot', async () => {
+  const limitDaemon = await startGuardDaemon({
+    MAX_WS_CONNECTIONS: '1',
+    WS_HEARTBEAT_INTERVAL_MS: '10000',
+    WS_AUTH_TIMEOUT_MS: '60000',
+    WS_CLOSE_TIMEOUT_MS: '100',
+  });
+  let raw: Awaited<ReturnType<typeof openRawWebSocket>> | undefined;
+
+  try {
+    raw = await openRawWebSocket(limitDaemon.baseUrl);
+
+    const pairResponse = await fetch(`${limitDaemon.baseUrl}/api/pair`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: limitDaemon.baseUrl,
+      },
+      body: JSON.stringify({ nonce: limitDaemon.nonce }),
+    });
+    assert.equal(pairResponse.status, 200);
+    await pairResponse.text();
+
+    await new Promise(resolveTimeout => setTimeout(resolveTimeout, 250));
+
+    const socket = new WebSocket(
+      limitDaemon.baseUrl.replace('http:', 'ws:') + '/ws',
+      { headers: { Origin: limitDaemon.baseUrl } },
+    );
+    socket.on('error', () => {});
+
+    const result = await new Promise<'open' | 'rejected'>(
+      (resolveResult, rejectResult) => {
+        const timer = setTimeout(() => {
+          rejectResult(new Error('replacement_websocket_timeout'));
+        }, 750);
+
+        socket.once('open', () => {
+          clearTimeout(timer);
+          socket.close();
+          resolveResult('open');
+        });
+
+        socket.once('unexpected-response', (_request, response) => {
+          clearTimeout(timer);
+          response.resume();
+          resolveResult('rejected');
+        });
+      },
+    );
+
+    assert.equal(result, 'open');
+  } finally {
+    raw?.socket.destroy();
+    limitDaemon.child.kill();
+    await Promise.race([
+      once(limitDaemon.child, 'exit'),
+      new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
+    ]);
+    await rm(limitDaemon.root, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+      retryDelay: 50,
+    });
+  }
+});
+
 test('WebSocket upgrade is rejected when connection limit is reached', async () => {
   const holders: WebSocket[] = [];
   try {
@@ -84,7 +249,9 @@ test('WebSocket upgrade is rejected when connection limit is reached', async () 
   }
 });
 
-async function startGuardDaemon(): Promise<RunningDaemon> {
+async function startGuardDaemon(
+  extraEnv: Record<string, string> = {},
+): Promise<RunningDaemon> {
   const root = await mkdtemp(join(tmpdir(), 'cc-remote-daemon-ws-guard-'));
   await writeFile(join(root, 'README.md'), '# fixture\n', 'utf8');
   const port = await findFreePort();
@@ -102,7 +269,8 @@ async function startGuardDaemon(): Promise<RunningDaemon> {
       CLAUDE_BIN: join(root, 'missing-claude-executable'),
       DEVICE_NAME: 'ws-guard-host',
       MAX_WS_CONNECTIONS: '2',
-      WS_AUTH_TIMEOUT_MS: '800',
+      WS_AUTH_TIMEOUT_MS: '1000',
+      ...extraEnv,
     },
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
@@ -146,4 +314,46 @@ async function findFreePort(): Promise<number> {
   server.close();
   await once(server, 'close');
   return port;
+}
+
+async function openRawWebSocket(baseUrl: string): Promise<{
+  socket: net.Socket;
+  closed: Promise<void>;
+}> {
+  const endpoint = new URL(baseUrl);
+  const socket = net.createConnection({
+    host: endpoint.hostname,
+    port: Number(endpoint.port),
+  });
+
+  socket.on('error', () => {});
+
+  await once(socket, 'connect');
+
+  const key = randomBytes(16).toString('base64');
+  socket.write(
+    `GET /ws HTTP/1.1\r\n`
+    + `Host: ${endpoint.host}\r\n`
+    + 'Upgrade: websocket\r\n'
+    + 'Connection: Upgrade\r\n'
+    + `Sec-WebSocket-Key: ${key}\r\n`
+    + 'Sec-WebSocket-Version: 13\r\n'
+    + `Origin: ${baseUrl}\r\n`
+    + '\r\n',
+  );
+
+  let response = '';
+  while (!response.includes('\r\n\r\n')) {
+    const [chunk] = await once(socket, 'data') as [Buffer];
+    response += chunk.toString('latin1');
+  }
+
+  assert.match(response, /^HTTP\/1\.1 101 Switching Protocols/m);
+
+  return {
+    socket,
+    closed: new Promise<void>(resolveClosed => {
+      socket.once('close', () => resolveClosed());
+    }),
+  };
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -13,6 +14,8 @@ import 'package:cc_remote/camera_permission.dart';
 import 'package:cc_remote/chat_background.dart';
 import 'package:cc_remote/data/permission_mode.dart';
 import 'package:cc_remote/data/remote_models.dart';
+import 'package:cc_remote/data/websocket_client.dart';
+import 'package:cc_remote/effort_preference.dart';
 import 'package:cc_remote/notification_service.dart';
 import 'package:cc_remote/model_preference.dart';
 import 'package:cc_remote/reading_font_size.dart';
@@ -111,6 +114,19 @@ void main() {
     expect(await store.load(), preference);
   });
 
+  test(
+    'effort preference persists regular levels but not session-only max',
+    () async {
+      final store = ClaudeEffortPreferenceStore();
+
+      await store.save(ClaudeEffortPreference.xhigh);
+      expect(await store.load(), ClaudeEffortPreference.xhigh);
+
+      await store.save(ClaudeEffortPreference.max);
+      expect(await store.load(), ClaudeEffortPreference.automatic);
+    },
+  );
+
   test('missing custom background image falls back to default', () async {
     final store = ChatBackgroundPreferenceStore(fileExists: (_) async => false);
     await store.save(
@@ -126,30 +142,52 @@ void main() {
     );
   });
 
-  test('prompt messages only include an explicit model override', () {
-    final following = buildPromptMessage(
-      promptId: 'prompt-1',
-      text: 'hello',
-      attachmentIds: const [],
-      permissionMode: PermissionMode.manual,
-      sessionId: 'session-1',
-      model: ClaudeModelPreference.followComputer,
-    );
-    final opus = buildPromptMessage(
-      promptId: 'prompt-2',
-      text: 'hello',
-      attachmentIds: const ['attachment-1'],
-      permissionMode: PermissionMode.plan,
-      sessionId: 'session-1',
-      model: ClaudeModelPreference.opus,
-    );
+  test(
+    'prompt messages include Claude Code effort and explicit model only',
+    () {
+      final following = buildPromptMessage(
+        promptId: 'prompt-1',
+        text: 'hello',
+        attachmentIds: const [],
+        permissionMode: PermissionMode.manual,
+        sessionId: 'session-1',
+        model: ClaudeModelPreference.followComputer,
+      );
+      final opus = buildPromptMessage(
+        promptId: 'prompt-2',
+        text: 'hello',
+        attachmentIds: const ['attachment-1'],
+        permissionMode: PermissionMode.plan,
+        sessionId: 'session-1',
+        model: ClaudeModelPreference.opus,
+        effort: ClaudeEffortPreference.xhigh,
+      );
+      final codex = buildPromptMessage(
+        promptId: 'prompt-3',
+        text: 'inspect',
+        attachmentIds: const ['image-1'],
+        permissionMode: PermissionMode.manual,
+        sessionId: 'session-2',
+        model: ClaudeModelPreference.opus,
+        effort: ClaudeEffortPreference.high,
+        engine: SessionEngine.codex,
+        codexSandboxMode: CodexSandboxMode.readOnly,
+      );
 
-    expect(following, isNot(contains('model')));
-    expect(following['promptId'], 'prompt-1');
-    expect(opus['model'], 'opus');
-    expect(opus['promptId'], 'prompt-2');
-    expect(opus['attachmentIds'], ['attachment-1']);
-  });
+      expect(following, isNot(contains('model')));
+      expect(following['effort'], 'auto');
+      expect(following['promptId'], 'prompt-1');
+      expect(opus['model'], 'opus');
+      expect(opus['effort'], 'xhigh');
+      expect(opus['promptId'], 'prompt-2');
+      expect(opus['attachmentIds'], ['attachment-1']);
+      expect(codex['engine'], 'codex');
+      expect(codex['sandboxMode'], 'read-only');
+      expect(codex['effort'], 'high');
+      expect(codex, isNot(contains('permissionMode')));
+      expect(codex, isNot(contains('model')));
+    },
+  );
 
   test(
     'background notification controller stays quiet in foreground',
@@ -275,13 +313,58 @@ void main() {
     expect(catalog, isNotNull);
     expect(catalog!.activeProject?.name, 'cc-remote');
     expect(catalog.sessions.single.title, '实现多会话');
+    expect(catalog.sessions.single.engine, SessionEngine.claude);
     expect(catalog.sessions.single.summary, contains('运行中'));
+    expect(catalog.sessions.single.summary, contains('Opus 4.8'));
+    expect(catalog.sessions.single.summary, isNot(contains('CC')));
+  });
+
+  test('session engine defaults missing and unknown values to Claude', () {
+    expect(SessionEngine.fromWire(null), SessionEngine.claude);
+    expect(SessionEngine.fromWire('codex'), SessionEngine.codex);
+    expect(SessionEngine.fromWire('future-engine'), SessionEngine.claude);
+
+    final unknown = RemoteSessionSummary.tryParse({
+      'id': 'session-unknown',
+      'projectId': 'project-1',
+      'title': '未知引擎会话',
+      'engine': 'future-engine',
+    });
+
+    expect(unknown, isNotNull);
+    expect(unknown!.engine, SessionEngine.claude);
+  });
+
+  test('session search result parses snippet highlight metadata', () {
+    final result = RemoteSessionSearchResult.tryParse({
+      'sessionId': 'session-2',
+      'projectId': 'project-1',
+      'title': '恢复连接',
+      'updatedAt': 12,
+      'archived': false,
+      'role': 'assistant',
+      'messageIndex': 3,
+      'snippet': '自动重连已经恢复',
+      'matchStart': 2,
+      'matchEnd': 4,
+      'matchCount': 2,
+      'engine': 'codex',
+    });
+
+    expect(result, isNotNull);
+    expect(result!.engine, SessionEngine.codex);
+    expect(result.roleLabel, 'Codex 回复');
+    expect(result.snippet.substring(result.matchStart, result.matchEnd), '重连');
+    expect(result.matchCount, 2);
   });
 
   testWidgets('session navigator switches projects and creates a session', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     String? createdProjectId;
+    SessionEngine? createdEngine;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -307,6 +390,7 @@ void main() {
                 id: 'session-1',
                 projectId: 'project-1',
                 title: 'first task',
+                engine: SessionEngine.claude,
                 updatedAt: 1,
                 running: false,
                 messageCount: 2,
@@ -315,6 +399,7 @@ void main() {
                 id: 'session-2',
                 projectId: 'project-2',
                 title: 'second task',
+                engine: SessionEngine.codex,
                 updatedAt: 2,
                 running: false,
                 messageCount: 3,
@@ -324,24 +409,158 @@ void main() {
             activeSessionId: 'session-1',
             running: false,
             onSelect: (_) {},
-            onCreate: (projectId) => createdProjectId = projectId,
+            onSearchResult: (_) {},
+            onCreate: (projectId, engine) {
+              createdProjectId = projectId;
+              createdEngine = engine;
+            },
             onRename: (_, _) async {},
             onArchive: (_) async {},
             onDelete: (_) async {},
+            onSearch: (_) async => const [],
           ),
         ),
       ),
     );
 
     expect(find.text('first task'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('session-engine-badge-claude-session-1')),
+      findsOneWidget,
+    );
+    expect(find.text('CC'), findsOneWidget);
     expect(find.byKey(const ValueKey('selected-project-path')), findsOneWidget);
     expect(find.text(r'E:\first'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('project-project-2')));
     await tester.pump();
     expect(find.text('second task'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('session-engine-badge-codex-session-2')),
+      findsOneWidget,
+    );
+    expect(find.text('Codex'), findsOneWidget);
     expect(find.text(r'E:\second'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('create-session')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('session-engine-icon-claude')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('session-engine-icon-codex')),
+      findsOneWidget,
+    );
+    expect(find.text('Claude Code'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('session-engine-codex')));
+    await tester.pumpAndSettle();
     expect(createdProjectId, 'project-2');
+    expect(createdEngine, SessionEngine.codex);
+  });
+
+  testWidgets('session search debounces, highlights and opens a result', (
+    tester,
+  ) async {
+    final queries = <String>[];
+    String? selectedSessionId;
+    RemoteSessionSearchResult? selectedSearchResult;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: SessionNavigatorSheet(
+            projects: const [
+              RemoteProjectSummary(
+                id: 'project-1',
+                name: 'cc-remote',
+                path: r'E:\cc-remote',
+                sessionCount: 2,
+                running: false,
+              ),
+            ],
+            sessions: const [
+              RemoteSessionSummary(
+                id: 'session-1',
+                projectId: 'project-1',
+                title: '当前会话',
+                updatedAt: 1,
+                running: false,
+                messageCount: 2,
+              ),
+              RemoteSessionSummary(
+                id: 'session-2',
+                projectId: 'project-1',
+                title: '恢复连接',
+                updatedAt: 2,
+                running: false,
+                messageCount: 4,
+              ),
+            ],
+            activeProjectId: 'project-1',
+            activeSessionId: 'session-1',
+            running: false,
+            onSelect: (sessionId) => selectedSessionId = sessionId,
+            onSearchResult: (result) {
+              selectedSearchResult = result;
+              selectedSessionId = result.sessionId;
+            },
+            onCreate: (_, _) {},
+            onRename: (_, _) async {},
+            onArchive: (_) async {},
+            onDelete: (_) async {},
+            onSearch: (query) async {
+              queries.add(query);
+              if (query != 'reconnect') return const [];
+              return const [
+                RemoteSessionSearchResult(
+                  sessionId: 'session-2',
+                  projectId: 'project-1',
+                  title: '恢复连接',
+                  updatedAt: 2,
+                  archived: false,
+                  role: RemoteSessionSearchRole.assistant,
+                  messageIndex: 3,
+                  snippet: 'The reconnect panel is ready.',
+                  matchStart: 4,
+                  matchEnd: 13,
+                  matchCount: 2,
+                ),
+              ];
+            },
+          ),
+        ),
+      ),
+    );
+
+    await tester.enterText(
+      find.byKey(const ValueKey('session-search-field')),
+      'reconnect',
+    );
+    await tester.pump(const Duration(milliseconds: 299));
+    expect(queries, isEmpty);
+    await tester.pump(const Duration(milliseconds: 1));
+    await tester.pump();
+
+    expect(queries, ['reconnect']);
+    expect(find.text('恢复连接'), findsOneWidget);
+    expect(
+      find.textContaining('The reconnect panel is ready.'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('2 条匹配内容'), findsOneWidget);
+    expect(find.byKey(const ValueKey('selected-project-path')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('search-session-session-2')));
+    expect(selectedSessionId, 'session-2');
+    expect(selectedSearchResult?.messageIndex, 3);
+    expect(selectedSearchResult?.snippet, 'The reconnect panel is ready.');
+
+    await tester.enterText(
+      find.byKey(const ValueKey('session-search-field')),
+      'missing',
+    );
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump();
+    expect(find.text('没有找到匹配内容'), findsOneWidget);
   });
 
   test('remote transcript snapshot restores messages and session context', () {
@@ -1026,16 +1245,35 @@ void main() {
     await tester.tap(find.byTooltip('发送'));
     await tester.pumpAndSettle();
 
-    final markdownBefore = tester.widget<MarkdownBody>(
-      find.byType(MarkdownBody),
+    tester.view.viewInsets = const FakeViewPadding(bottom: 120);
+    await tester.pump();
+    final assistantDuringKeyboardAnimation = tester.widget(
+      find.byKey(const ValueKey('assistant-message')),
     );
+    final promptDuringKeyboardAnimation = tester.widget<PromptBar>(
+      find.byType(PromptBar),
+    );
+
     tester.view.viewInsets = const FakeViewPadding(bottom: 300);
     await tester.pump();
 
     expect(
-      tester.widget<MarkdownBody>(find.byType(MarkdownBody)),
-      same(markdownBefore),
+      tester.widget(find.byKey(const ValueKey('assistant-message'))),
+      same(assistantDuringKeyboardAnimation),
     );
+    expect(
+      tester.widget<PromptBar>(find.byType(PromptBar)),
+      same(promptDuringKeyboardAnimation),
+    );
+    final composer = tester.widget<Container>(
+      find.byKey(const ValueKey('composer')),
+    );
+    final composerDecoration = composer.decoration as BoxDecoration;
+    expect(
+      composerDecoration.borderRadius,
+      const BorderRadius.vertical(top: Radius.circular(AppRadii.composerFloat)),
+    );
+    expect(composerDecoration.boxShadow, isEmpty);
     expect(tester.takeException(), isNull);
   });
 
@@ -1088,9 +1326,7 @@ void main() {
     );
   });
 
-  testWidgets('warm sheet surfaces use soft paper lift', (
-    tester,
-  ) async {
+  testWidgets('warm sheet surfaces use soft paper lift', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(body: WarmSheetSurface(child: Text('content'))),
@@ -1287,8 +1523,6 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byKey(const ValueKey('composer-expand-button')));
-    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('permission-mode-chip')));
     await tester.pumpAndSettle();
     await tester.ensureVisible(
@@ -1303,6 +1537,146 @@ void main() {
     await tester.tap(find.text('仅本次开启'));
     await tester.pumpAndSettle();
     expect(selected, PermissionMode.bypassPermissions);
+  });
+
+  testWidgets('composer effort picker matches Claude Code levels', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    ClaudeEffortPreference? selected;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PromptBar(
+            controller: controller,
+            commands: const [],
+            running: false,
+            connected: true,
+            offline: false,
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: false,
+            selectedEffort: ClaudeEffortPreference.high,
+            onEffortSelected: (effort) => selected = effort,
+            onPermissionModeSelected: (_) {},
+            onCommandSelected: (_) {},
+            onReconnect: () {},
+            onSend: () {},
+            onStop: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byTooltip('思考强度：高'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('composer-effort-button')));
+    await tester.pumpAndSettle();
+
+    for (final effort in ClaudeEffortPreference.values) {
+      expect(
+        find.byKey(ValueKey('effort-option-${effort.wireName}')),
+        findsOneWidget,
+      );
+    }
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('effort-option-xhigh')),
+    );
+    await tester.tap(find.byKey(const ValueKey('effort-option-xhigh')));
+    await tester.pumpAndSettle();
+    expect(selected, ClaudeEffortPreference.xhigh);
+  });
+
+  testWidgets('Codex composer exposes only three sandbox modes', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    CodexSandboxMode? selected;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PromptBar(
+            controller: controller,
+            commands: const [],
+            running: false,
+            connected: true,
+            offline: false,
+            engine: SessionEngine.codex,
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: false,
+            codexSandboxMode: CodexSandboxMode.readOnly,
+            onPermissionModeSelected: (_) {},
+            onCodexSandboxModeSelected: (mode) => selected = mode,
+            onCommandSelected: (_) {},
+            onReconnect: () {},
+            onSend: () {},
+            onStop: () {},
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('permission-mode-chip')));
+    await tester.pumpAndSettle();
+
+    for (final mode in CodexSandboxMode.values) {
+      expect(
+        find.byKey(ValueKey('codex-sandbox-${mode.wireName}')),
+        findsOneWidget,
+      );
+    }
+    expect(find.byKey(const ValueKey('permission-mode-manual')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('codex-sandbox-read-only')));
+    await tester.pumpAndSettle();
+    expect(selected, CodexSandboxMode.readOnly);
+  });
+
+  testWidgets('composer effort control fits a narrow phone width', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.bottomCenter,
+            child: PromptBar(
+              controller: controller,
+              commands: const [],
+              running: false,
+              connected: true,
+              offline: false,
+              permissionMode: PermissionMode.manual,
+              allowBypassPermissions: false,
+              selectedModel: ClaudeModelPreference.sonnet,
+              selectedEffort: ClaudeEffortPreference.xhigh,
+              onEffortSelected: (_) {},
+              onPermissionModeSelected: (_) {},
+              onCommandSelected: (_) {},
+              onReconnect: () {},
+              onSend: () {},
+              onStop: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('composer-effort-button')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('an attachment can be sent without prompt text', (tester) async {
@@ -1341,7 +1715,8 @@ void main() {
     );
 
     expect(find.text('error.log'), findsOneWidget);
-    expect(find.byTooltip('添加内容和设置权限'), findsOneWidget);
+    expect(find.byTooltip('添加附件'), findsOneWidget);
+    expect(find.byKey(const ValueKey('permission-mode-chip')), findsOneWidget);
     await tester.tap(find.byTooltip('发送'));
     expect(sent, isTrue);
   });
@@ -1556,6 +1931,73 @@ void main() {
     expect(presentation.canCompose, isFalse);
   });
 
+  test('status strip defers recovery states to the shared panel', () {
+    final running = ConsolePresentation.resolve(
+      connected: true,
+      offline: false,
+      running: true,
+      stopping: false,
+      uploading: false,
+    );
+    final uploading = ConsolePresentation.resolve(
+      connected: true,
+      offline: false,
+      running: false,
+      stopping: false,
+      uploading: true,
+    );
+    final stopping = ConsolePresentation.resolve(
+      connected: true,
+      offline: false,
+      running: true,
+      stopping: true,
+      uploading: false,
+    );
+    final awaitingPermission = ConsolePresentation.resolve(
+      connected: true,
+      offline: false,
+      running: true,
+      stopping: false,
+      uploading: false,
+      awaitingPermission: true,
+    );
+
+    expect(ConsoleStatusStrip.shouldShow(running), isFalse);
+    expect(ConsoleStatusStrip.shouldShow(uploading), isFalse);
+    expect(ConsoleStatusStrip.shouldShow(stopping), isFalse);
+    expect(ConsoleStatusStrip.shouldShow(awaitingPermission), isTrue);
+    expect(RecoveryStatePanel.shouldShow(stopping), isTrue);
+    expect(
+      ConsoleStatusStrip.shouldShow(
+        const ConsolePresentation(ConsolePhase.connected),
+      ),
+      isFalse,
+    );
+  });
+
+  test('blank assistant text does not count as a real reply', () {
+    expect(
+      hasAssistantReplyAfterLastUser([
+        TranscriptMessage.user('问题'),
+        TranscriptMessage.assistant('  \n'),
+      ]),
+      isFalse,
+    );
+    expect(
+      hasAssistantReplyAfterLastUser([
+        TranscriptMessage.user('问题'),
+        TranscriptMessage.assistant('答案'),
+      ]),
+      isTrue,
+    );
+  });
+
+  test('isBlankAssistantMessage only matches empty assistant text', () {
+    expect(isBlankAssistantMessage(TranscriptMessage.assistant('   ')), isTrue);
+    expect(isBlankAssistantMessage(TranscriptMessage.assistant('hi')), isFalse);
+    expect(isBlankAssistantMessage(TranscriptMessage.user('   ')), isFalse);
+  });
+
   test('terminal evidence only applies to the current turn', () {
     final messages = <TranscriptMessage>[
       TranscriptMessage.user('第一轮'),
@@ -1570,6 +2012,8 @@ void main() {
 
     messages.add(TranscriptMessage.system('错误：命令失败'));
     expect(hasCurrentFailureEvidence(messages), isTrue);
+    expect(currentFailureDetail(messages), '命令失败');
+    expect(lastUserPromptText(messages), '第二轮');
   });
 
   testWidgets('stop timeout remains actionable with the minimal header', (
@@ -1625,11 +2069,80 @@ void main() {
 
     expect(find.textContaining('My PC'), findsNothing);
     expect(find.text('主机未确认停止，可再次尝试'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('recovery-state-stopTimedOut')),
+      findsOneWidget,
+    );
+    expect(find.text('停止尚未确认'), findsOneWidget);
+    expect(find.text('任务已停止'), findsNothing);
     expect(find.byTooltip('再次停止'), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('composer-primary-action')));
+    await tester.tap(find.text('再次停止'));
     expect(stopCount, 1);
+
+    await tester.tap(find.byKey(const ValueKey('composer-primary-action')));
+    expect(stopCount, 2);
   });
+
+  testWidgets(
+    'failed recovery panel restores the previous prompt for editing',
+    (tester) async {
+      final controller = TextEditingController();
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildSignalConsoleTheme(),
+          home: AppBackground(
+            child: ChatScreen(
+              session: SavedSession(
+                origin: Uri.parse('https://cc-remote.example.com'),
+                token: 'demo',
+                deviceName: 'My PC',
+                workspaceDir: 'cc-remote',
+              ),
+              running: false,
+              connected: true,
+              offline: false,
+              modelName: 'claude-opus-4-8',
+              contextWindow: 200000,
+              remainingContext: 174919,
+              messages: [
+                TranscriptMessage.user('运行测试'),
+                TranscriptMessage.system('错误：命令退出码为 1'),
+              ],
+              commands: const [],
+              permissionMode: PermissionMode.manual,
+              allowBypassPermissions: false,
+              pendingPermissions: const [],
+              respondingPermissionIds: const {},
+              promptController: controller,
+              onFillPrompt: (text) => controller.text = text,
+              onReconnect: () {},
+              onOpenSettings: () {},
+              onOpenModelPicker: () {},
+              onNewConversation: () {},
+              onOpenSessions: () {},
+              onOpenWorkspace: () {},
+              onPermissionModeSelected: (_) {},
+              onPermissionAllow: (_) {},
+              onPermissionDeny: (_) {},
+              onSend: () {},
+              onStop: () {},
+            ),
+          ),
+        ),
+      );
+
+      expect(
+        find.byKey(const ValueKey('recovery-state-failed')),
+        findsOneWidget,
+      );
+      expect(find.text('命令退出码为 1'), findsOneWidget);
+      await tester.tap(find.text('重新编辑上条指令'));
+      expect(controller.text, '运行测试');
+    },
+  );
 
   testWidgets('running state does not show a chat progress bar', (
     tester,
@@ -2002,45 +2515,121 @@ void main() {
     expect(createdConversation, isFalse);
   });
 
-  testWidgets('assistant replies use a left aligned bubble frame', (
+  testWidgets('conversation bubbles use light rounded paper surfaces', (
     tester,
   ) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(
-          body: MessageBlock(
-            message: TranscriptMessage(MessageRole.assistant, 'reply'),
+          body: Column(
+            children: [
+              MessageBlock(
+                message: TranscriptMessage(MessageRole.assistant, 'reply'),
+              ),
+              MessageBlock(
+                message: TranscriptMessage(
+                  MessageRole.assistant,
+                  '**bold** and `code`',
+                ),
+              ),
+              MessageBlock(
+                message: TranscriptMessage(MessageRole.user, '继续检查这个问题'),
+              ),
+            ],
           ),
         ),
       ),
     );
 
     final assistant = find.byKey(const ValueKey('assistant-message'));
-    expect(assistant, findsOneWidget);
+    expect(assistant, findsNWidgets(2));
+    // Plain text skips MarkdownBody; markup still uses it.
+    expect(find.byType(MarkdownBody), findsOneWidget);
+    final markdown = tester.widget<MarkdownBody>(find.byType(MarkdownBody));
     expect(
-      find.descendant(of: assistant, matching: find.byType(MarkdownBody)),
-      findsOneWidget,
+      markdown.styleSheet!.tableColumnWidth,
+      isA<IntrinsicColumnWidth>(),
     );
-    final markdown = tester.widget<MarkdownBody>(
-      find.descendant(of: assistant, matching: find.byType(MarkdownBody)),
-    );
-    expect(markdown.styleSheet!.tableColumnWidth, isA<IntrinsicColumnWidth>());
     expect(
       markdown.styleSheet!.tableCellsPadding,
-      const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
     );
     expect(markdown.styleSheet!.p!.fontFamily, 'NotoSerifSC');
-    expect(
-      markdown.styleSheet!.p!.fontSize,
-      AppTypography.assistantBodySize,
-    );
+    expect(markdown.styleSheet!.p!.fontSize, AppTypography.assistantBodySize);
     expect(markdown.styleSheet!.h1!.fontFamily, 'NotoSerifSC');
-    final bubble = tester.widget<Container>(assistant);
-    final decoration = bubble.decoration! as BoxDecoration;
-    expect(decoration.color, AppColors.surfaceElevated);
-    expect(decoration.borderRadius, isNotNull);
+    expect(markdown.styleSheet!.blockSpacing, 5);
+    expect(
+      markdown.styleSheet!.h1Padding,
+      const EdgeInsets.only(top: 8, bottom: 2),
+    );
+    expect(markdown.builders.containsKey('pre'), isTrue);
+    final bubble = tester.widget<DecoratedBox>(assistant.first);
+    final decoration = bubble.decoration as BoxDecoration;
+    expect(decoration.color, AppColors.surface);
+    expect(decoration.borderRadius, BorderRadius.circular(AppRadii.bubble));
+    expect(decoration.border, isNull);
+    expect(
+      decoration.boxShadow == null || decoration.boxShadow!.isEmpty,
+      isTrue,
+    );
     expect(find.byType(Image), findsNothing);
-    expect(find.byKey(const ValueKey('user-message')), findsNothing);
+    final user = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('user-message')),
+    );
+    final userDecoration = user.decoration as BoxDecoration;
+    expect(userDecoration.color, AppColors.userBubble);
+    expect(userDecoration.border, isNull);
+    expect(userDecoration.borderRadius, BorderRadius.circular(AppRadii.bubble));
+  });
+
+  test('search source links accept only absolute web URLs', () {
+    expect(
+      searchSourceUri('https://example.com/report?q=source'),
+      Uri.parse('https://example.com/report?q=source'),
+    );
+    expect(searchSourceUri('http://example.com/source'), isNotNull);
+    expect(searchSourceUri('javascript:alert(1)'), isNull);
+    expect(searchSourceUri('/relative/source'), isNull);
+    expect(searchSourceUri('https://'), isNull);
+  });
+
+  testWidgets('assistant search source links are actionable', (tester) async {
+    const channel = MethodChannel('plugins.flutter.io/url_launcher');
+    MethodCall? launchCall;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (call) async {
+          launchCall = call;
+          return true;
+        });
+    addTearDown(
+      () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, null),
+    );
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: MessageBlock(
+            message: TranscriptMessage(
+              MessageRole.assistant,
+              '[搜索来源](https://example.com/report)',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final markdown = tester.widget<MarkdownBody>(find.byType(MarkdownBody));
+    expect(markdown.onTapLink, isNotNull);
+    expect(find.text('搜索来源'), findsOneWidget);
+
+    await tester.tap(find.text('搜索来源'));
+    await tester.pump();
+
+    expect(launchCall?.method, 'launch');
+    final arguments = launchCall!.arguments as Map<Object?, Object?>;
+    expect(arguments['url'], 'https://example.com/report');
+    expect(arguments['useWebView'], isFalse);
   });
 
   testWidgets('composer controls use 44 point targets and 36 point visuals', (
@@ -2087,9 +2676,36 @@ void main() {
       tester.getSize(find.byKey(const ValueKey('composer-primary-visual'))),
       const Size.square(AppSizes.iconControl),
     );
+    final composer = tester.widget<Container>(
+      find.byKey(const ValueKey('composer')),
+    );
+    final decoration = composer.decoration as BoxDecoration;
+    expect(
+      decoration.borderRadius,
+      BorderRadius.circular(AppRadii.composerFloat),
+    );
+    expect(decoration.boxShadow, isNotEmpty);
   });
 
-  testWidgets('thinking activity shows animated status and elapsed time', (
+  test('transcript spacing groups supporting rows within each turn', () {
+    final user = TranscriptMessage.user('问题');
+    final assistant = TranscriptMessage.assistant('回答');
+    final activity = TranscriptMessage.activity(
+      '正在检查',
+      id: 'spacing-activity',
+      kind: ActivityKind.tool,
+      state: ActivityState.running,
+    );
+
+    expect(transcriptGapBetween(user, assistant), 9);
+    expect(transcriptGapBetween(user, activity), 9);
+    expect(transcriptGapBetween(activity, assistant), 4);
+    expect(transcriptGapBetween(assistant, activity), 12);
+    expect(transcriptGapBetween(assistant, user), 14);
+    expect(transcriptGapBetween(assistant, assistant), 6);
+  });
+
+  testWidgets('thinking activity shows muted inline status and elapsed time', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -2110,11 +2726,293 @@ void main() {
 
     expect(find.byKey(const ValueKey('thinking-bubble')), findsOneWidget);
     expect(find.byKey(const ValueKey('thinking-icon')), findsOneWidget);
-    expect(find.text('正在思考'), findsOneWidget);
-    expect(find.text('12 秒'), findsOneWidget);
+    expect(find.byKey(const ValueKey('thinking-signal')), findsNothing);
+    expect(find.text('思考中 · 本轮已运行 12 秒'), findsOneWidget);
+    final liveStatus = tester.getSemantics(
+      find.bySemanticsLabel('正在思考'),
+    );
+    expect(liveStatus.getSemanticsData().flagsCollection.isLiveRegion, isTrue);
+    final elapsedStatus = tester.getSemantics(
+      find.bySemanticsLabel('本轮已运行 12 秒'),
+    );
+    expect(
+      elapsedStatus.getSemanticsData().flagsCollection.isLiveRegion,
+      isFalse,
+    );
+    final glyph = find.byKey(const ValueKey('thinking-icon'));
+    final initialPainter = tester.widget<CustomPaint>(glyph).painter;
+    await tester.pump(const Duration(milliseconds: 450));
+    final grownPainter = tester.widget<CustomPaint>(glyph).painter;
+    expect(identical(grownPainter, initialPainter), isFalse);
 
-    await tester.pump(const Duration(seconds: 1));
-    expect(find.text('13 秒'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 550));
+    expect(find.text('思考中 · 本轮已运行 13 秒'), findsOneWidget);
+    expect(find.bySemanticsLabel('正在思考'), findsOneWidget);
+    expect(find.bySemanticsLabel('本轮已运行 13 秒'), findsOneWidget);
+  });
+
+  testWidgets('thinking bloom stays still when animations are disabled', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: MediaQuery(
+          data: MediaQueryData(disableAnimations: true),
+          child: Scaffold(body: ThinkingIndicator()),
+        ),
+      ),
+    );
+
+    final glyph = find.byKey(const ValueKey('thinking-icon'));
+    final initialPainter = tester.widget<CustomPaint>(glyph).painter;
+    await tester.pump(const Duration(milliseconds: 600));
+    final settledPainter = tester.widget<CustomPaint>(glyph).painter;
+
+    expect(identical(settledPainter, initialPainter), isTrue);
+  });
+
+  testWidgets('completed thinking activity is not rendered', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBlock(
+            message: TranscriptMessage.activity(
+              '思考完成',
+              id: 'thinking-done',
+              kind: ActivityKind.thinking,
+              state: ActivityState.done,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('thinking-bubble')), findsNothing);
+    expect(find.text('思考完成'), findsNothing);
+  });
+
+  testWidgets('consecutive tool activities merge into one timeline card', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: TranscriptView(
+            messages: [
+              TranscriptMessage.user('跑一下检查'),
+              TranscriptMessage.activity(
+                '读取文件',
+                id: 't1',
+                kind: ActivityKind.tool,
+                state: ActivityState.done,
+                tool: 'Read',
+                detail: 'README.md',
+              ),
+              TranscriptMessage.activity(
+                '搜索代码',
+                id: 't2',
+                kind: ActivityKind.tool,
+                state: ActivityState.done,
+                tool: 'Grep',
+                detail: 'needle pattern',
+              ),
+              TranscriptMessage.activity(
+                '运行测试',
+                id: 't3',
+                kind: ActivityKind.tool,
+                state: ActivityState.running,
+                tool: 'Bash',
+              ),
+              TranscriptMessage.assistant('完成'),
+            ],
+            session: null,
+            activeSessionId: null,
+            runStartedAt: null,
+            running: true,
+            connected: true,
+            offline: false,
+            pendingPermissions: const [],
+            respondingPermissionIds: const {},
+            onFillPrompt: (_) {},
+            onPermissionAllow: (_) {},
+            onPermissionDeny: (_) {},
+            onReconnect: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(ActivityTimelineCard), findsOneWidget);
+    expect(find.text('显示之前 1 步'), findsOneWidget);
+    expect(find.text('读取文件'), findsNothing);
+    expect(find.text('搜索代码'), findsOneWidget);
+    expect(find.text('运行测试'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('activity-timeline-expand')));
+    await tester.pump();
+    expect(find.text('显示之前 1 步'), findsNothing);
+    expect(find.text('读取文件'), findsOneWidget);
+
+    await tester.tap(find.text('搜索代码'));
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('activity-detail-t2')),
+      findsOneWidget,
+    );
+    expect(find.text('needle pattern'), findsOneWidget);
+  });
+
+  testWidgets('code blocks render language header with working copy button', (
+    tester,
+  ) async {
+    String? copiedText;
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedText = (call.arguments as Map<Object?, Object?>)['text']
+              as String?;
+        }
+        return null;
+      },
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBlock(
+            message: TranscriptMessage.assistant(
+              '看这段：\n\n```dart\nvoid main() {}\n```\n',
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('code-block-card')), findsOneWidget);
+    expect(find.text('dart'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('code-copy-button')));
+    await tester.pump();
+    expect(copiedText, 'void main() {}');
+    expect(find.text('已复制'), findsOneWidget);
+  });
+
+  testWidgets('blank assistant messages are not rendered', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: TranscriptView(
+            messages: [
+              TranscriptMessage.user('问题'),
+              TranscriptMessage.assistant('   \n'),
+              TranscriptMessage.assistant('有内容的回复'),
+            ],
+            session: null,
+            activeSessionId: null,
+            runStartedAt: null,
+            running: false,
+            connected: true,
+            offline: false,
+            pendingPermissions: const [],
+            respondingPermissionIds: const {},
+            onFillPrompt: (_) {},
+            onPermissionAllow: (_) {},
+            onPermissionDeny: (_) {},
+            onReconnect: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('问题'), findsOneWidget);
+    expect(find.text('有内容的回复'), findsOneWidget);
+    expect(find.byKey(const ValueKey('assistant-message')), findsOneWidget);
+  });
+
+  testWidgets('transcript search jump scrolls to and highlights the message', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(393, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final messages = <TranscriptMessage>[
+      TranscriptMessage.system('本地连接提示'),
+      for (var index = 0; index < 140; index++)
+        if (index == 125)
+          TranscriptMessage.user('target needle appears here')
+        else if (index % 11 == 0)
+          TranscriptMessage.assistant(
+            List.generate(
+              18,
+              (line) => 'long message $index line $line',
+            ).join('\n'),
+          )
+        else
+          TranscriptMessage.user('message $index'),
+    ];
+    TranscriptJumpRequest? handledRequest;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: TranscriptView(
+            messages: messages,
+            jumpRequest: const TranscriptJumpRequest(
+              generation: 1,
+              sessionId: 'session-1',
+              // The local system row shifts the daemon index by one. The
+              // snippet fallback must still resolve the authoritative hit.
+              messageIndex: 125,
+              role: RemoteSessionSearchRole.user,
+              snippet: 'target needle appears here',
+            ),
+            activeSessionId: 'session-1',
+            connected: true,
+            offline: false,
+            pendingPermissions: const [],
+            respondingPermissionIds: const {},
+            onFillPrompt: (_) {},
+            onReconnect: () {},
+            onPermissionAllow: (_) {},
+            onPermissionDeny: (_) {},
+            onJumpHandled: (request) => handledRequest = request,
+          ),
+        ),
+      ),
+    );
+
+    for (var attempt = 0; attempt < 60 && handledRequest == null; attempt++) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+
+    expect(handledRequest?.generation, 1);
+    expect(
+      find.byKey(const ValueKey('transcript-search-hit-126')),
+      findsOneWidget,
+    );
+    final target = find.text('target needle appears here');
+    expect(target, findsOneWidget);
+    final targetRect = tester.getRect(target);
+    expect(targetRect.top, greaterThanOrEqualTo(0));
+    expect(targetRect.bottom, lessThanOrEqualTo(720));
+
+    await tester.pump(const Duration(milliseconds: 1601));
+    expect(
+      find.byKey(const ValueKey('transcript-search-hit-126')),
+      findsNothing,
+    );
   });
 
   testWidgets('tool activity expands to show its target', (tester) async {
@@ -2137,44 +3035,47 @@ void main() {
 
     expect(find.text('正在读取文件'), findsOneWidget);
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
-    expect(find.byType(SelectableText), findsNothing);
+    expect(find.text('mobile/lib/main.dart'), findsOneWidget);
 
     await tester.tap(find.text('正在读取文件'));
     await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.byType(SelectableText), findsOneWidget);
+    // Expanded body keeps the path as plain Text (no SelectableText layer).
+    expect(find.text('mobile/lib/main.dart'), findsWidgets);
   });
 
-  testWidgets('offline empty state keeps reconnect action at the top', (
+  testWidgets('offline recovery panel keeps one reconnect action', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(393, 565);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
     var reconnectCount = 0;
 
     await tester.pumpWidget(
       MaterialApp(
         theme: buildSignalConsoleTheme(),
         home: Scaffold(
-          body: TranscriptView(
-            messages: const [],
-            pendingPermissions: const [],
-            respondingPermissionIds: const {},
-            connected: false,
-            offline: true,
-            onFillPrompt: (_) {},
+          body: RecoveryStatePanel(
+            presentation: const ConsolePresentation(ConsolePhase.offline),
+            hostLabel: 'My PC',
+            reconnectSnapshot: RemoteConnectionSnapshot(
+              phase: RemoteConnectionPhase.retrying,
+              attempt: 3,
+              nextRetryAt: DateTime.now().add(const Duration(seconds: 30)),
+              lastError: StateError('connection refused'),
+            ),
+            hasTranscript: true,
+            hasDraft: true,
             onReconnect: () => reconnectCount += 1,
-            onPermissionAllow: (_) {},
-            onPermissionDeny: (_) {},
+            onStop: () {},
+            onOpenWorkspace: () {},
           ),
         ),
       ),
     );
 
-    expect(find.text('下一件事'), findsNothing);
-    expect(find.text('让电脑重新上线'), findsOneWidget);
+    expect(find.text('正在自动重连'), findsOneWidget);
+    expect(find.textContaining('自动重连第 3 次'), findsOneWidget);
+    expect(find.textContaining('电脑端拒绝连接'), findsOneWidget);
+    expect(find.text('对话记录已保留，当前输入仍在编辑框中'), findsOneWidget);
     expect(find.text('立即重连'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
@@ -2182,35 +3083,34 @@ void main() {
     expect(reconnectCount, 1);
   });
 
-  testWidgets('connecting empty state does not reuse offline reconnect card', (
+  testWidgets('connecting uses the shared panel without reconnect action', (
     tester,
   ) async {
     await tester.pumpWidget(
       MaterialApp(
         theme: buildSignalConsoleTheme(),
         home: Scaffold(
-          body: TranscriptView(
-            messages: const [],
-            pendingPermissions: const [],
-            respondingPermissionIds: const {},
-            connected: false,
-            offline: false,
-            onFillPrompt: (_) {},
+          body: RecoveryStatePanel(
+            presentation: const ConsolePresentation(ConsolePhase.connecting),
             onReconnect: () {},
-            onPermissionAllow: (_) {},
-            onPermissionDeny: (_) {},
+            onStop: () {},
+            onOpenWorkspace: () {},
           ),
         ),
       ),
     );
 
-    expect(find.byKey(const ValueKey('connecting-status-card')), findsOneWidget);
-    expect(find.text('正在重新连接'), findsOneWidget);
-    expect(find.text('让电脑重新上线'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('recovery-state-connecting')),
+      findsOneWidget,
+    );
+    expect(find.text('正在连接电脑端'), findsOneWidget);
     expect(find.text('立即重连'), findsNothing);
   });
 
-  testWidgets('connecting ChatScreen shows status strip', (tester) async {
+  testWidgets('connecting ChatScreen shows one shared state panel', (
+    tester,
+  ) async {
     final controller = TextEditingController();
     addTearDown(controller.dispose);
 
@@ -2255,9 +3155,12 @@ void main() {
       ),
     );
 
-    expect(find.byKey(const ValueKey('console-status-strip')), findsOneWidget);
-    expect(find.text('正在连接'), findsOneWidget);
-    expect(find.byKey(const ValueKey('connecting-status-card')), findsOneWidget);
+    expect(find.byKey(const ValueKey('console-status-strip')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('recovery-state-connecting')),
+      findsOneWidget,
+    );
+    expect(find.text('正在连接电脑端'), findsOneWidget);
   });
 
   testWidgets('TranscriptView forwards workspace path into permission card', (

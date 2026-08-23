@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -135,9 +135,143 @@ test('migrates the legacy transcript into the initial session', async () => {
   try {
     const state = await createProjectSessionState({ dataDir, initialWorkspace: dir });
     const snapshot = state.active().transcript.snapshot();
-    assert.equal(snapshot.claudeSessionId, 'claude-session-1');
+    assert.equal(snapshot.engineSessionId, 'claude-session-1');
     assert.equal(snapshot.messages[0].text, 'legacy prompt');
     assert.equal(state.catalog().sessions.length, 1);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('searches session titles and user or assistant transcript text', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-session-search-'));
+  try {
+    const state = await createProjectSessionState({
+      dataDir: join(dir, 'data'),
+      initialWorkspace: dir,
+    });
+    const first = state.active();
+    await state.setSessionTitle(first.session.id, 'Reconnect investigation');
+    first.transcript.beginPrompt('检查网络恢复状态', 'manual');
+    first.transcript.appendText('The reconnect panel is ready for review.');
+    await first.transcript.finishDone();
+
+    const second = await state.createSession(first.project.id, 'Other task');
+    second.transcript.beginPrompt('Write the release notes', 'manual');
+    second.transcript.appendText('Document the RECONNECT behavior.');
+    await second.transcript.finishDone();
+
+    const systemOnly = await state.createSession(first.project.id, 'Failure log');
+    systemOnly.transcript.beginPrompt('Unrelated request', 'manual');
+    await systemOnly.transcript.finishError('reconnect secret should stay system-only');
+    await state.archiveSession(second.session.id);
+
+    const titleOnly = await state.createSession(first.project.id, 'Unique title needle');
+
+    const results = state.searchSessions('reconnect');
+    assert.equal(results.length, 2);
+    assert.deepEqual(
+      new Set(results.map(result => result.sessionId)),
+      new Set([first.session.id, second.session.id]),
+    );
+    for (const result of results) {
+      assert.equal(
+        result.snippet.slice(result.matchStart, result.matchEnd).toLowerCase(),
+        'reconnect',
+      );
+      assert.ok(result.matchCount >= 1);
+      assert.ok(result.role === 'title' || result.role === 'assistant');
+    }
+    assert.equal(
+      results.find(result => result.sessionId === second.session.id)?.archived,
+      true,
+    );
+    const chineseResults = state.searchSessions('网络恢复');
+    assert.equal(chineseResults.length, 1);
+    assert.equal(chineseResults[0]?.sessionId, first.session.id);
+    assert.equal(state.searchSessions('reconnect', 1).length, 1);
+    const titleResults = state.searchSessions('title needle');
+    assert.equal(titleResults.length, 1);
+    assert.equal(titleResults[0]?.sessionId, titleOnly.session.id);
+    assert.equal(titleResults[0]?.role, 'title');
+
+    const unicodeTitle = await state.createSession(first.project.id, 'İstanbul notes');
+    const unicodeResults = state.searchSessions('İ');
+    const unicodeResult = unicodeResults.find(
+      result => result.sessionId === unicodeTitle.session.id,
+    );
+    assert.ok(unicodeResult);
+    assert.equal(
+      unicodeResult.snippet.slice(unicodeResult.matchStart, unicodeResult.matchEnd),
+      'İ',
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('loads legacy catalog sessions without an engine as Claude sessions', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-engine-migration-'));
+  const dataDir = join(dir, 'data');
+  const catalogPath = join(dataDir, 'projects.json');
+  try {
+    const seeded = await createProjectSessionState({
+      dataDir,
+      initialWorkspace: dir,
+    });
+    const sessionId = seeded.active().session.id;
+    await seeded.flush();
+
+    const stored = JSON.parse(await readFile(catalogPath, 'utf8')) as {
+      sessions: Array<{ id: string; engine?: string }>;
+    };
+    const legacySession = stored.sessions.find(session => session.id === sessionId);
+    assert.ok(legacySession);
+    delete legacySession.engine;
+    await writeFile(catalogPath, `${JSON.stringify(stored, null, 2)}\n`, 'utf8');
+
+    const restored = await createProjectSessionState({
+      dataDir,
+      initialWorkspace: dir,
+    });
+    assert.equal(restored.active().session.id, sessionId);
+    assert.equal(restored.active().session.engine, 'claude');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('persists the selected engine independently for each session', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-session-engines-'));
+  const dataDir = join(dir, 'data');
+  try {
+    const state = await createProjectSessionState({
+      dataDir,
+      initialWorkspace: dir,
+    });
+    const claudeSession = state.active();
+    const codexSession = await state.createSession(
+      claudeSession.project.id,
+      'Codex task',
+      'codex',
+    );
+
+    assert.equal(claudeSession.session.engine, 'claude');
+    assert.equal(codexSession.session.engine, 'codex');
+    await state.flush();
+
+    const restored = await createProjectSessionState({
+      dataDir,
+      initialWorkspace: dir,
+    });
+    assert.equal(
+      restored.getSession(claudeSession.session.id)?.session.engine,
+      'claude',
+    );
+    assert.equal(
+      restored.getSession(codexSession.session.id)?.session.engine,
+      'codex',
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

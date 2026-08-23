@@ -4,7 +4,7 @@
 
 本文记录 Flutter Warm Console 的当前实现规格与后续验收目标，视觉依据是 Penpot 的 11 张 `CCR / 01` 至 `CCR / 11` 画板和已落地的 Flutter 组件。根目录 [`DESIGN.md`](../DESIGN.md) 是颜色、排版、圆角、间距和共享组件的规范源；本文负责页面流程、状态映射和工程验收。
 
-截至 2026-08-15，`mobile/lib/main.dart`、`mobile/lib/signal_console_theme.dart` 与 `mobile/lib/workspace_drawer.dart` 已完成 Warm Console 主界面、设置/菜单、Composer 和 Lucide 图标迁移，并保持原有网络、会话、附件、权限和 transcript 行为。后续已落地：`terracotta-deep` CTA、打包 Noto 衬线字体、更宽助手 elevated 气泡、连续字号滑杆（默认 0.95）、轻拟态抬升、权限卡工作目录、`ConsoleStatusStrip`（含连接中）、连接中空状态卡与聚焦描边对比。公开版本为 `v1.2.0`；逐屏视觉验收与恢复终态面板仍可继续补齐。
+截至 2026-08-23，`mobile/lib/main.dart`、`mobile/lib/signal_console_theme.dart` 与 `mobile/lib/workspace_drawer.dart` 已完成 Warm Console 主界面、设置/菜单、Composer 和 Lucide 图标迁移，并保持原有网络、会话、附件、权限和 transcript 行为。后续已落地：`terracotta-deep` CTA、打包 Noto 衬线字体、四角统一 22px 的无描边消息气泡、连续字号滑杆（默认 0.95）、权限卡工作目录、聚焦描边对比，以及叠在 transcript 上的**不透明**悬浮 Composer（灯泡思考强度、权限与模型常驻工具行、`+` 仅附件；键盘打开时与 IME 连续衔接；滚动列表去气泡阴影 / 明文跳过 Markdown / 活动轨避免 `IntrinsicHeight`）。助手 Markdown 中的搜索来源 / 引用链接现可通过系统浏览器打开，并限制为绝对 `http` / `https` URL；思考状态使用固定中心的暖陶花形帧动画，明确显示本轮运行时长，并将动态秒数移出屏读 live region。异常与终态现由共享 `RecoveryStatePanel` 统一呈现：连接中、断线、失败、停止中、停止未确认和已停止共用事实说明、保留内容和单一主动作；断线时使用 WebSocket 权威快照显示自动重连次数、预计重试时间与安全化错误摘要，“立即重连”会取消退避等待。会话面板支持跨项目全文搜索、结果片段高亮和命中消息精确跳转。IME 动画期间仅外层按真实 inset 避让，聊天子树只消费键盘可见性，避免 transcript、Markdown 和 Composer 随每个高度帧重复重建。当前公开版本为 `v1.3.0`；逐屏视觉验收与明确的重试耗尽策略仍待补齐。
 
 ## 目标与非目标
 
@@ -59,21 +59,24 @@
 - 每项至少显示会话名、项目或路径摘要、最近状态与时间。
 - 切换或创建会话在任务运行、附件上传或停止中禁用。
 - 固定说明“切换会话不会中断桌面端正在运行的任务”仅在协议事实成立时显示。
+- 搜索框进入跨项目全文搜索模式；300ms 防抖后查询 daemon 的权威 transcript，显示加载线、匹配片段、项目来源、角色和会话级匹配数量。
+- 匹配片段只高亮 daemon 返回的安全文本范围；结果最多 50 条。点击后复用现有会话切换，等待目标会话的权威 transcript 到达，再定位命中消息并短暂改变现有气泡底色；归档会话保持只读不可进入。
 
 ### 03 Run Control
 
 用户目标：查看当前桌面任务、继续指令或停止。
 
-页面从上到下只有四层：
+页面从上到下只有三层，Composer 叠在对话上：
 
 1. 分离式浮动会话控制。
-2. transcript 正文。
-3. 当前活动与已完成证据。
-4. 底部 Composer。
+2. 全高 transcript（含活动与证据）；列表底部留白让末条可读。
+3. 不透明悬浮 Composer（叠在 transcript 底边之上；列表可滚入 dock 背后，dock 本身不做半透明叠字）。
 
-顶部参考 Claude 手机端：左侧仅保留圆形菜单，右侧是新建与更多组成的短胶囊，中间不显示产品名、会话名、连接状态或设备名。非「已连接」相位时，会话头下方显示紧凑 `ConsoleStatusStrip`。模型留在 Composer，路径和设备信息进入设置或 sheet，剩余上下文 token 不显示。
+顶部参考 Claude 手机端：左侧仅保留圆形菜单，右侧是新建与更多组成的短胶囊，中间不显示产品名、会话名、连接状态或设备名。非「已连接」相位时，会话头下方显示紧凑 `ConsoleStatusStrip`。模型与权限模式留在 Composer 工具行，路径和设备信息进入设置或 sheet，剩余上下文 token 不显示。
 
-用户消息使用暖灰气泡；Claude 连续回复靠左使用更宽的 elevated paper 气泡（贴合 transcript 阅读栏、软圆角与轻阴影）+ 衬线阅读字体。空 transcript：已连接给快捷下一步；离线给重连卡；连接中给独立状态卡。当前活动可展开，已完成活动折叠为一行。运行中必须始终能看到停止入口。
+用户消息使用无描边暖陶灰气泡（约 0.88 屏宽，垂直 padding 7px）；Claude 连续回复靠左使用更宽的无描边 `surface` 阅读气泡（贴合更窄的页面左右边距、四角统一为 22px、无 per-bubble 阴影、两侧各 6px 额外纸面边距、垂直 padding 8/9px）+ 衬线阅读字体；用纸面色阶而不是外框区分。间距采用两档节奏：新一轮用户消息前 14px 呼吸留白，同一回合内紧凑衔接（用户→活动 9px、活动↔回复 12/4px、回复之间 6px）。Markdown 段落与列表项共用 5px `blockSpacing` 主节奏（分点排版紧凑），标题上方留白更大；代码块由自定义 `pre` builder 渲染为带语言标签和复制按钮的独立卡片（RikkaHub 式工具栏），表格使用 Intrinsic 列宽保证可读；搜索来源 / 引用链接点击后交给系统浏览器，仅允许绝对 `http` / `https` URL。无 Markdown 标记的纯文本走廉价 `Text` 路径。空 transcript：已连接给快捷下一步；离线给重连卡；连接中给独立状态卡。连续工具活动合并进竖向时间线卡（`ActivityTimelineCard`：连接线 + 状态图标，默认只显示最近 2 步，可展开全部，单步可展开 detail），当前活动保持可见，运行中必须始终能看到停止入口。
+
+Composer 默认保持 28px 全圆角、轻阴影并避开手势区；键盘打开后取消底部间隙与阴影，底部两角变为直角并贴合 IME。键盘 inset 仍传递给输入区用于状态判断，Transcript 只缩短可见高度，不重建已有消息。
 
 ### 04 Permission Request
 
@@ -113,7 +116,7 @@
 - 恢复卡只有一个主动作“立即重连”。
 - Composer 降级为离线状态面，保留草稿和附件，并显示“离线”。
 
-当前客户端知道连接状态和本地草稿，但没有稳定暴露 WebSocket 的自动重连次数与下一次倒计时。实现初版只显示“自动重连中”；若要显示“第 2 次尝试”，先从 WebSocket 客户端暴露真实数据。待发送数量只能统计本地尚未收到 `prompt_accepted` 的内容。
+客户端现由 `RemoteWebSocketClient` 发布自动重连次数、下一次重试时间与最近传输错误；面板显示“自动重连第 N 次”和预计等待时间，错误只映射为固定安全摘要，不展示原始 URL、设备或异常文本。“立即重连”取消当前退避 Timer 并建立新一代连接；只有收到 authenticated `status` 才清零连续重试次数。待发送数量仍只能统计本地尚未收到 `prompt_accepted` 的内容。
 
 ### 07 Task Failed
 
@@ -156,7 +159,7 @@
 
 - 显示最后一次连接结果和已保留内容。
 - 主动作“再次重连”；次路径进入配对或连接诊断。
-- 只有在客户端拥有明确的重连失败或退避耗尽事实时显示此终态；普通瞬时断线仍保持 06 自动重连状态。
+- 当前客户端持续重试且没有耗尽终点，因此不显示伪造的失败终态；连续 6 次后提示检查电脑端服务和网络，自动重连退避上限仍为 30 秒；后台持续至少 60 秒回到前台时会先强制重建 WebSocket。
 
 ## 共享组件
 
@@ -179,18 +182,20 @@
 
 - 复用现有 `ActivityKind` 与 `ActivityState`。
 - 当前 running 事件为完整卡；done/stopped 事件默认折叠；error 事件保留错误摘要。
-- thinking running 使用 brain 图标与原生脉冲；其他活动 running 使用 `CircularProgressIndicator`。
+- thinking running 使用固定中心的暖陶花形帧动画：圆点生长为四瓣 / 六瓣 / 八瓣星芒后收回，文字位置不移动；显示「本轮已运行 N 秒」。关闭系统动画时固定为完整花形，屏读只在进入状态时播报一次「正在思考」。其他活动 running 使用 `CircularProgressIndicator`。
 - 任务轨只在活动局部出现，不贯穿整屏。
 
 ### Composer
 
-- 标准视觉尺寸 350×110，16px 圆角。
-- 上方是可增长文本区；下方工具行贴底，依次为圆形扩展、暖色模型胶囊、陶土色圆形发送或停止。
-- 扩展按钮打开附件和权限模式；权限模式不再常驻一整行。
+- 悬浮叠在 transcript 底边：`ChatScreen` 用 `Stack` 全高铺对话，`PromptBar` 底对齐；列表/空状态底部 padding 约 188，避免末条被挡住。
+- 标准最小高度约 110；圆角 `composerFloat`（28）；表面不透明 `surfaceElevated` + `floatingComposer` 单层轻阴影。
+- `SafeArea(bottom: false)`，底边用 `MediaQuery.viewPadding.bottom`（无手势条时回退 8）抬离系统指示条。
+- 上方是可增长文本区；下方工具行贴底：圆形附件 `+`，随后模型胶囊与权限模式胶囊**紧贴一组**（组内约 4px，共用一个 flex 槽），再接陶土色圆形发送或停止；窄屏时组内一起收缩，避免两颗芯片被中间空白拉开。
+- `+` 只打开附件；权限模式常驻工具行芯片，点开既有权限 sheet（含 bypass 二次确认）。
 - 模型选择使用紧凑胶囊。
 - 模型旁不显示剩余上下文 token，上下文数据不改变指令建议区高度。
 - 视觉控制为 36px，命中区为 44px。
-- 附件预览显示在输入台上方或输入台内部的可滚动短条，不改变核心控制顺序。
+- 附件预览显示在输入台内部的可滚动短条，不改变核心控制顺序。
 - 斜杠指令建议限制在最多三个首选项，完整结果可继续滚动。
 
 ### PermissionDecision
@@ -203,6 +208,8 @@
 
 - 06、07、08、09、10、11 复用相同状态标题、事实说明、证据和单一主动作位置。
 - 状态必须使用图标、文字和色调三重编码。
+- 当前 `RecoveryStatePanel` 已覆盖连接中、断线、失败、停止中、停止未确认和已停止；断线态读取传输层快照显示尝试次数、预计重试时间与安全错误摘要，正常对话时隐藏，不恢复常驻顶部状态栏。
+- 连接中与断线空状态不再各自维护大卡片，避免与头部状态重复；等待权限仍使用紧凑 `ConsoleStatusStrip` + 权限决策面。
 
 ## 状态映射
 
@@ -214,8 +221,8 @@
 | 停止中 | `running && stopping` | 无，等待确认 | 禁止重复停止 |
 | 已停止 | WebSocket `stopped` 或权威 transcript 的明确停止证据 | 继续输入 | 普通 `running: false` 不足以判定 |
 | 停止超时 | `running && !stopping` 且最近停止请求超时 | 再次停止 | 仍视为运行中 |
-| 离线 | `remoteOffline` | 立即重连 | transcript 与草稿保留；状态条 + 离线空状态卡 |
-| 重连失败 | 明确的重连失败事实 | 再次重连 | 不与瞬时断线混淆 |
+| 离线 / 自动重连 | `remoteOffline` + `RemoteConnectionSnapshot` | 立即重连 | 面板显示真实尝试次数、预计重试时间和安全错误摘要；transcript 与非空草稿分别说明 |
+| 重连失败 | 明确的重试耗尽事实 | 再次重连 | 当前没有耗尽策略，因此不生成此终态 |
 | 失败 | WebSocket `error` 或失败终态 | 查看错误并重试 | 保留原始错误证据 |
 | 等待权限 | `pendingPermissions.isNotEmpty` | 允许一次或拒绝 | 一次处理一个请求；权限卡展示 `workspaceDir` |
 | 上传中 | `uploadingAttachments` | 取消或等待 | 禁止切换会话与发送 |
@@ -226,13 +233,13 @@ UI 直接把这些事实映射为当前视图，不引入新的全局状态机�
 
 当前实现已全局统一使用 `lucide_icons_flutter` 3.1.15。主界面与工作区不再混用 Material Icons；本轮未引入 `flutter_svg` 或额外图标资产。
 
-思考态使用 Lucide `brain`，普通活动 running 继续使用 Flutter 原生 `CircularProgressIndicator`。不使用 `flutter_animate`；入场动效被移除，保留思考脉冲、`SignalPressEffect` 和其他已有原生反馈。
+思考态不复用 Lucide 图标，而由 `CustomPainter` 绘制固定中心的暖陶花形帧动画，避免 Unicode 字形差异和水平位移；普通活动 running 继续使用 Flutter 原生 `CircularProgressIndicator`。不使用 `flutter_animate`；入场动效被移除，保留花形思考动画、`SignalPressEffect` 和其他已有原生反馈。
 
 必须统一的首批图标：menu、more-horizontal、plus、chevron-left/right/down、arrow-up、stop-square、rotate-cw、monitor、monitor-off、terminal、file-diff、check、alert-circle。
 
 ## 实现进度与后续顺序
 
-截至 2026-08-15，Phase 1 的主题、会话头、活动展示、Composer、设置/菜单与 Lucide 图标迁移已落地；a11y/UX 补强（`terracotta-deep` CTA、Noto 打包、助手气泡、权限工作目录、连接中状态条/空状态、聚焦描边）已合入开发代码并装真机。Phase 3 已用共享 `ConsolePresentation` 统一 Header / Composer / 状态条语义；后续工作主要是恢复信息面板、重连失败事实和逐屏真机视觉验收。
+截至 2026-08-17，Phase 1 的主题、会话头、活动展示、Composer、设置/菜单与 Lucide 图标迁移已落地；a11y/UX 补强（`terracotta-deep` CTA、Noto 打包、助手气泡、权限工作目录、连接中状态条/空状态、聚焦描边）与悬浮 Composer（transcript 垫底、权限芯片常驻、`+` 仅附件、更宽气泡）已合入开发代码并装真机。Phase 3 已用共享 `ConsolePresentation` 和 `RemoteConnectionSnapshot` 统一恢复语义；后续工作主要是重试耗尽策略与逐屏真机视觉验收。
 
 ### Phase 1：设计基础与主控制台
 
@@ -251,9 +258,9 @@ UI 直接把这些事实映射为当前视图，不引入新的全局状态机�
 ### Phase 3：恢复与终态
 
 - 已用纯展示映射覆盖离线、失败、停止中、已停止和停止超时；停止/失败终态从当前轮权威 transcript 证据推导，不新增第二套全局状态源。
-- 待补共享恢复信息面板，统一事实说明、保留内容和单一主动作的位置。
-- 仅在有真实连接失败事实时增加 11 重连失败状态。
-- 对本地草稿、未确认 prompt 与重连信息建立可测试的显示规则。
+- 已用共享 `RecoveryStatePanel` 统一事实说明、保留内容和单一主动作的位置；停止超时可再次停止，失败可恢复上条指令进入编辑，已停止可进入只读工作区。
+- 已对本地 transcript、草稿与重连信息建立可测试的显示规则；未确认 prompt 仍沿用客户端重发协议。
+- 仅在未来定义真实重试耗尽策略后增加 11 重连失败终态。
 
 ### Phase 4：清理与可访问性
 
@@ -274,11 +281,12 @@ flutter test
 新增或更新的组件测试必须覆盖：
 
 - 紧凑会话头在 390×844、小屏和大字体下不溢出。
-- Composer 视觉控制 36px、语义命中区至少 44px，键盘出现不遮挡。
+- Composer 视觉控制 36px、语义命中区至少 44px，键盘出现不遮挡；权限芯片可直接打开模式选择，无需先点扩展 sheet。
+- 键盘从关闭进入打开状态时允许一次状态切换；后续连续 inset 帧不得重复重建已渲染消息与 Composer，指令建议必须在剩余高度内自适应且无溢出。
 - “···”菜单不显示上下文 token，保留模型名时具有“当前模型”屏读语义。
 - 思考态使用 brain 图标，其他活动 running 仍使用原生进度指示器，测试结束无 pending Timer。
 - 权限页仅允许一次或拒绝，处理中禁用重复点击；有路径时展示工作目录，缺失时展示 fallback 文案。
-- 离线保留 transcript、草稿与附件，重连动作可达；连接中空状态不复用离线卡，且 ChatScreen 显示状态条。
+- 离线保留 transcript、草稿与附件，面板显示真实自动重连次数、预计等待和安全错误摘要；连接中空状态不复用离线卡，不恢复常驻状态条。
 - stopping、stopped 和 stop-timeout 三态互不混淆。
 - error、offline、connecting、stopping 等状态不只靠颜色。
 - Diff 在长路径、长代码行和大字体下仍可阅读。

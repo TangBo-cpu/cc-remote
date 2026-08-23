@@ -10,6 +10,11 @@ const options = Object.fromEntries(process.argv.slice(2)
   }));
 
 if (options.log) appendFileSync(options.log, JSON.stringify(process.argv.slice(2)) + '\n');
+if (options.envlog) {
+  appendFileSync(options.envlog, JSON.stringify({
+    effort: process.env.CLAUDE_CODE_EFFORT_LEVEL ?? null,
+  }) + '\n');
+}
 
 const resumeIndex = process.argv.indexOf('--resume');
 if (options.mode === 'stale-resume' && resumeIndex >= 0) {
