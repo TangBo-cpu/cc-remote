@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:phosphor_flutter/phosphor_flutter.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:markdown/markdown.dart' as md;
@@ -20,6 +21,7 @@ import 'data/api_client.dart';
 import 'data/permission_mode.dart';
 import 'data/remote_models.dart';
 import 'data/websocket_client.dart';
+import 'effort_gauge.dart';
 import 'effort_preference.dart';
 import 'model_preference.dart';
 import 'notification_service.dart';
@@ -258,6 +260,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   };
 
   ShellRoute route = ShellRoute.boot;
+  BootstrapPhase bootstrapPhase = BootstrapPhase.readingConnection;
   bool running = false;
   bool stopping = false;
   bool pairing = false;
@@ -287,8 +290,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   CodexSandboxMode activeCodexSandboxMode = CodexSandboxMode.readOnly;
   ChatBackgroundPreference chatBackground =
       ChatBackgroundPreference.defaultValue;
-  PermissionMode selectedPermissionMode = PermissionMode.manual;
-  PermissionMode activePermissionMode = PermissionMode.manual;
+  PermissionMode selectedPermissionMode = PermissionMode.auto;
+  PermissionMode activePermissionMode = PermissionMode.auto;
   SavedSession? session;
   final RemoteWebSocketClient wsClient = RemoteWebSocketClient();
   final TokenStore tokenStore = TokenStore();
@@ -846,7 +849,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   Future<void> bootstrap() async {
-    await Future<void>.delayed(const Duration(milliseconds: 700));
     if (widget.demoMode) {
       if (mounted && route == ShellRoute.boot) {
         setState(() => route = ShellRoute.pair);
@@ -857,15 +859,18 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     final saved = await tokenStore.load();
     if (!mounted) return;
     if (saved == null) {
+      updateBootstrapPhase(BootstrapPhase.preparingPairing);
       await clearTranscriptStore();
       if (!mounted) return;
       setState(() => route = ShellRoute.pair);
       return;
     }
 
+    updateBootstrapPhase(BootstrapPhase.restoringSession);
     await restoreTranscriptSnapshot();
     if (!mounted) return;
 
+    updateBootstrapPhase(BootstrapPhase.contactingHost);
     try {
       final status = await fetchStatus(saved);
       if (!mounted) return;
@@ -894,6 +899,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     } catch (err) {
       if (!mounted) return;
       if (err is UnauthorizedSession) {
+        updateBootstrapPhase(BootstrapPhase.preparingPairing);
         await tokenStore.clear();
         await clearTranscriptStore();
         if (!mounted) return;
@@ -915,6 +921,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       });
       persistTranscriptSnapshotLater();
     }
+  }
+
+  void updateBootstrapPhase(BootstrapPhase phase) {
+    if (!mounted || route != ShellRoute.boot || bootstrapPhase == phase) return;
+    setState(() => bootstrapPhase = phase);
   }
 
   Future<void> connectDemoDevice() async {
@@ -1028,6 +1039,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             modelName = null;
             contextWindow = null;
             remainingContext = null;
+            selectedPermissionMode = PermissionMode.auto;
+            activePermissionMode = PermissionMode.auto;
           }
           projects
             ..clear()
@@ -1087,6 +1100,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           contextWindow = snapshot.contextWindow;
           remainingContext = snapshot.remainingContext;
           activePermissionMode = snapshot.permissionMode;
+          selectedPermissionMode = snapshot.permissionMode;
           activeCodexSandboxMode = snapshot.codexSandboxMode;
           selectedCodexSandboxMode = snapshot.codexSandboxMode;
           pendingPermissions
@@ -1104,7 +1118,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           allowBypassPermissions = decoded['allowBypassPermissions'] == true;
           if (!allowBypassPermissions &&
               selectedPermissionMode == PermissionMode.bypassPermissions) {
-            selectedPermissionMode = PermissionMode.manual;
+            selectedPermissionMode = PermissionMode.auto;
           }
         });
       case 'permission_request':
@@ -1183,7 +1197,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           activeRunId = null;
           runStartedAt = null;
           removeDisconnectedRunNotice();
-          activePermissionMode = PermissionMode.manual;
+          activePermissionMode = selectedPermissionMode;
           pendingPermissions.clear();
           respondingPermissionIds.clear();
           removeCurrentTurnActivities(messages);
@@ -1208,7 +1222,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           activeRunId = null;
           runStartedAt = null;
           removeDisconnectedRunNotice();
-          activePermissionMode = PermissionMode.manual;
+          activePermissionMode = selectedPermissionMode;
           pendingPermissions.clear();
           respondingPermissionIds.clear();
           finishRunningActivities(messages, ActivityState.stopped);
@@ -1229,7 +1243,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           activeRunId = null;
           runStartedAt = null;
           removeDisconnectedRunNotice();
-          activePermissionMode = PermissionMode.manual;
+          activePermissionMode = selectedPermissionMode;
           pendingPermissions.clear();
           respondingPermissionIds.clear();
           finishRunningActivities(messages, ActivityState.error);
@@ -1270,8 +1284,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       runStartedAt = null;
       remoteTranscriptRevision = 0;
       allowBypassPermissions = false;
-      selectedPermissionMode = PermissionMode.manual;
-      activePermissionMode = PermissionMode.manual;
+      selectedPermissionMode = PermissionMode.auto;
+      activePermissionMode = PermissionMode.auto;
       pendingPermissions.clear();
       respondingPermissionIds.clear();
     });
@@ -1506,9 +1520,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       activePermissionMode = permissionMode;
       activeCodexSandboxMode = codexSandboxMode;
       beginPrompt(messages, text, attachments: uploaded);
-      if (permissionMode == PermissionMode.bypassPermissions) {
-        selectedPermissionMode = PermissionMode.manual;
-      }
       if (codexSandboxMode == CodexSandboxMode.dangerFullAccess) {
         selectedCodexSandboxMode = CodexSandboxMode.readOnly;
       }
@@ -1734,6 +1745,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           ..add(TranscriptMessage.system('已开启新对话'));
         pendingAttachments.clear();
         uploadingAttachments = false;
+        selectedPermissionMode = PermissionMode.auto;
+        activePermissionMode = PermissionMode.auto;
       });
       persistTranscriptSnapshotLater();
       return;
@@ -1780,6 +1793,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         uploadingAttachments = false;
         pendingPermissions.clear();
         respondingPermissionIds.clear();
+        selectedPermissionMode = PermissionMode.auto;
+        activePermissionMode = PermissionMode.auto;
       });
       persistTranscriptSnapshotLater();
     } catch (_) {
@@ -1823,8 +1838,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       runStartedAt = null;
       remoteTranscriptRevision = 0;
       allowBypassPermissions = false;
-      selectedPermissionMode = PermissionMode.manual;
-      activePermissionMode = PermissionMode.manual;
+      selectedPermissionMode = PermissionMode.auto;
+      activePermissionMode = PermissionMode.auto;
       pendingPermissions.clear();
       respondingPermissionIds.clear();
       promptController.clear();
@@ -1904,6 +1919,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       modelName = null;
       contextWindow = null;
       remainingContext = null;
+      selectedPermissionMode = PermissionMode.auto;
+      activePermissionMode = PermissionMode.auto;
     }
     projects
       ..clear()
@@ -2203,8 +2220,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         commands.clear();
         remoteTranscriptRevision = 0;
         allowBypassPermissions = false;
-        selectedPermissionMode = PermissionMode.manual;
-        activePermissionMode = PermissionMode.manual;
+        selectedPermissionMode = PermissionMode.auto;
+        activePermissionMode = PermissionMode.auto;
         pendingPermissions.clear();
         respondingPermissionIds.clear();
       });
@@ -2223,7 +2240,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       valueListenable: widget.readingFontScaleListenable,
       builder: (context, readingFontScale, _) {
         final screen = switch (route) {
-          ShellRoute.boot => const BootstrapScreen(),
+          ShellRoute.boot => BootstrapScreen(phase: bootstrapPhase),
           ShellRoute.pair => PairScreen(
             enableCamera: widget.enableCamera,
             cameraPermissionService: cameraPermissionService,
@@ -2300,27 +2317,46 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             onStop: stopRun,
           ),
         };
-        return AppBackground(
-          chatBackground: route == ShellRoute.chat
-              ? chatBackground
-              : ChatBackgroundPreference.defaultValue,
-          child: AnimatedSwitcher(
-            duration: reduceMotion ? Duration.zero : AppMotion.standard,
-            reverseDuration: reduceMotion ? Duration.zero : AppMotion.fast,
-            switchInCurve: AppMotion.enter,
-            switchOutCurve: AppMotion.exit,
-            transitionBuilder: (child, animation) {
-              if (reduceMotion) return child;
-              final offset = Tween<Offset>(
-                begin: const Offset(0.035, 0),
-                end: Offset.zero,
-              ).animate(animation);
-              return FadeTransition(
-                opacity: animation,
-                child: SlideTransition(position: offset, child: child),
-              );
-            },
-            child: KeyedSubtree(key: ValueKey(route), child: screen),
+        return AnnotatedRegion<SystemUiOverlayStyle>(
+          value: route == ShellRoute.boot
+              ? const SystemUiOverlayStyle(
+                  statusBarColor: Colors.transparent,
+                  statusBarIconBrightness: Brightness.dark,
+                  statusBarBrightness: Brightness.light,
+                  systemNavigationBarColor: _BootstrapPalette.ground,
+                  systemNavigationBarIconBrightness: Brightness.dark,
+                  systemNavigationBarDividerColor: Colors.transparent,
+                )
+              : const SystemUiOverlayStyle(
+                  statusBarColor: Colors.transparent,
+                  statusBarIconBrightness: Brightness.dark,
+                  statusBarBrightness: Brightness.light,
+                  systemNavigationBarColor: AppColors.paper,
+                  systemNavigationBarIconBrightness: Brightness.dark,
+                  systemNavigationBarDividerColor: Colors.transparent,
+                ),
+          child: AppBackground(
+            chatBackground: route == ShellRoute.chat
+                ? chatBackground
+                : ChatBackgroundPreference.defaultValue,
+            child: AnimatedSwitcher(
+              duration: reduceMotion ? Duration.zero : AppMotion.standard,
+              reverseDuration: reduceMotion ? Duration.zero : AppMotion.fast,
+              switchInCurve: AppMotion.enter,
+              switchOutCurve: AppMotion.exit,
+              transitionBuilder: (child, animation) {
+                if (reduceMotion) return child;
+                final offset = Tween<Offset>(
+                  begin: const Offset(0.035, 0),
+                  end: Offset.zero,
+                ).animate(animation);
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(position: offset, child: child),
+                );
+              },
+              child: KeyedSubtree(key: ValueKey(route), child: screen),
+            ),
           ),
         );
       },
@@ -2330,62 +2366,490 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
 enum ShellRoute { boot, pair, chat }
 
-class BootstrapScreen extends StatelessWidget {
-  const BootstrapScreen({super.key});
+/*
+THESIS: Startup is a live generative identity, not a centered logo and loader.
+OWN-WORLD: Ice-white ground, ultramarine/cyan and fluorescent-chartreuse
+parametric streams, graphite type, no cards or terminal symbols.
+STORY: Two independently seeded paths enter from opposite edges, register as
+a double-C connection, and reseed when the real bootstrap phase changes.
+FIRST VIEWPORT: The identity owns most of the screen; the seed index sits upper
+left and real product/status copy anchors the lower right.
+FORM: Generative Parametric Identity, seed 11594fa5.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the
+finish review, the verdict, DESIGN.md, and every shipping raster carrying its
+provenance.
+*/
+enum BootstrapPhase {
+  readingConnection('正在读取连接信息', 23.618, -72.046),
+  preparingPairing('正在准备配对', 12.844, -31.220),
+  restoringSession('正在恢复上次会话', 31.207, -54.813),
+  contactingHost('正在检查桌面主机', 48.112, -16.904);
+
+  const BootstrapPhase(this.label, this.seedA, this.seedB);
+
+  final String label;
+  final double seedA;
+  final double seedB;
+}
+
+class _BootstrapPalette {
+  static const ground = Color(0xFFF5F6F7);
+  static const ink = Color(0xFF1D2028);
+  static const muted = Color(0xFF565B67);
+  static const blue = Color(0xFF2850F6);
+  static const cyan = Color(0xFF43C9F2);
+  static const lime = Color(0xFFA5F33B);
+}
+
+class BootstrapScreen extends StatefulWidget {
+  const BootstrapScreen({
+    super.key,
+    this.phase = BootstrapPhase.readingConnection,
+  });
+
+  final BootstrapPhase phase;
+
+  @override
+  State<BootstrapScreen> createState() => _BootstrapScreenState();
+}
+
+class _BootstrapScreenState extends State<BootstrapScreen>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController animation;
+  var reduceMotion = false;
+
+  @override
+  void initState() {
+    super.initState();
+    animation = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2600),
+    );
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final nextReduceMotion = MediaQuery.disableAnimationsOf(context);
+    if (nextReduceMotion == reduceMotion && animation.isAnimating) return;
+    reduceMotion = nextReduceMotion;
+    if (reduceMotion) {
+      animation
+        ..stop()
+        ..value = 0.42;
+    } else if (!animation.isAnimating) {
+      animation.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    animation.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Center(
+    return AnnotatedRegion<SystemUiOverlayStyle>(
       key: const ValueKey('boot'),
-      child: Padding(
-        padding: const EdgeInsets.all(28),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+      value: const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.dark,
+        statusBarBrightness: Brightness.light,
+        systemNavigationBarColor: _BootstrapPalette.ground,
+        systemNavigationBarIconBrightness: Brightness.dark,
+        systemNavigationBarDividerColor: Colors.transparent,
+      ),
+      child: ColoredBox(
+        color: _BootstrapPalette.ground,
+        child: Stack(
           children: [
-            Container(
-              key: const ValueKey('bootstrap-mark'),
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(AppRadii.surface),
-                color: AppColors.surface,
-                border: Border.all(color: AppColors.line),
-              ),
-              alignment: Alignment.center,
-              child: const Icon(
-                LucideIcons.terminal,
-                color: AppColors.terracottaDeep,
-                size: 30,
-              ),
-            ),
-            const SizedBox(height: 20),
-            const Text(
-              'CC Remote',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.w700,
-                letterSpacing: -0.45,
+            Positioned.fill(
+              child: Semantics(
+                label: '正在生成手机与桌面主机的连接标记',
+                excludeSemantics: true,
+                child: RepaintBoundary(
+                  key: const ValueKey('bootstrap-signal'),
+                  child: CustomPaint(
+                    painter: _BootstrapIdentityPainter(
+                      animation: animation,
+                      phase: widget.phase,
+                    ),
+                  ),
+                ),
               ),
             ),
-            const SizedBox(height: 6),
-            const Text(
-              '正在检查本机连接',
-              style: TextStyle(color: AppColors.muted, fontSize: 14),
-            ),
-            const SizedBox(height: 22),
-            const SizedBox(
-              width: 148,
-              child: LinearProgressIndicator(
-                minHeight: 2,
-                color: AppColors.terracotta,
-                backgroundColor: AppColors.line,
-                borderRadius: BorderRadius.all(Radius.circular(AppRadii.pill)),
+            SafeArea(
+              minimum: const EdgeInsets.fromLTRB(26, 26, 26, 22),
+              child: Stack(
+                children: [
+                  Align(
+                    alignment: Alignment.topLeft,
+                    child: _BootstrapSeedIndex(
+                      phase: widget.phase,
+                      reduceMotion: reduceMotion,
+                    ),
+                  ),
+                  Align(
+                    alignment: Alignment.bottomRight,
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 72),
+                      child: _BootstrapStatusBlock(
+                        phase: widget.phase,
+                        reduceMotion: reduceMotion,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
         ),
       ),
     );
+  }
+}
+
+class _BootstrapSeedIndex extends StatelessWidget {
+  const _BootstrapSeedIndex({required this.phase, required this.reduceMotion});
+
+  final BootstrapPhase phase;
+  final bool reduceMotion;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 2,
+          height: 72,
+          child: Column(
+            children: const [
+              Expanded(child: ColoredBox(color: _BootstrapPalette.blue)),
+              Expanded(child: ColoredBox(color: _BootstrapPalette.lime)),
+            ],
+          ),
+        ),
+        const SizedBox(width: 14),
+        AnimatedSwitcher(
+          duration: reduceMotion ? Duration.zero : AppMotion.fast,
+          child: Column(
+            key: ValueKey(phase),
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'SEED',
+                style: TextStyle(
+                  color: _BootstrapPalette.ink,
+                  fontFamily: 'sans-serif-condensed',
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 2.1,
+                  height: 1.2,
+                ),
+              ),
+              const SizedBox(height: 9),
+              Text(
+                phase.seedA.toStringAsFixed(3),
+                style: const TextStyle(
+                  color: _BootstrapPalette.muted,
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.7,
+                  height: 1.35,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+              Text(
+                phase.seedB.toStringAsFixed(3),
+                style: const TextStyle(
+                  color: _BootstrapPalette.muted,
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.7,
+                  height: 1.35,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _BootstrapStatusBlock extends StatelessWidget {
+  const _BootstrapStatusBlock({
+    required this.phase,
+    required this.reduceMotion,
+  });
+
+  final BootstrapPhase phase;
+  final bool reduceMotion;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 224,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SizedBox(
+            width: 24,
+            height: 4,
+            child: ColoredBox(color: _BootstrapPalette.blue),
+          ),
+          const SizedBox(height: 18),
+          const FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Text(
+              'CC Remote',
+              maxLines: 1,
+              style: TextStyle(
+                color: _BootstrapPalette.ink,
+                fontFamily: 'sans-serif-condensed',
+                fontSize: 32,
+                fontWeight: FontWeight.w600,
+                letterSpacing: -0.8,
+                height: 1.05,
+              ),
+            ),
+          ),
+          const SizedBox(height: 17),
+          Semantics(
+            liveRegion: true,
+            label: phase.label,
+            excludeSemantics: true,
+            child: AnimatedSwitcher(
+              duration: reduceMotion ? Duration.zero : AppMotion.fast,
+              transitionBuilder: (child, phaseAnimation) =>
+                  FadeTransition(opacity: phaseAnimation, child: child),
+              child: Text(
+                phase.label,
+                key: ValueKey(phase),
+                maxLines: 2,
+                style: const TextStyle(
+                  color: _BootstrapPalette.muted,
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.1,
+                  height: 1.35,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 24),
+          const DecoratedBox(
+            decoration: BoxDecoration(
+              color: _BootstrapPalette.blue,
+              shape: BoxShape.circle,
+            ),
+            child: SizedBox.square(dimension: 8),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BootstrapIdentityPainter extends CustomPainter {
+  _BootstrapIdentityPainter({required this.animation, required this.phase})
+    : super(repaint: animation);
+
+  final Animation<double> animation;
+  final BootstrapPhase phase;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty) return;
+    final shortestSide = min(size.width, size.height);
+    final motion = sin(animation.value * 2 * pi + phase.seedA * 0.03);
+    final secondaryMotion = cos(
+      animation.value * 2 * pi + phase.seedB.abs() * 0.02,
+    );
+
+    canvas.drawCircle(
+      Offset(size.width * 0.72, size.height * 0.18),
+      shortestSide * 0.38,
+      Paint()..color = _BootstrapPalette.blue.withValues(alpha: 0.018),
+    );
+    canvas.drawCircle(
+      Offset(size.width * 0.24, size.height * 0.58),
+      shortestSide * 0.46,
+      Paint()..color = _BootstrapPalette.lime.withValues(alpha: 0.016),
+    );
+
+    _drawStreamBundle(
+      canvas: canvas,
+      size: size,
+      fromLeft: true,
+      lineCount: 20,
+      motion: motion,
+      secondaryMotion: secondaryMotion,
+    );
+    _drawStreamBundle(
+      canvas: canvas,
+      size: size,
+      fromLeft: false,
+      lineCount: 20,
+      motion: motion,
+      secondaryMotion: secondaryMotion,
+    );
+
+    _drawRegistrationMarks(canvas, size, motion);
+  }
+
+  void _drawStreamBundle({
+    required Canvas canvas,
+    required Size size,
+    required bool fromLeft,
+    required int lineCount,
+    required double motion,
+    required double secondaryMotion,
+  }) {
+    final width = size.width;
+    final height = size.height;
+    final centerX = width * (fromLeft ? 0.43 : 0.57);
+    final centerY = height * 0.40;
+    final baseRx = min(width * 0.155, 67.0);
+    final baseRy = baseRx * 1.03;
+    final startAngle = fromLeft ? -pi / 4 : -3 * pi / 4;
+    final sweepAngle = fromLeft ? -3 * pi / 2 : 3 * pi / 2;
+
+    for (var index = 0; index < lineCount; index++) {
+      final normalized = index / (lineCount - 1);
+      final spread = (index - (lineCount - 1) / 2) * 2.05;
+      final localWave = sin(
+        phase.seedA * 0.08 + index * 0.31 + animation.value * 2 * pi,
+      );
+      final rx = baseRx + spread * 0.78 + localWave * 1.4;
+      final ry = baseRy + spread * 0.58 - localWave * 0.9;
+      final shiftedCenter = Offset(
+        centerX + motion * (fromLeft ? 4.5 : -4.5),
+        centerY + secondaryMotion * 4 + spread * 0.18,
+      );
+      final arcRect = Rect.fromCenter(
+        center: shiftedCenter,
+        width: rx * 2,
+        height: ry * 2,
+      );
+      final arcStart = _ellipsePoint(arcRect, startAngle);
+      final path = Path()
+        ..moveTo(
+          fromLeft ? -width * 0.12 : width * 1.12,
+          height * 0.25 + spread * 1.25 + localWave * 2.4,
+        )
+        ..cubicTo(
+          width * (fromLeft ? 0.15 : 0.85),
+          height * 0.27 + spread * 0.72,
+          width * (fromLeft ? 0.31 : 0.69),
+          height * 0.25 + localWave * 4,
+          arcStart.dx,
+          arcStart.dy,
+        )
+        ..arcTo(arcRect, startAngle, sweepAngle, false);
+
+      path.cubicTo(
+        width * (fromLeft ? 0.74 : 0.26),
+        height * (0.56 + normalized * 0.012),
+        width * (fromLeft ? 0.46 : 0.54),
+        height * (0.68 + spread * 0.0009),
+        fromLeft ? -width * 0.13 : width * 1.13,
+        height * (fromLeft ? 0.96 : 0.90) + spread * 1.15,
+      );
+
+      final startColor = fromLeft
+          ? _BootstrapPalette.blue
+          : _BootstrapPalette.lime;
+      final color = Color.lerp(
+        startColor,
+        _BootstrapPalette.cyan,
+        fromLeft ? normalized * 0.58 : (1 - normalized) * 0.34,
+      )!;
+      canvas.drawPath(
+        path,
+        Paint()
+          ..color = color.withValues(alpha: 0.72)
+          ..style = PaintingStyle.stroke
+          ..strokeCap = StrokeCap.round
+          ..strokeWidth = 0.9,
+      );
+
+      if (index == 3 || index == 10 || index == 16) {
+        final metrics = path.computeMetrics().toList(growable: false);
+        if (metrics.isNotEmpty) {
+          final metric = metrics.first;
+          final tangent = metric.getTangentForOffset(
+            metric.length * (0.16 + index * 0.012),
+          );
+          if (tangent != null) {
+            final markerPaint = Paint()..color = color.withValues(alpha: 0.86);
+            if (index == 10) {
+              canvas.drawRect(
+                Rect.fromCenter(center: tangent.position, width: 4, height: 4),
+                markerPaint,
+              );
+            } else {
+              canvas.drawCircle(tangent.position, 2, markerPaint);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  Offset _ellipsePoint(Rect rect, double angle) {
+    return Offset(
+      rect.center.dx + cos(angle) * rect.width / 2,
+      rect.center.dy + sin(angle) * rect.height / 2,
+    );
+  }
+
+  void _drawRegistrationMarks(Canvas canvas, Size size, double motion) {
+    final marks = <(Offset, Color)>[
+      (
+        Offset(size.width * 0.41, size.height * 0.22 + motion * 3),
+        _BootstrapPalette.cyan,
+      ),
+      (
+        Offset(size.width * 0.79, size.height * 0.28 - motion * 2),
+        _BootstrapPalette.lime,
+      ),
+      (
+        Offset(size.width * 0.81, size.height * 0.61 + motion * 4),
+        _BootstrapPalette.blue,
+      ),
+      (
+        Offset(size.width * 0.36, size.height * 0.79 - motion * 3),
+        _BootstrapPalette.cyan,
+      ),
+    ];
+    for (final mark in marks) {
+      canvas.drawCircle(
+        mark.$1,
+        3.2,
+        Paint()..color = _BootstrapPalette.ground,
+      );
+      canvas.drawCircle(
+        mark.$1,
+        2.4,
+        Paint()
+          ..color = mark.$2.withValues(alpha: 0.54)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _BootstrapIdentityPainter oldDelegate) {
+    return oldDelegate.animation != animation || oldDelegate.phase != phase;
   }
 }
 
@@ -3451,6 +3915,8 @@ class ChatScreen extends StatelessWidget {
                             permissionMode: permissionMode,
                             allowBypassPermissions: allowBypassPermissions,
                             modelName: modelName,
+                            contextWindow: contextWindow,
+                            remainingContext: remainingContext,
                             engine: engine,
                             selectedModel: selectedModel,
                             selectedEffort: selectedEffort,
@@ -4150,7 +4616,10 @@ Future<void> showSettingsSheet(
 ) {
   return showModalBottomSheet<void>(
     context: context,
+    backgroundColor: Colors.transparent,
+    barrierColor: _SettingsPalette.barrier,
     isScrollControlled: true,
+    showDragHandle: false,
     builder: (context) => SettingsSheet(
       session: session,
       notificationsEnabled: notificationsEnabled,
@@ -4242,7 +4711,7 @@ Future<SessionEngine?> showSessionEnginePicker(
                   ),
                   trailing: engine == selected
                       ? const Icon(
-                          LucideIcons.circleCheck,
+                          PhosphorIconsFill.checkCircle,
                           color: AppColors.terracottaDeep,
                         )
                       : null,
@@ -4311,6 +4780,10 @@ Future<void> showSessionNavigator(
   );
 }
 
+enum _SessionNavigatorView { home, projects, search }
+
+enum _SessionAction { rename, archive, delete }
+
 class SessionNavigatorSheet extends StatefulWidget {
   const SessionNavigatorSheet({
     super.key,
@@ -4347,8 +4820,11 @@ class SessionNavigatorSheet extends StatefulWidget {
 
 class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
   late String selectedProjectId =
-      widget.activeProjectId ?? widget.projects.first.id;
+      widget.activeProjectId ??
+      (widget.projects.isEmpty ? '' : widget.projects.first.id);
+  _SessionNavigatorView view = _SessionNavigatorView.home;
   final TextEditingController searchController = TextEditingController();
+  final FocusNode searchFocusNode = FocusNode();
   Timer? searchDebounce;
   int searchGeneration = 0;
   String searchQuery = '';
@@ -4367,6 +4843,7 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
   void dispose() {
     searchDebounce?.cancel();
     searchController.dispose();
+    searchFocusNode.dispose();
     super.dispose();
   }
 
@@ -4428,6 +4905,34 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
     handleSearchChanged('');
   }
 
+  void openView(_SessionNavigatorView next) {
+    if (view == _SessionNavigatorView.search && next != view) {
+      searchDebounce?.cancel();
+      searchGeneration += 1;
+      searchFocusNode.unfocus();
+    }
+    if (next == _SessionNavigatorView.search) {
+      searchController.clear();
+      searchQuery = '';
+      searchResults = const [];
+      searchError = null;
+      searching = false;
+    }
+    setState(() => view = next);
+    if (next == _SessionNavigatorView.search) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) searchFocusNode.requestFocus();
+      });
+    }
+  }
+
+  void chooseProject(String projectId) {
+    setState(() {
+      selectedProjectId = projectId;
+      view = _SessionNavigatorView.home;
+    });
+  }
+
   Future<void> createSession() async {
     if (widget.running) return;
     var selectedEngine = SessionEngine.claude;
@@ -4452,205 +4957,22 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
     return '未知项目';
   }
 
-  Widget buildProjectBrowser() {
-    final projectSessions = widget.sessions
-        .where((session) => session.projectId == selectedProjectId)
-        .toList();
-    final selectedProject = this.selectedProject;
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Row(
-            children: [
-              for (final project in widget.projects) ...[
-                ChoiceChip(
-                  key: ValueKey('project-${project.id}'),
-                  selected: project.id == selectedProjectId,
-                  label: Text(project.name),
-                  avatar: project.running
-                      ? const SizedBox.square(
-                          dimension: 12,
-                          child: CircularProgressIndicator(strokeWidth: 1.6),
-                        )
-                      : null,
-                  onSelected: (_) =>
-                      setState(() => selectedProjectId = project.id),
-                ),
-                const SizedBox(width: 8),
-              ],
-            ],
-          ),
-        ),
-        if (selectedProject != null) ...[
-          const SizedBox(height: 10),
-          Text(
-            selectedProject.path,
-            key: const ValueKey('selected-project-path'),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 12,
-              height: 1.3,
-              color: AppColors.muted,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-        const SizedBox(height: 12),
-        Expanded(
-          child: projectSessions.isEmpty
-              ? const Center(child: Text('这个项目还没有会话'))
-              : ListView.separated(
-                  itemCount: projectSessions.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, index) {
-                    final item = projectSessions[index];
-                    final active = item.id == widget.activeSessionId;
-                    final canMutate = !widget.running && !item.running;
-                    return ListTile(
-                      key: ValueKey('session-${item.id}'),
-                      enabled: (!widget.running || active) && !item.archived,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-                      leading: Icon(
-                        item.archived
-                            ? LucideIcons.archive
-                            : item.running
-                            ? LucideIcons.clock
-                            : LucideIcons.messageCircle,
-                        color: item.running
-                            ? AppColors.accent
-                            : AppColors.muted,
-                      ),
-                      title: Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              item.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          buildEngineBadge(
-                            item,
-                            enabled:
-                                (!widget.running || active) && !item.archived,
-                          ),
-                        ],
-                      ),
-                      subtitle: Text(
-                        item.summary,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (canMutate)
-                            PopupMenuButton<String>(
-                              key: ValueKey('session-menu-${item.id}'),
-                              onSelected: (value) async {
-                                if (value == 'rename') {
-                                  final next = await promptSessionTitle(
-                                    context,
-                                    initial: item.title,
-                                  );
-                                  if (next == null || next.trim().isEmpty) {
-                                    return;
-                                  }
-                                  await widget.onRename(item.id, next);
-                                  if (mounted) setState(() {});
-                                } else if (value == 'archive') {
-                                  await widget.onArchive(item.id);
-                                } else if (value == 'delete') {
-                                  final confirmed = await confirmSessionDelete(
-                                    context,
-                                    item.title,
-                                  );
-                                  if (confirmed == true) {
-                                    await widget.onDelete(item.id);
-                                  }
-                                }
-                              },
-                              itemBuilder: (context) => [
-                                const PopupMenuItem(
-                                  value: 'rename',
-                                  child: Text('重命名'),
-                                ),
-                                if (!item.archived)
-                                  const PopupMenuItem(
-                                    value: 'archive',
-                                    child: Text('归档'),
-                                  ),
-                                const PopupMenuItem(
-                                  value: 'delete',
-                                  child: Text('删除'),
-                                ),
-                              ],
-                            ),
-                          if (active)
-                            const Icon(
-                              LucideIcons.circleCheck,
-                              color: AppColors.accent,
-                            )
-                          else
-                            const Icon(LucideIcons.chevronRight),
-                        ],
-                      ),
-                      onTap: active || widget.running || item.archived
-                          ? null
-                          : () => widget.onSelect(item.id),
-                    );
-                  },
-                ),
-        ),
-      ],
-    );
-  }
-
-  Widget buildEngineBadge(
-    RemoteSessionSummary session, {
-    required bool enabled,
-  }) {
-    return Opacity(
-      opacity: enabled ? 1 : 0.38,
-      child: Container(
-        key: ValueKey(
-          'session-engine-badge-${session.engine.wireName}-${session.id}',
-        ),
-        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-        decoration: BoxDecoration(
-          color: AppColors.composerControlFill,
-          borderRadius: BorderRadius.circular(AppRadii.pill),
-        ),
-        child: Text(
-          session.engine.label,
-          style: const TextStyle(
-            fontSize: 11,
-            height: 1.2,
-            fontWeight: FontWeight.w700,
-            color: AppColors.muted,
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget buildSearchBody() {
     if (searchError != null) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(LucideIcons.searchX, color: AppColors.muted),
+            const Icon(
+              PhosphorIconsRegular.magnifyingGlass,
+              color: AppColors.muted,
+            ),
             const SizedBox(height: 8),
             Text(searchError!),
             const SizedBox(height: 8),
             TextButton.icon(
               onPressed: () => submitSearch(searchController.text),
-              icon: const Icon(LucideIcons.refreshCw, size: 17),
+              icon: const Icon(PhosphorIconsRegular.arrowsClockwise, size: 17),
               label: const Text('重试'),
             ),
           ],
@@ -4679,7 +5001,9 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
             vertical: 4,
           ),
           leading: Icon(
-            result.archived ? LucideIcons.archive : LucideIcons.messageCircle,
+            result.archived
+                ? PhosphorIconsRegular.archive
+                : PhosphorIconsRegular.chatCircle,
             color: AppColors.muted,
           ),
           title: Text(
@@ -4707,8 +5031,14 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
             ],
           ),
           trailing: active
-              ? const Icon(LucideIcons.circleCheck, color: AppColors.accent)
-              : const Icon(LucideIcons.chevronRight),
+              ? const Icon(
+                  PhosphorIconsFill.checkCircle,
+                  color: AppColors.terracottaDeep,
+                )
+              : const Icon(
+                  PhosphorIconsRegular.caretRight,
+                  color: AppColors.inactive,
+                ),
           onTap: canOpen ? () => widget.onSearchResult(result) : null,
         );
       },
@@ -4745,70 +5075,597 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
     );
   }
 
+  Widget buildSectionTitle(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 24, bottom: 6),
+      child: Text(
+        text,
+        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+          color: AppColors.inactive,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget buildSessionStatus(RemoteSessionSummary item, bool active) {
+    if (item.running) {
+      return const SizedBox.square(
+        dimension: 24,
+        child: CircularProgressIndicator(
+          strokeWidth: 2.2,
+          color: AppColors.accent,
+        ),
+      );
+    }
+    return Icon(
+      item.archived
+          ? PhosphorIconsRegular.archive
+          : active
+          ? PhosphorIconsFill.checkCircle
+          : PhosphorIconsRegular.chatCircle,
+      size: active ? 22 : 21,
+      color: active ? AppColors.terracottaDeep : AppColors.muted,
+    );
+  }
+
+  Future<void> handleSessionAction(
+    RemoteSessionSummary item,
+    _SessionAction action,
+  ) async {
+    if (widget.running || item.running) return;
+    switch (action) {
+      case _SessionAction.rename:
+        final next = await promptSessionTitle(context, initial: item.title);
+        if (next == null || next.trim().isEmpty) return;
+        await widget.onRename(item.id, next);
+        if (mounted) setState(() {});
+        return;
+      case _SessionAction.archive:
+        await widget.onArchive(item.id);
+        return;
+      case _SessionAction.delete:
+        final confirmed = await confirmSessionDelete(context, item.title);
+        if (confirmed == true) await widget.onDelete(item.id);
+        return;
+    }
+  }
+
+  Widget buildSessionRow(RemoteSessionSummary item) {
+    final active = item.id == widget.activeSessionId;
+    final canOpen = !item.archived && (!widget.running || active);
+    final canMutate = !widget.running && !item.running;
+    final status = item.running
+        ? '运行中'
+        : active
+        ? '当前'
+        : item.engine.label;
+    final meta = item.running || active
+        ? '$status · ${item.engine.label} · ${item.summary}'
+        : '${item.engine.label} · ${item.summary}';
+
+    return Semantics(
+      selected: active,
+      child: ListTile(
+        key: ValueKey('session-${item.id}'),
+        enabled: canOpen,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+        horizontalTitleGap: 12,
+        leading: SizedBox(
+          width: 28,
+          child: Center(child: buildSessionStatus(item, active)),
+        ),
+        title: Text(
+          item.title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: active ? FontWeight.w700 : FontWeight.w600,
+          ),
+        ),
+        subtitle: Text(
+          meta,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: item.running ? AppColors.terracottaDeep : AppColors.muted,
+          ),
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (canMutate)
+              PopupMenuButton<_SessionAction>(
+                key: ValueKey('session-menu-${item.id}'),
+                tooltip: '${item.title} 的更多操作',
+                icon: const Icon(PhosphorIconsRegular.dotsThree, size: 21),
+                onSelected: (action) => handleSessionAction(item, action),
+                itemBuilder: (context) => [
+                  const PopupMenuItem(
+                    value: _SessionAction.rename,
+                    child: Row(
+                      children: [
+                        Icon(PhosphorIconsRegular.pencilSimple, size: 18),
+                        SizedBox(width: 12),
+                        Text('重命名'),
+                      ],
+                    ),
+                  ),
+                  if (!item.archived)
+                    const PopupMenuItem(
+                      value: _SessionAction.archive,
+                      child: Row(
+                        children: [
+                          Icon(PhosphorIconsRegular.archive, size: 18),
+                          SizedBox(width: 12),
+                          Text('归档'),
+                        ],
+                      ),
+                    ),
+                  const PopupMenuItem(
+                    value: _SessionAction.delete,
+                    child: Row(
+                      children: [
+                        Icon(
+                          PhosphorIconsRegular.trash,
+                          size: 18,
+                          color: AppColors.danger,
+                        ),
+                        SizedBox(width: 12),
+                        Text('删除', style: TextStyle(color: AppColors.danger)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            if (!active)
+              const Icon(
+                PhosphorIconsRegular.caretRight,
+                size: 18,
+                color: AppColors.inactive,
+              ),
+          ],
+        ),
+        onTap: canOpen && !active ? () => widget.onSelect(item.id) : null,
+      ),
+    );
+  }
+
+  Widget buildProjectRow(RemoteProjectSummary project, {bool compact = false}) {
+    final active = project.id == selectedProjectId;
+    final subtitle = compact
+        ? active
+              ? '当前项目'
+              : project.running
+              ? '有会话正在运行'
+              : '${project.sessionCount} 个会话'
+        : project.path;
+
+    return Semantics(
+      selected: active,
+      child: ListTile(
+        key: ValueKey('project-${project.id}'),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+        horizontalTitleGap: 12,
+        leading: SizedBox(
+          width: 28,
+          child: Icon(
+            active ? PhosphorIconsFill.folder : PhosphorIconsRegular.folder,
+            size: 21,
+            color: active ? AppColors.terracottaDeep : AppColors.muted,
+          ),
+        ),
+        title: Text(
+          project.name,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+            fontWeight: active ? FontWeight.w700 : FontWeight.w600,
+          ),
+        ),
+        subtitle: Text(
+          subtitle,
+          maxLines: compact ? 1 : 2,
+          overflow: TextOverflow.ellipsis,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: active ? AppColors.terracottaDeep : AppColors.muted,
+          ),
+        ),
+        trailing: const Icon(
+          PhosphorIconsRegular.caretRight,
+          size: 18,
+          color: AppColors.inactive,
+        ),
+        onTap: () => chooseProject(project.id),
+      ),
+    );
+  }
+
+  Widget buildHomeView() {
+    final project = selectedProject;
+    final sessions = project == null
+        ? const <RemoteSessionSummary>[]
+        : widget.sessions
+              .where((session) => session.projectId == project.id)
+              .toList();
+
+    return ListView(
+      key: const ValueKey('session-home-view'),
+      padding: const EdgeInsets.only(bottom: 20),
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    project?.name ?? '项目',
+                    key: const ValueKey('session-context-project'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: AppColors.muted,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    '项目与会话',
+                    key: const ValueKey('session-sheet-title'),
+                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                      color: AppColors.ink,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.7,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              key: const ValueKey('open-session-search'),
+              tooltip: '搜索所有会话',
+              onPressed: () => openView(_SessionNavigatorView.search),
+              icon: const Icon(PhosphorIconsRegular.magnifyingGlass, size: 21),
+            ),
+            IconButton(
+              key: const ValueKey('create-session'),
+              tooltip: '新建会话',
+              onPressed: widget.running ? null : createSession,
+              icon: Icon(
+                PhosphorIconsRegular.plus,
+                size: 21,
+                color: widget.running ? null : AppColors.terracottaDeep,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 20),
+        ListTile(
+          key: const ValueKey('open-project-browser'),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+          horizontalTitleGap: 12,
+          leading: const SizedBox(
+            width: 28,
+            child: Icon(PhosphorIconsRegular.squaresFour, size: 21),
+          ),
+          title: Text(
+            '所有项目',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          trailing: const Icon(
+            PhosphorIconsRegular.caretRight,
+            size: 18,
+            color: AppColors.inactive,
+          ),
+          onTap: () => openView(_SessionNavigatorView.projects),
+        ),
+        buildSectionTitle('会话'),
+        if (sessions.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 4),
+            child: Text(
+              '这个项目还没有会话',
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: AppColors.muted),
+            ),
+          )
+        else
+          for (final session in sessions) buildSessionRow(session),
+        buildSectionTitle('项目'),
+        for (final item in widget.projects.take(3))
+          buildProjectRow(item, compact: true),
+      ],
+    );
+  }
+
+  Widget buildProjectView() {
+    final current = selectedProject;
+    final others = widget.projects
+        .where((project) => project.id != selectedProjectId)
+        .toList();
+
+    return Column(
+      key: const ValueKey('session-project-view'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            IconButton(
+              key: const ValueKey('session-back-projects'),
+              tooltip: '返回项目与会话',
+              onPressed: () => openView(_SessionNavigatorView.home),
+              icon: const Icon(PhosphorIconsRegular.arrowLeft, size: 21),
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '项目',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.muted,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '选择项目',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.only(bottom: 20),
+            children: [
+              buildSectionTitle('当前项目'),
+              if (current != null) buildProjectRow(current),
+              buildSectionTitle('其他项目'),
+              for (final project in others) buildProjectRow(project),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget buildSearchPrompt() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(
+            PhosphorIconsRegular.magnifyingGlass,
+            size: 28,
+            color: AppColors.inactive,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            '搜索所有会话',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '输入标题或会话中的关键词',
+            style: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.copyWith(color: AppColors.muted),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildSearchView() {
+    return Column(
+      key: const ValueKey('session-search-view'),
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            IconButton(
+              key: const ValueKey('session-back-search'),
+              tooltip: '返回项目与会话',
+              onPressed: () => openView(_SessionNavigatorView.home),
+              icon: const Icon(PhosphorIconsRegular.arrowLeft, size: 21),
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '所有项目',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppColors.muted,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '搜索会话',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 18),
+        TextField(
+          key: const ValueKey('session-search-field'),
+          controller: searchController,
+          focusNode: searchFocusNode,
+          maxLength: 200,
+          buildCounter:
+              (
+                context, {
+                required currentLength,
+                required isFocused,
+                required maxLength,
+              }) => null,
+          textInputAction: TextInputAction.search,
+          onChanged: handleSearchChanged,
+          onSubmitted: submitSearch,
+          decoration: InputDecoration(
+            hintText: '搜索标题与会话内容',
+            prefixIcon: const Icon(
+              PhosphorIconsRegular.magnifyingGlass,
+              size: 20,
+            ),
+            suffixIcon: searchQuery.isEmpty
+                ? null
+                : IconButton(
+                    key: const ValueKey('session-search-clear'),
+                    tooltip: '清除搜索',
+                    onPressed: clearSearch,
+                    icon: const Icon(PhosphorIconsRegular.x, size: 19),
+                  ),
+          ),
+        ),
+        if (searching) const LinearProgressIndicator(minHeight: 2),
+        const SizedBox(height: 12),
+        Expanded(
+          child: searchQuery.isEmpty ? buildSearchPrompt() : buildSearchBody(),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return SafeArea(
       child: SizedBox(
-        height: MediaQuery.sizeOf(context).height * 0.72,
+        height: MediaQuery.sizeOf(context).height * 0.92,
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  const Expanded(
-                    child: Text(
-                      '项目与会话',
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ),
-                  FilledButton.tonalIcon(
-                    key: const ValueKey('create-session'),
-                    onPressed: widget.running ? null : createSession,
-                    icon: const Icon(LucideIcons.plus, size: 18),
-                    label: const Text('新会话'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                key: const ValueKey('session-search-field'),
-                controller: searchController,
-                maxLength: 200,
-                buildCounter:
-                    (
-                      context, {
-                      required currentLength,
-                      required isFocused,
-                      required maxLength,
-                    }) => null,
-                textInputAction: TextInputAction.search,
-                onChanged: handleSearchChanged,
-                onSubmitted: submitSearch,
-                decoration: InputDecoration(
-                  hintText: '搜索所有会话内容',
-                  prefixIcon: const Icon(LucideIcons.search, size: 19),
-                  suffixIcon: searchQuery.isEmpty
-                      ? null
-                      : IconButton(
-                          tooltip: '清除搜索',
-                          onPressed: clearSearch,
-                          icon: const Icon(LucideIcons.x, size: 18),
-                        ),
-                ),
-              ),
-              if (searching) const LinearProgressIndicator(minHeight: 2),
-              const SizedBox(height: 12),
-              Expanded(
-                child: searchQuery.isEmpty
-                    ? buildProjectBrowser()
-                    : buildSearchBody(),
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+          child: switch (view) {
+            _SessionNavigatorView.home => buildHomeView(),
+            _SessionNavigatorView.projects => buildProjectView(),
+            _SessionNavigatorView.search => buildSearchView(),
+          },
+        ),
+      ),
+    );
+  }
+}
+
+abstract final class _SettingsPalette {
+  static const background = Color(0xFFF2F4F7);
+  static const surface = Color(0xFFFFFFFF);
+  static const ink = Color(0xFF111318);
+  static const secondary = Color(0xFF6E7580);
+  static const tertiary = Color(0xFF9AA1AB);
+  static const line = Color(0xFFE2E6EB);
+  static const iconFill = Color(0xFFF0F2F5);
+  static const accent = Color(0xFF0A84FF);
+  static const danger = Color(0xFFFF3B30);
+  static const barrier = Color(0x66111318);
+}
+
+ThemeData _settingsTheme(BuildContext context) {
+  final base = Theme.of(context);
+  final scheme = base.colorScheme.copyWith(
+    primary: _SettingsPalette.accent,
+    onPrimary: Colors.white,
+    surface: _SettingsPalette.surface,
+    onSurface: _SettingsPalette.ink,
+    error: _SettingsPalette.danger,
+    outline: _SettingsPalette.line,
+    outlineVariant: _SettingsPalette.line,
+  );
+  return base.copyWith(
+    colorScheme: scheme,
+    scaffoldBackgroundColor: _SettingsPalette.background,
+    textTheme: base.textTheme.apply(
+      bodyColor: _SettingsPalette.ink,
+      displayColor: _SettingsPalette.ink,
+    ),
+    dividerTheme: const DividerThemeData(
+      color: _SettingsPalette.line,
+      thickness: 1,
+      space: 1,
+    ),
+    sliderTheme: base.sliderTheme.copyWith(
+      activeTrackColor: _SettingsPalette.accent,
+      inactiveTrackColor: _SettingsPalette.line,
+      thumbColor: _SettingsPalette.accent,
+      overlayColor: _SettingsPalette.accent.withValues(alpha: 0.12),
+      trackHeight: 3.5,
+    ),
+    switchTheme: SwitchThemeData(
+      thumbColor: WidgetStateProperty.resolveWith(
+        (states) => states.contains(WidgetState.selected)
+            ? Colors.white
+            : _SettingsPalette.tertiary,
+      ),
+      trackColor: WidgetStateProperty.resolveWith(
+        (states) => states.contains(WidgetState.selected)
+            ? _SettingsPalette.accent
+            : _SettingsPalette.line,
+      ),
+      trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
+    ),
+  );
+}
+
+class _SettingsModalSurface extends StatelessWidget {
+  const _SettingsModalSurface({required this.child, this.surfaceKey});
+
+  final Widget child;
+  final Key? surfaceKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final height = min(
+      media.size.height * 0.94,
+      media.size.height - media.padding.top - 8,
+    );
+    const radius = Radius.circular(28);
+    return Theme(
+      data: _settingsTheme(context),
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: Container(
+          key: surfaceKey,
+          height: height,
+          decoration: BoxDecoration(
+            color: _SettingsPalette.background,
+            borderRadius: const BorderRadius.only(
+              topLeft: radius,
+              topRight: radius,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: _SettingsPalette.ink.withValues(alpha: 0.14),
+                blurRadius: 36,
+                offset: const Offset(0, -4),
               ),
             ],
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Padding(
+            padding: EdgeInsets.only(bottom: media.padding.bottom),
+            child: child,
           ),
         ),
       ),
@@ -4867,16 +5724,23 @@ class _SettingsSheetState extends State<SettingsSheet> {
 
   Future<void> changeNotifications(bool value) async {
     if (changingNotifications) return;
+    final previous = notificationsEnabled;
     setState(() {
       changingNotifications = true;
       notificationsEnabled = value;
     });
-    final accepted = await widget.onNotificationsChanged(value);
-    if (!mounted) return;
-    setState(() {
-      changingNotifications = false;
-      notificationsEnabled = accepted;
-    });
+    try {
+      final accepted = await widget.onNotificationsChanged(value);
+      if (mounted) setState(() => notificationsEnabled = accepted);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => notificationsEnabled = previous);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('通知设置保存失败，请重试')));
+    } finally {
+      if (mounted) setState(() => changingNotifications = false);
+    }
   }
 
   Future<ChatBackgroundPreference> changeChatBackground(
@@ -4946,99 +5810,62 @@ class _SettingsSheetState extends State<SettingsSheet> {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    final sectionLabelStyle = textTheme.labelMedium?.copyWith(
-      color: AppColors.muted,
-      fontWeight: FontWeight.w600,
-      letterSpacing: 0.2,
-    );
     final rowTitleStyle = textTheme.titleMedium?.copyWith(
       fontWeight: FontWeight.w700,
       height: 1.3,
     );
     final rowSubtitleStyle = textTheme.bodySmall?.copyWith(
-      color: AppColors.muted,
+      color: _SettingsPalette.secondary,
       height: 1.4,
     );
+    final modelLabel = _settingsModelLabel(selectedModel, widget.currentModel);
+    final previewKey = ValueKey(
+      '$modelLabel-${chatBackground.hashCode}-${readingFontSizeLabel(readingFontScale)}',
+    );
 
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-        child: WarmSheetSurface(
-          padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(context).height * 0.82,
-            ),
+    return _SettingsModalSurface(
+      surfaceKey: const ValueKey('settings-surface'),
+      child: Column(
+        children: [
+          _SettingsPageHeader(
+            title: '设置',
+            onClose: () => Navigator.pop(context),
+          ),
+          Expanded(
             child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
               child: Column(
-                mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '设置',
-                          style: textTheme.headlineMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: -0.36,
-                          ),
-                        ),
-                      ),
-                      _SettingsCloseButton(
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ],
+                  const _SettingsSectionLabel('当前偏好'),
+                  const SizedBox(height: 10),
+                  AnimatedSwitcher(
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : AppMotion.standard,
+                    switchInCurve: AppMotion.enter,
+                    switchOutCurve: AppMotion.exit,
+                    child: _PreferenceGalleryPreview(
+                      key: previewKey,
+                      modelLabel: modelLabel,
+                      chatBackground: chatBackground,
+                      readingFontScale: readingFontScale,
+                    ),
                   ),
-                  const SizedBox(height: 16),
-                  Text('设备与服务', style: sectionLabelStyle),
-                  const SizedBox(height: 8),
-                  _SettingsInfoCard(
-                    children: [
-                      InfoRow(
-                        label: '电脑',
-                        value: widget.session?.deviceName ?? 'My PC',
-                      ),
-                      InfoRow(
-                        label: '服务',
-                        value:
-                            widget.session?.origin.toString() ??
-                            'https://cc-remote.example.com',
-                      ),
-                      InfoRow(
-                        label: '目录',
-                        value:
-                            widget.session?.workspaceDir ??
-                            widget.session?.workspaceName ??
-                            'cc-remote',
-                        isLast: true,
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  Text('对话偏好', style: sectionLabelStyle),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 22),
+                  const _SettingsSectionLabel('对话偏好'),
+                  const SizedBox(height: 10),
                   _SettingsGroupCard(
                     children: [
-                      ListTile(
+                      _SettingsPreferenceRow(
                         key: const ValueKey('model-setting'),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 2,
-                        ),
-                        minVerticalPadding: 10,
-                        leading: const _SettingsLeadingIcon(
-                          icon: LucideIcons.slidersHorizontal,
-                        ),
-                        title: Text('模型', style: rowTitleStyle),
-                        subtitle: Text(
-                          modelPreferenceDescription(
-                            selectedModel,
-                            widget.currentModel == null
-                                ? null
-                                : formatModelName(widget.currentModel!),
-                          ),
-                          style: rowSubtitleStyle,
+                        icon: LucideIcons.slidersHorizontal,
+                        title: '模型',
+                        subtitle: modelPreferenceDescription(
+                          selectedModel,
+                          widget.currentModel == null
+                              ? null
+                              : formatModelName(widget.currentModel!),
                         ),
                         trailing: changingModel
                             ? const SizedBox.square(
@@ -5047,31 +5874,20 @@ class _SettingsSheetState extends State<SettingsSheet> {
                                   strokeWidth: 2,
                                 ),
                               )
-                            : const Icon(
-                                LucideIcons.chevronRight,
-                                color: AppColors.inactive,
-                              ),
+                            : const Icon(LucideIcons.chevronRight, size: 20),
                         onTap: changingModel ? null : chooseModel,
                       ),
-                      const Divider(height: 1, indent: 60, endIndent: 12),
-                      ListTile(
+                      const _SettingsDivider(),
+                      _SettingsPreferenceRow(
                         key: const ValueKey('chat-background-setting'),
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 2,
-                        ),
-                        minVerticalPadding: 10,
                         leading: ChatBackgroundThumbnail(
                           preference: chatBackground,
                         ),
-                        title: Text('聊天背景', style: rowTitleStyle),
-                        subtitle: Text(
-                          chatBackgroundLabel(chatBackground),
-                          style: rowSubtitleStyle,
-                        ),
+                        title: '聊天背景',
+                        subtitle: chatBackgroundLabel(chatBackground),
                         trailing: const Icon(
                           LucideIcons.chevronRight,
-                          color: AppColors.inactive,
+                          size: 20,
                         ),
                         onTap: () => showChatBackgroundSheet(
                           context,
@@ -5080,10 +5896,10 @@ class _SettingsSheetState extends State<SettingsSheet> {
                           onPickImage: pickChatBackgroundImage,
                         ),
                       ),
-                      const Divider(height: 1, indent: 60, endIndent: 12),
+                      const _SettingsDivider(),
                       Padding(
                         key: const ValueKey('reading-font-size-setting'),
-                        padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
@@ -5099,7 +5915,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
                                 Text(
                                   readingFontSizeLabel(readingFontScale),
                                   style: textTheme.labelLarge?.copyWith(
-                                    color: AppColors.terracottaDeep,
+                                    color: _SettingsPalette.accent,
                                     fontWeight: FontWeight.w700,
                                   ),
                                 ),
@@ -5126,36 +5942,26 @@ class _SettingsSheetState extends State<SettingsSheet> {
                                   'A',
                                   style: textTheme.bodySmall?.copyWith(
                                     fontSize: 12,
-                                    color: AppColors.muted,
+                                    color: _SettingsPalette.secondary,
                                   ),
                                 ),
                                 Expanded(
-                                  child: SliderTheme(
-                                    data: SliderTheme.of(context).copyWith(
-                                      activeTrackColor: AppColors.terracotta,
-                                      inactiveTrackColor: AppColors.control,
-                                      thumbColor: AppColors.terracottaDeep,
-                                      overlayColor: AppColors.terracotta
-                                          .withValues(alpha: 0.14),
-                                      trackHeight: 3.5,
+                                  child: Slider(
+                                    key: const ValueKey(
+                                      'reading-font-size-slider',
                                     ),
-                                    child: Slider(
-                                      key: const ValueKey(
-                                        'reading-font-size-slider',
-                                      ),
-                                      value: readingFontScale.clamp(
-                                        kReadingFontScaleMin,
-                                        kReadingFontScaleMax,
-                                      ),
-                                      min: kReadingFontScaleMin,
-                                      max: kReadingFontScaleMax,
-                                      divisions: 11,
-                                      label: readingFontSizeLabel(
-                                        readingFontScale,
-                                      ),
-                                      onChanged: previewReadingFontScale,
-                                      onChangeEnd: commitReadingFontScale,
+                                    value: readingFontScale.clamp(
+                                      kReadingFontScaleMin,
+                                      kReadingFontScaleMax,
                                     ),
+                                    min: kReadingFontScaleMin,
+                                    max: kReadingFontScaleMax,
+                                    divisions: 11,
+                                    label: readingFontSizeLabel(
+                                      readingFontScale,
+                                    ),
+                                    onChanged: previewReadingFontScale,
+                                    onChangeEnd: commitReadingFontScale,
                                   ),
                                 ),
                                 Text(
@@ -5163,7 +5969,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
                                   style: textTheme.bodySmall?.copyWith(
                                     fontSize: 18,
                                     fontWeight: FontWeight.w700,
-                                    color: AppColors.ink,
+                                    color: _SettingsPalette.ink,
                                   ),
                                 ),
                               ],
@@ -5171,16 +5977,10 @@ class _SettingsSheetState extends State<SettingsSheet> {
                           ],
                         ),
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
-                  Text('通知', style: sectionLabelStyle),
-                  const SizedBox(height: 8),
-                  _SettingsGroupCard(
-                    children: [
+                      const _SettingsDivider(),
                       SwitchListTile(
                         key: const ValueKey('background-notifications-toggle'),
-                        contentPadding: const EdgeInsets.fromLTRB(12, 4, 8, 4),
+                        contentPadding: const EdgeInsets.fromLTRB(14, 4, 10, 4),
                         value: notificationsEnabled,
                         onChanged: changingNotifications
                             ? null
@@ -5193,63 +5993,147 @@ class _SettingsSheetState extends State<SettingsSheet> {
                           '任务完成、失败或等待权限时提醒',
                           style: rowSubtitleStyle,
                         ),
-                        activeThumbColor: AppColors.surfaceElevated,
-                        activeTrackColor: AppColors.terracotta,
-                        inactiveThumbColor: AppColors.surfaceElevated,
-                        inactiveTrackColor: AppColors.control,
                       ),
                     ],
                   ),
-                  const SizedBox(height: 18),
-                  Text('连接与配对', style: sectionLabelStyle),
+                  const SizedBox(height: 22),
+                  const _SettingsSectionLabel('桌面主机'),
                   const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        widget.onReconnect();
-                      },
-                      icon: const Icon(LucideIcons.refreshCw, size: 18),
-                      label: const Text('重新连接'),
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.ink,
-                        backgroundColor: AppColors.surface,
-                        side: const BorderSide(color: AppColors.line),
-                        minimumSize: const Size.fromHeight(48),
+                  _SettingsGroupCard(
+                    children: [
+                      _SettingsPreferenceRow(
+                        icon: LucideIcons.monitor,
+                        title: widget.session?.deviceName ?? '未配对主机',
+                        subtitle:
+                            widget.session?.workspaceName ??
+                            widget.session?.workspaceDir ??
+                            '暂无工作区信息',
                       ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  SizedBox(
-                    width: double.infinity,
-                    child: SignalPressEffect(
-                      child: FilledButton.icon(
-                        onPressed: () =>
-                            confirmLogout(context, widget.onLogout),
-                        icon: const Icon(LucideIcons.unlink, size: 18),
-                        label: const Text('退出配对'),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: AppColors.danger,
-                          foregroundColor: AppColors.surfaceElevated,
-                          minimumSize: const Size.fromHeight(52),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(72, 0, 16, 12),
+                        child: Column(
+                          children: [
+                            _SettingsDetailLine(
+                              label: '服务',
+                              value:
+                                  widget.session?.origin.toString() ?? '暂无服务信息',
+                            ),
+                            const SizedBox(height: 8),
+                            _SettingsDetailLine(
+                              label: '目录',
+                              value:
+                                  widget.session?.workspaceDir ??
+                                  widget.session?.workspaceName ??
+                                  '暂无工作区信息',
+                            ),
+                          ],
                         ),
                       ),
+                      const Divider(height: 1),
+                      _SettingsActionRow(
+                        icon: LucideIcons.refreshCw,
+                        label: '重新连接',
+                        onTap: () {
+                          Navigator.pop(context);
+                          widget.onReconnect();
+                        },
+                      ),
+                      const _SettingsDivider(indent: 16),
+                      _SettingsActionRow(
+                        icon: LucideIcons.unlink,
+                        label: '退出配对',
+                        color: _SettingsPalette.danger,
+                        onTap: () => confirmLogout(context, widget.onLogout),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    child: Text(
+                      '偏好只保存在这台手机；模型与阅读设置会用于之后发送的消息。',
+                      style: TextStyle(
+                        color: _SettingsPalette.secondary,
+                        fontSize: 12,
+                        height: 1.45,
+                      ),
+                      textAlign: TextAlign.center,
                     ),
                   ),
                 ],
               ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
 }
 
-class _SettingsCloseButton extends StatelessWidget {
-  const _SettingsCloseButton({required this.onPressed});
+String _settingsModelLabel(
+  ClaudeModelPreference preference,
+  String? currentModel,
+) {
+  if (preference != ClaudeModelPreference.followComputer) {
+    return preference.label;
+  }
+  final current = currentModel?.trim();
+  return current == null || current.isEmpty ? '跟随电脑' : formatModelName(current);
+}
 
+class _SettingsPageHeader extends StatelessWidget {
+  const _SettingsPageHeader({required this.title, this.onClose, this.onBack});
+
+  final String title;
+  final VoidCallback? onClose;
+  final VoidCallback? onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 16, 12),
+      child: Row(
+        children: [
+          if (onBack != null) ...[
+            _SettingsIconButton(
+              icon: LucideIcons.chevronLeft,
+              tooltip: '返回设置',
+              onPressed: onBack!,
+            ),
+            const SizedBox(width: 8),
+          ],
+          Expanded(
+            child: Text(
+              title,
+              style: TextStyle(
+                fontSize: onBack == null ? 32 : 28,
+                fontWeight: FontWeight.w800,
+                letterSpacing: onBack == null ? -0.9 : -0.65,
+                height: 1.08,
+              ),
+            ),
+          ),
+          if (onClose != null)
+            _SettingsIconButton(
+              icon: LucideIcons.x,
+              tooltip: '关闭',
+              onPressed: onClose!,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SettingsIconButton extends StatelessWidget {
+  const _SettingsIconButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String tooltip;
   final VoidCallback onPressed;
 
   @override
@@ -5258,17 +6142,271 @@ class _SettingsCloseButton extends StatelessWidget {
       dimension: AppSizes.touchTarget,
       child: IconButton(
         onPressed: onPressed,
-        tooltip: '关闭',
+        tooltip: tooltip,
         padding: EdgeInsets.zero,
-        icon: Container(
-          width: AppSizes.iconControl,
-          height: AppSizes.iconControl,
-          decoration: BoxDecoration(
-            color: AppColors.control,
-            borderRadius: BorderRadius.circular(AppRadii.control),
+        icon: DecoratedBox(
+          decoration: const BoxDecoration(
+            color: _SettingsPalette.surface,
+            shape: BoxShape.circle,
           ),
-          alignment: Alignment.center,
-          child: const Icon(LucideIcons.x, size: 18),
+          child: SizedBox.square(
+            dimension: AppSizes.iconControl,
+            child: Icon(icon, size: 19),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsSectionLabel extends StatelessWidget {
+  const _SettingsSectionLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 4),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: _SettingsPalette.secondary,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.1,
+        ),
+      ),
+    );
+  }
+}
+
+class _PreferenceGalleryPreview extends StatelessWidget {
+  const _PreferenceGalleryPreview({
+    super.key,
+    required this.modelLabel,
+    required this.chatBackground,
+    required this.readingFontScale,
+  });
+
+  final String modelLabel;
+  final ChatBackgroundPreference chatBackground;
+  final double readingFontScale;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      key: const ValueKey('settings-preference-preview'),
+      container: true,
+      label:
+          '当前偏好预览。模型 $modelLabel，背景 ${chatBackgroundLabel(chatBackground)}，阅读 ${readingFontSizeLabel(readingFontScale)}',
+      child: ExcludeSemantics(
+        child: MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: TextScaler.noScaling),
+          child: Container(
+            height: 214,
+            clipBehavior: Clip.antiAlias,
+            decoration: BoxDecoration(
+              color: _SettingsPalette.surface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: _SettingsPalette.line),
+            ),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final compact = constraints.maxWidth < 330;
+                final railWidth = compact ? 104.0 : 116.0;
+                return Row(
+                  children: [
+                    SizedBox(
+                      width: railWidth,
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(
+                          compact ? 13 : 16,
+                          22,
+                          compact ? 10 : 14,
+                          18,
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  width: 8,
+                                  height: 8,
+                                  margin: const EdgeInsets.only(top: 5),
+                                  decoration: const BoxDecoration(
+                                    color: _SettingsPalette.accent,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 9),
+                                Expanded(
+                                  child: Text(
+                                    modelLabel,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: compact ? 15 : 17,
+                                      fontWeight: FontWeight.w700,
+                                      height: 1.25,
+                                      letterSpacing: -0.3,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const Spacer(),
+                            const Divider(),
+                            const SizedBox(height: 10),
+                            Text(
+                              '背景 ${chatBackgroundLabel(chatBackground)}',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: _SettingsPalette.secondary,
+                                fontSize: 12,
+                                height: 1.35,
+                              ),
+                            ),
+                            const SizedBox(height: 7),
+                            Text(
+                              '阅读 ${readingFontSizeLabel(readingFontScale)}',
+                              style: const TextStyle(
+                                color: _SettingsPalette.secondary,
+                                fontSize: 12,
+                                height: 1.35,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const VerticalDivider(width: 1),
+                    Expanded(
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          _ChatBackgroundLayer(
+                            preference: chatBackground,
+                            cacheWidth: 720,
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(14, 16, 14, 13),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                const Text(
+                                  'CC Remote',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: Container(
+                                    constraints: BoxConstraints(
+                                      maxWidth: compact ? 126 : 154,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 11,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: AppColors.surfaceElevated,
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    child: Text(
+                                      '你好，我能帮你做些什么？',
+                                      maxLines: 2,
+                                      style: TextStyle(
+                                        fontSize: 11.5 * readingFontScale,
+                                        height: 1.35,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                Align(
+                                  alignment: Alignment.centerRight,
+                                  child: Container(
+                                    constraints: BoxConstraints(
+                                      maxWidth: compact ? 126 : 154,
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 11,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFDCEEFF),
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    child: Text(
+                                      '分析一下这个项目的整体架构',
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 11.5 * readingFontScale,
+                                        height: 1.35,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const Spacer(),
+                                Container(
+                                  height: 32,
+                                  padding: const EdgeInsets.only(left: 12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.82),
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(
+                                      color: _SettingsPalette.line,
+                                    ),
+                                  ),
+                                  child: const Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          '发送消息…',
+                                          style: TextStyle(
+                                            color: _SettingsPalette.tertiary,
+                                            fontSize: 10.5,
+                                          ),
+                                        ),
+                                      ),
+                                      SizedBox.square(
+                                        dimension: 32,
+                                        child: DecoratedBox(
+                                          decoration: BoxDecoration(
+                                            color: _SettingsPalette.accent,
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: Icon(
+                                            LucideIcons.arrowUp,
+                                            color: Colors.white,
+                                            size: 16,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
         ),
       ),
     );
@@ -5283,15 +6421,103 @@ class _SettingsLeadingIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 36,
-      height: 36,
-      decoration: BoxDecoration(
-        color: AppColors.control,
-        borderRadius: BorderRadius.circular(AppRadii.control),
+      width: 42,
+      height: 42,
+      decoration: const BoxDecoration(
+        color: _SettingsPalette.iconFill,
+        shape: BoxShape.circle,
       ),
       alignment: Alignment.center,
-      child: Icon(icon, size: 18, color: AppColors.ink),
+      child: Icon(icon, size: 19, color: _SettingsPalette.ink),
     );
+  }
+}
+
+class _SettingsPreferenceRow extends StatelessWidget {
+  const _SettingsPreferenceRow({
+    super.key,
+    this.icon,
+    this.leading,
+    required this.title,
+    required this.subtitle,
+    this.trailing,
+    this.onTap,
+  });
+
+  final IconData? icon;
+  final Widget? leading;
+  final String title;
+  final String subtitle;
+  final Widget? trailing;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 76),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+            child: Row(
+              children: [
+                leading ?? _SettingsLeadingIcon(icon: icon!),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 15.5,
+                          fontWeight: FontWeight.w700,
+                          height: 1.3,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        subtitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: _SettingsPalette.secondary,
+                          fontSize: 12.5,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (trailing != null) ...[
+                  const SizedBox(width: 10),
+                  IconTheme(
+                    data: const IconThemeData(
+                      color: _SettingsPalette.secondary,
+                    ),
+                    child: trailing!,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SettingsDivider extends StatelessWidget {
+  const _SettingsDivider({this.indent = 70});
+
+  final double indent;
+
+  @override
+  Widget build(BuildContext context) {
+    return Divider(height: 1, indent: indent, endIndent: 14);
   }
 }
 
@@ -5304,38 +6530,99 @@ class _SettingsGroupCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppRadii.surface),
-        border: Border.all(color: AppColors.line.withValues(alpha: 0.85)),
-        boxShadow: AppElevation.softCard(alpha: 0.045),
+        color: _SettingsPalette.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _SettingsPalette.line),
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(AppRadii.surface - 1),
+        borderRadius: BorderRadius.circular(15),
         child: Column(mainAxisSize: MainAxisSize.min, children: children),
       ),
     );
   }
 }
 
-class _SettingsInfoCard extends StatelessWidget {
-  const _SettingsInfoCard({required this.children});
+class _SettingsDetailLine extends StatelessWidget {
+  const _SettingsDetailLine({required this.label, required this.value});
 
-  final List<Widget> children;
+  final String label;
+  final String value;
 
   @override
   Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(AppRadii.surface),
-        border: Border.all(color: AppColors.line.withValues(alpha: 0.85)),
-        boxShadow: AppElevation.softCard(alpha: 0.04),
-      ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: children,
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 38,
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: _SettingsPalette.secondary,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+              height: 1.35,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            value,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: _SettingsPalette.ink,
+              fontFamily: 'monospace',
+              fontSize: 11.5,
+              height: 1.4,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SettingsActionRow extends StatelessWidget {
+  const _SettingsActionRow({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.color = _SettingsPalette.accent,
+  });
+
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 50),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: 17, color: color),
+                const SizedBox(width: 8),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: color,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -5351,113 +6638,423 @@ Future<ClaudeModelPreference?> showClaudeModelPicker(
     backgroundColor: Colors.transparent,
     isScrollControlled: true,
     builder: (context) => SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 20, 14, 14),
-        child: WarmSheetSurface(
-          radius: 28,
-          padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                '选择模型',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+      top: false,
+      child: _ClaudeModelPickerSheet(selected: selected),
+    ),
+  );
+}
+
+class _ClaudeModelPickerSheet extends StatelessWidget {
+  const _ClaudeModelPickerSheet({required this.selected});
+
+  static const _iceInk = Color(0xFF0B3550);
+  static const _iceDeep = Color(0xFF0B3F5C);
+  static const _iceAccent = Color(0xFF0B668F);
+  static const _iceGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [
+      Color(0xFFC7E9FB),
+      Color(0xFFA6DEFA),
+      Color(0xFF80D4F9),
+      Color(0xFF5BC9F8),
+      Color(0xFF35BEF7),
+    ],
+  );
+
+  final ClaudeModelPreference selected;
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    final narrow = media.size.width <= 350;
+    final horizontalInset = narrow ? 8.0 : 14.0;
+    final railWidth = narrow ? 104.0 : 118.0;
+    final availableHeight = media.size.height - media.padding.vertical - 48;
+    final sheetHeight = min(430.0, max(360.0, availableHeight));
+
+    return Padding(
+      padding: EdgeInsets.fromLTRB(horizontalInset, 20, horizontalInset, 14),
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: Container(
+          height: sheetHeight,
+          decoration: BoxDecoration(
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(30),
+              topRight: Radius.circular(30),
+              bottomLeft: Radius.circular(22),
+              bottomRight: Radius.circular(22),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.ink.withValues(alpha: 0.22),
+                blurRadius: 42,
+                offset: const Offset(0, 18),
               ),
-              const SizedBox(height: 4),
-              const Text(
-                '应用于之后发送的消息',
-                style: TextStyle(color: AppColors.muted, fontSize: 12),
-              ),
-              const SizedBox(height: 14),
-              for (final preference in ClaudeModelPreference.values)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Material(
-                    color: preference == selected
-                        ? AppColors.control
-                        : AppColors.surface,
-                    borderRadius: BorderRadius.circular(AppRadii.surface),
-                    child: InkWell(
-                      key: ValueKey(
-                        'model-option-${preference.wireName ?? 'follow'}',
-                      ),
-                      onTap: () => Navigator.pop(context, preference),
-                      borderRadius: BorderRadius.circular(AppRadii.surface),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(14, 12, 12, 12),
-                        child: Row(
-                          children: [
-                            SizedBox.square(
-                              dimension: AppSizes.iconControl,
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  color: AppColors.surfaceElevated,
-                                  borderRadius: BorderRadius.circular(
-                                    AppRadii.control,
-                                  ),
-                                  border: Border.all(color: AppColors.line),
-                                ),
-                                child: Icon(
-                                  preference ==
-                                          ClaudeModelPreference.followComputer
-                                      ? LucideIcons.monitor
-                                      : LucideIcons.cpu,
-                                  size: 19,
-                                  color: preference == selected
-                                      ? AppColors.terracottaDeep
-                                      : AppColors.ink,
-                                ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(30),
+              topRight: Radius.circular(30),
+              bottomLeft: Radius.circular(22),
+              bottomRight: Radius.circular(22),
+            ),
+            child: Row(
+              children: [
+                SizedBox(
+                  width: railWidth,
+                  child: DecoratedBox(
+                    decoration: const BoxDecoration(gradient: _iceGradient),
+                    child: Column(
+                      children: [
+                        Container(
+                          height: 64,
+                          alignment: Alignment.bottomLeft,
+                          padding: EdgeInsets.fromLTRB(
+                            narrow ? 12 : 14,
+                            0,
+                            8,
+                            12,
+                          ),
+                          decoration: BoxDecoration(
+                            border: Border(
+                              bottom: BorderSide(
+                                color: _iceInk.withValues(alpha: 0.16),
                               ),
                             ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                          ),
+                          child: const Text(
+                            'MODEL\nSELECT',
+                            style: TextStyle(
+                              color: _iceInk,
+                              fontFamily: 'monospace',
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              height: 1.15,
+                              letterSpacing: 1.25,
+                            ),
+                          ),
+                        ),
+                        for (final preference in ClaudeModelPreference.values)
+                          Expanded(
+                            child: _ModelIndexOption(
+                              preference: preference,
+                              selected: preference == selected,
+                              narrow: narrow,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+                Expanded(
+                  child: ColoredBox(
+                    color: AppColors.surfaceElevated,
+                    child: Column(
+                      children: [
+                        SizedBox(
+                          height: 64,
+                          child: DecoratedBox(
+                            decoration: const BoxDecoration(
+                              border: Border(
+                                bottom: BorderSide(color: AppColors.line),
+                              ),
+                            ),
+                            child: Padding(
+                              padding: EdgeInsets.only(
+                                left: narrow ? 16 : 20,
+                                right: 6,
+                              ),
+                              child: Row(
                                 children: [
-                                  Text(
-                                    preference.label,
-                                    style: const TextStyle(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w700,
+                                  const Expanded(
+                                    child: Text(
+                                      '选择模型',
+                                      style: TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.w700,
+                                        letterSpacing: -0.35,
+                                      ),
                                     ),
                                   ),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    modelPreferenceOptionDescription(
-                                      preference,
-                                    ),
-                                    style: const TextStyle(
-                                      color: AppColors.muted,
-                                      fontSize: 12,
-                                    ),
+                                  IconButton(
+                                    tooltip: '关闭',
+                                    onPressed: () => Navigator.pop(context),
+                                    icon: const Icon(LucideIcons.x, size: 20),
                                   ),
                                 ],
                               ),
                             ),
-                            const SizedBox(width: 8),
-                            Icon(
-                              preference == selected
-                                  ? LucideIcons.circleCheck
-                                  : LucideIcons.circle,
-                              color: preference == selected
-                                  ? AppColors.terracottaDeep
-                                  : AppColors.inactiveLight,
-                              size: 22,
-                            ),
-                          ],
+                          ),
                         ),
-                      ),
+                        Expanded(
+                          child: _ModelReadout(
+                            preference: selected,
+                            narrow: narrow,
+                          ),
+                        ),
+                        Container(
+                          constraints: const BoxConstraints(minHeight: 62),
+                          padding: EdgeInsets.fromLTRB(
+                            narrow ? 16 : 20,
+                            11,
+                            narrow ? 12 : 20,
+                            12,
+                          ),
+                          decoration: const BoxDecoration(
+                            border: Border(
+                              top: BorderSide(color: AppColors.line),
+                            ),
+                          ),
+                          child: const Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Icon(
+                                LucideIcons.info,
+                                size: 17,
+                                color: _iceAccent,
+                              ),
+                              SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  '仅影响之后发送的消息；当前运行不会切换模型。',
+                                  style: TextStyle(
+                                    color: AppColors.muted,
+                                    fontSize: 12,
+                                    height: 1.45,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ModelIndexOption extends StatelessWidget {
+  const _ModelIndexOption({
+    required this.preference,
+    required this.selected,
+    required this.narrow,
+  });
+
+  final ClaudeModelPreference preference;
+  final bool selected;
+  final bool narrow;
+
+  @override
+  Widget build(BuildContext context) {
+    final foreground = selected
+        ? AppColors.surfaceElevated
+        : _ClaudeModelPickerSheet._iceInk;
+    final content = Material(
+      color: Colors.transparent,
+      child: InkWell(
+        key: ValueKey('model-option-${preference.wireName ?? 'follow'}'),
+        onTap: () => Navigator.pop(context, preference),
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(narrow ? 12 : 14, 8, narrow ? 9 : 11, 8),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      preference == ClaudeModelPreference.followComputer
+                          ? '电脑配置'
+                          : preference.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: foreground,
+                        fontSize: narrow ? 13 : 14,
+                        fontWeight: FontWeight.w700,
+                        height: 1.25,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      _modelPickerMeta(preference),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: foreground.withValues(alpha: 0.72),
+                        fontFamily: 'monospace',
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                        height: 1.2,
+                        letterSpacing: 0.55,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              SizedBox(
+                width: 18,
+                child: selected
+                    ? Icon(LucideIcons.check, size: 17, color: foreground)
+                    : null,
+              ),
             ],
           ),
         ),
       ),
-    ),
-  );
+    );
+
+    return Semantics(
+      button: true,
+      selected: selected,
+      label:
+          '${preference.label}。${modelPreferenceOptionDescription(preference)}',
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: _ClaudeModelPickerSheet._iceInk.withValues(alpha: 0.13),
+            ),
+          ),
+        ),
+        child: selected
+            ? ClipPath(
+                clipper: const _ModelIndexSelectionClipper(),
+                child: ColoredBox(
+                  color: _ClaudeModelPickerSheet._iceDeep,
+                  child: content,
+                ),
+              )
+            : content,
+      ),
+    );
+  }
 }
+
+class _ModelReadout extends StatelessWidget {
+  const _ModelReadout({required this.preference, required this.narrow});
+
+  final ClaudeModelPreference preference;
+  final bool narrow;
+
+  @override
+  Widget build(BuildContext context) {
+    final word = preference == ClaudeModelPreference.followComputer
+        ? '电脑配置'
+        : preference.label.toUpperCase();
+    final watermark = preference == ClaudeModelPreference.followComputer
+        ? 'A'
+        : preference.label.substring(0, 1).toUpperCase();
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Positioned(
+          right: -8,
+          bottom: -30,
+          child: IgnorePointer(
+            child: Text(
+              watermark,
+              style: TextStyle(
+                fontSize: narrow ? 148 : 176,
+                fontWeight: FontWeight.w700,
+                height: 1,
+                foreground: Paint()
+                  ..style = PaintingStyle.stroke
+                  ..strokeWidth = 1
+                  ..color = _ClaudeModelPickerSheet._iceAccent.withValues(
+                    alpha: 0.11,
+                  ),
+              ),
+            ),
+          ),
+        ),
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+            narrow ? 16 : 20,
+            24,
+            narrow ? 12 : 20,
+            12,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: double.infinity,
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    word,
+                    style: TextStyle(
+                      fontSize:
+                          preference == ClaudeModelPreference.followComputer
+                          ? (narrow ? 30 : 39)
+                          : (narrow ? 39 : 52),
+                      fontWeight: FontWeight.w700,
+                      height: 0.98,
+                      letterSpacing: -1.5,
+                    ),
+                  ),
+                ),
+              ),
+              Container(
+                width: 48,
+                height: 2,
+                margin: const EdgeInsets.only(top: 20, bottom: 14),
+                color: _ClaudeModelPickerSheet._iceAccent,
+              ),
+              Text(
+                modelPreferenceOptionDescription(preference),
+                style: TextStyle(
+                  color: AppColors.muted,
+                  fontSize: narrow ? 12 : 13,
+                  height: 1.62,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ModelIndexSelectionClipper extends CustomClipper<Path> {
+  const _ModelIndexSelectionClipper();
+
+  @override
+  Path getClip(Size size) => Path()
+    ..moveTo(0, 0)
+    ..lineTo(size.width - 13, 0)
+    ..lineTo(size.width, size.height / 2)
+    ..lineTo(size.width - 13, size.height)
+    ..lineTo(0, size.height)
+    ..close();
+
+  @override
+  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
+}
+
+String _modelPickerMeta(ClaudeModelPreference preference) =>
+    switch (preference) {
+      ClaudeModelPreference.followComputer => 'AUTO',
+      ClaudeModelPreference.opus => 'DEEP',
+      ClaudeModelPreference.sonnet => 'BALANCED',
+      ClaudeModelPreference.fable => 'OVERRIDE',
+    };
 
 Future<void> showChatBackgroundSheet(
   BuildContext context, {
@@ -5468,7 +7065,10 @@ Future<void> showChatBackgroundSheet(
 }) {
   return showModalBottomSheet<void>(
     context: context,
+    backgroundColor: Colors.transparent,
+    barrierColor: _SettingsPalette.barrier,
     isScrollControlled: true,
+    showDragHandle: false,
     builder: (context) => ChatBackgroundSheet(
       preference: preference,
       onChanged: onChanged,
@@ -5558,181 +7158,155 @@ class _ChatBackgroundSheetState extends State<ChatBackgroundSheet> {
       ),
       ('砂岩', const ChatBackgroundPreference.preset(ChatBackgroundPreset.rose)),
     ];
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 24, 14, 14),
-        child: WarmSheetSurface(
-          padding: const EdgeInsets.fromLTRB(18, 14, 18, 18),
-          child: SizedBox(
-            height: MediaQuery.sizeOf(context).height * 0.72,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        '聊天背景',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(LucideIcons.x),
-                      tooltip: '关闭',
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Expanded(
-                  child: SingleChildScrollView(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        ChatBackgroundPreview(preference: preference),
-                        const SizedBox(height: 18),
-                        const Text(
-                          '内置背景',
-                          style: TextStyle(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(height: 10),
-                        LayoutBuilder(
-                          builder: (context, constraints) {
-                            final width = (constraints.maxWidth - 24) / 4;
-                            return Row(
-                              children: [
-                                for (
-                                  var index = 0;
-                                  index < options.length;
-                                  index++
-                                ) ...[
-                                  ChatBackgroundChoice(
-                                    width: width,
-                                    label: options[index].$1,
-                                    preference: options[index].$2,
-                                    selected:
-                                        preference.kind ==
-                                            options[index].$2.kind &&
-                                        preference.preset ==
-                                            options[index].$2.preset,
-                                    onPressed: changing
-                                        ? null
-                                        : () => apply(options[index].$2),
-                                  ),
-                                  if (index != options.length - 1)
-                                    const SizedBox(width: 8),
-                                ],
-                              ],
-                            );
-                          },
-                        ),
-                        const SizedBox(height: 18),
-                        SizedBox(
-                          width: double.infinity,
-                          child: OutlinedButton.icon(
-                            key: const ValueKey('pick-chat-background-image'),
-                            onPressed: changing ? null : pickImage,
-                            icon: changing
-                                ? const SizedBox.square(
-                                    dimension: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(LucideIcons.image),
-                            label: const Text('从相册选择'),
-                            style: OutlinedButton.styleFrom(
-                              minimumSize: const Size.fromHeight(48),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(
-                                  AppRadii.control,
-                                ),
-                              ),
+    return _SettingsModalSurface(
+      surfaceKey: const ValueKey('settings-background-surface'),
+      child: Column(
+        children: [
+          _SettingsPageHeader(
+            title: '聊天背景',
+            onBack: () => Navigator.pop(context),
+          ),
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const _SettingsSectionLabel('实时预览'),
+                  const SizedBox(height: 10),
+                  ChatBackgroundPreview(preference: preference),
+                  const SizedBox(height: 22),
+                  const _SettingsSectionLabel('内置背景'),
+                  const SizedBox(height: 10),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final width = (constraints.maxWidth - 10) / 2;
+                      return Wrap(
+                        spacing: 10,
+                        runSpacing: 10,
+                        children: [
+                          for (final option in options)
+                            ChatBackgroundChoice(
+                              width: width,
+                              label: option.$1,
+                              preference: option.$2,
+                              selected:
+                                  preference.kind == option.$2.kind &&
+                                  preference.preset == option.$2.preset,
+                              onPressed: changing
+                                  ? null
+                                  : () => apply(option.$2),
                             ),
-                          ),
-                        ),
-                        if (preference.kind ==
-                            ChatBackgroundKind.localImage) ...[
-                          const SizedBox(height: 16),
-                          Row(
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 20),
+                  _SettingsGroupCard(
+                    children: [
+                      _SettingsPreferenceRow(
+                        key: const ValueKey('pick-chat-background-image'),
+                        icon: LucideIcons.image,
+                        title: '从相册选择',
+                        subtitle: '使用这台手机上的图片作为聊天背景',
+                        trailing: changing
+                            ? const SizedBox.square(
+                                dimension: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(LucideIcons.chevronRight, size: 20),
+                        onTap: changing ? null : pickImage,
+                      ),
+                      if (preference.kind == ChatBackgroundKind.localImage) ...[
+                        const _SettingsDivider(),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+                          child: Column(
                             children: [
-                              const Expanded(
-                                child: Text(
-                                  '图片淡化',
-                                  style: TextStyle(fontWeight: FontWeight.w700),
-                                ),
+                              Row(
+                                children: [
+                                  const Expanded(
+                                    child: Text(
+                                      '图片淡化',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ),
+                                  Text(
+                                    '${(preference.overlayOpacity * 100).round()}%',
+                                    style: const TextStyle(
+                                      color: _SettingsPalette.accent,
+                                      fontWeight: FontWeight.w700,
+                                      fontFeatures: [
+                                        FontFeature.tabularFigures(),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ),
-                              Text(
-                                '${(preference.overlayOpacity * 100).round()}%',
-                                style: const TextStyle(
-                                  color: AppColors.muted,
-                                  fontFeatures: [FontFeature.tabularFigures()],
+                              Slider(
+                                key: const ValueKey(
+                                  'chat-background-opacity-slider',
                                 ),
+                                value: preference.overlayOpacity,
+                                min: 0.16,
+                                max: 0.64,
+                                divisions: 12,
+                                label:
+                                    '${(preference.overlayOpacity * 100).round()}%',
+                                onChanged: changing
+                                    ? null
+                                    : (value) => setState(
+                                        () => preference = preference.copyWith(
+                                          overlayOpacity: value,
+                                        ),
+                                      ),
+                                onChangeEnd: changing
+                                    ? null
+                                    : (value) => apply(
+                                        preference.copyWith(
+                                          overlayOpacity: value,
+                                        ),
+                                      ),
                               ),
                             ],
                           ),
-                          Slider(
-                            key: const ValueKey(
-                              'chat-background-opacity-slider',
-                            ),
-                            value: preference.overlayOpacity,
-                            min: 0.16,
-                            max: 0.64,
-                            divisions: 12,
-                            label:
-                                '${(preference.overlayOpacity * 100).round()}%',
-                            onChanged: changing
-                                ? null
-                                : (value) => setState(
-                                    () => preference = preference.copyWith(
-                                      overlayOpacity: value,
-                                    ),
-                                  ),
-                            onChangeEnd: changing
-                                ? null
-                                : (value) => apply(
-                                    preference.copyWith(overlayOpacity: value),
-                                  ),
-                          ),
-                        ],
-                        const SizedBox(height: 6),
-                        Center(
-                          child: TextButton.icon(
-                            key: const ValueKey('reset-chat-background'),
-                            onPressed:
-                                changing ||
-                                    savedPreference.kind ==
-                                        ChatBackgroundKind.defaultStyle
-                                ? null
-                                : () => apply(
-                                    ChatBackgroundPreference.defaultValue,
-                                  ),
-                            icon: const Icon(LucideIcons.rotateCcw),
-                            label: const Text('恢复默认背景'),
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        const Center(
-                          child: Text(
-                            '图片只保存在这台手机，不会上传到电脑端',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: AppColors.muted,
-                              fontSize: 12,
-                            ),
-                          ),
                         ),
                       ],
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Center(
+                    child: TextButton.icon(
+                      key: const ValueKey('reset-chat-background'),
+                      onPressed:
+                          changing ||
+                              savedPreference.kind ==
+                                  ChatBackgroundKind.defaultStyle
+                          ? null
+                          : () => apply(ChatBackgroundPreference.defaultValue),
+                      icon: const Icon(LucideIcons.rotateCcw, size: 17),
+                      label: const Text('恢复默认背景'),
                     ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 2),
+                  const Text(
+                    '图片只保存在这台手机，不会上传到电脑端',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: _SettingsPalette.secondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -5774,20 +7348,44 @@ class ChatBackgroundChoice extends StatelessWidget {
                       ? Duration.zero
                       : AppMotion.fast,
                   width: width,
-                  height: 64,
+                  height: 96,
                   clipBehavior: Clip.antiAlias,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(14),
                     border: Border.all(
                       color: selected
-                          ? AppColors.terracottaDeep
-                          : AppColors.line,
+                          ? _SettingsPalette.accent
+                          : _SettingsPalette.line,
                       width: selected ? 2 : 1,
                     ),
                   ),
-                  child: _ChatBackgroundLayer(
-                    preference: preference,
-                    cacheWidth: 240,
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      _ChatBackgroundLayer(
+                        preference: preference,
+                        cacheWidth: 480,
+                      ),
+                      if (selected)
+                        const Positioned(
+                          top: 8,
+                          right: 8,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: _SettingsPalette.accent,
+                              shape: BoxShape.circle,
+                            ),
+                            child: SizedBox.square(
+                              dimension: 24,
+                              child: Icon(
+                                LucideIcons.check,
+                                size: 15,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 const SizedBox(height: 6),
@@ -5795,6 +7393,9 @@ class ChatBackgroundChoice extends StatelessWidget {
                   label,
                   style: TextStyle(
                     fontSize: 12,
+                    color: selected
+                        ? _SettingsPalette.accent
+                        : _SettingsPalette.ink,
                     fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
                   ),
                 ),
@@ -5818,31 +7419,31 @@ class ChatBackgroundPreview extends StatelessWidget {
       label: '当前聊天背景预览',
       image: true,
       child: Container(
-        height: 164,
+        height: 190,
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: AppColors.line),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _SettingsPalette.line),
         ),
         child: Stack(
           fit: StackFit.expand,
           children: [
             _ChatBackgroundLayer(preference: preference, cacheWidth: 900),
             const Padding(
-              padding: EdgeInsets.all(14),
+              padding: EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Align(
                     alignment: Alignment.centerRight,
-                    child: _PreviewBubble(color: AppColors.control, width: 138),
+                    child: _PreviewBubble(color: Color(0xFFDCEEFF), width: 150),
                   ),
                   SizedBox(height: 12),
                   Align(
                     alignment: Alignment.centerLeft,
                     child: _PreviewBubble(
                       color: AppColors.surfaceElevated,
-                      width: 188,
+                      width: 206,
                     ),
                   ),
                 ],
@@ -5869,7 +7470,7 @@ class _PreviewBubble extends StatelessWidget {
       decoration: BoxDecoration(
         color: color,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.line),
+        border: Border.all(color: _SettingsPalette.line),
       ),
     );
   }
@@ -5887,9 +7488,9 @@ class ChatBackgroundThumbnail extends StatelessWidget {
       height: 36,
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppRadii.control),
-        border: Border.all(color: AppColors.line),
-        color: AppColors.control,
+        shape: BoxShape.circle,
+        border: Border.all(color: _SettingsPalette.line),
+        color: _SettingsPalette.iconFill,
       ),
       child: _ChatBackgroundLayer(preference: preference, cacheWidth: 144),
     );
@@ -5907,55 +7508,6 @@ String chatBackgroundLabel(ChatBackgroundPreference preference) {
       null => '内置背景',
     },
   };
-}
-
-class InfoRow extends StatelessWidget {
-  const InfoRow({
-    super.key,
-    required this.label,
-    required this.value,
-    this.isLast = false,
-  });
-
-  final String label;
-  final String value;
-  final bool isLast;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(top: 6, bottom: isLast ? 6 : 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 44,
-            child: Text(
-              label,
-              style: const TextStyle(
-                color: AppColors.muted,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                height: 1.35,
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: MonoText(
-              value,
-              style: const TextStyle(
-                color: AppColors.ink,
-                fontSize: 13,
-                fontWeight: FontWeight.w500,
-                height: 1.4,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 Future<AttachmentSource?> showAttachmentSourceSheet(
@@ -6092,7 +7644,8 @@ List<Object> _groupTranscriptRows(List<_VisibleTranscriptRow> rows) {
   var index = 0;
   while (index < rows.length) {
     final row = rows[index];
-    final isToolActivity = row.message.role == MessageRole.activity &&
+    final isToolActivity =
+        row.message.role == MessageRole.activity &&
         row.message.activityKind == ActivityKind.tool;
     if (!isToolActivity) {
       items.add(row);
@@ -6126,10 +7679,14 @@ class _TranscriptViewState extends State<TranscriptView> {
   int? handledJumpGeneration;
   int? jumpInFlightGeneration;
   bool jumpScheduled = false;
+  bool bottomJumpScheduled = false;
+  bool didInitialBottomJump = false;
+  bool followingBottom = true;
 
   @override
   void initState() {
     super.initState();
+    scrollController.addListener(updateBottomFollowing);
     scheduleJump();
   }
 
@@ -6140,15 +7697,47 @@ class _TranscriptViewState extends State<TranscriptView> {
       highlightTimer?.cancel();
       highlightedRawIndex = null;
       rowKeys.clear();
+      didInitialBottomJump = false;
+      followingBottom = true;
     }
     scheduleJump();
+    scheduleBottomJump(force: !didInitialBottomJump);
   }
 
   @override
   void dispose() {
     highlightTimer?.cancel();
+    scrollController.removeListener(updateBottomFollowing);
     scrollController.dispose();
     super.dispose();
+  }
+
+  void updateBottomFollowing() {
+    if (!scrollController.hasClients || bottomJumpScheduled) return;
+    followingBottom = scrollController.position.extentAfter <= 72;
+  }
+
+  void scheduleBottomJump({required bool force}) {
+    if (widget.messages.isEmpty ||
+        widget.jumpRequest != null ||
+        bottomJumpScheduled ||
+        (!force && !followingBottom)) {
+      return;
+    }
+    bottomJumpScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      bottomJumpScheduled = false;
+      if (!mounted ||
+          widget.messages.isEmpty ||
+          widget.jumpRequest != null ||
+          !scrollController.hasClients ||
+          (!force && !followingBottom)) {
+        return;
+      }
+      scrollController.jumpTo(scrollController.position.maxScrollExtent);
+      didInitialBottomJump = true;
+      followingBottom = true;
+    });
   }
 
   List<_VisibleTranscriptRow> visibleRows() {
@@ -6348,6 +7937,8 @@ class _TranscriptViewState extends State<TranscriptView> {
   }) {
     jumpInFlightGeneration = null;
     handledJumpGeneration = request.generation;
+    didInitialBottomJump = true;
+    followingBottom = false;
     if (found && rawIndex != null) {
       highlightTimer?.cancel();
       setState(() => highlightedRawIndex = rawIndex);
@@ -6435,6 +8026,7 @@ class _TranscriptViewState extends State<TranscriptView> {
       rowKeys.putIfAbsent(row.rawIndex, GlobalKey.new);
     }
     scheduleJump();
+    scheduleBottomJump(force: !didInitialBottomJump);
     final items = <Object>[
       ..._groupTranscriptRows(visibleMessages),
       ...widget.pendingPermissions,
@@ -6444,6 +8036,7 @@ class _TranscriptViewState extends State<TranscriptView> {
         ? visibleMessages.last.message
         : null;
     return ListView.builder(
+      key: const ValueKey('transcript-list'),
       controller: scrollController,
       // Tall bottom padding: last bubble can rest above the dock, while
       // earlier lines still scroll *under* the floating composer.
@@ -6482,9 +8075,7 @@ class _TranscriptViewState extends State<TranscriptView> {
         } else if (item is _ActivityGroupRow) {
           row = ActivityTimelineCard(
             key: ValueKey('activity-timeline-${item.rawIndex}'),
-            activities: [
-              for (final groupRow in item.rows) groupRow.message,
-            ],
+            activities: [for (final groupRow in item.rows) groupRow.message],
           );
         } else {
           final request = item as RemotePermissionRequest;
@@ -6505,6 +8096,7 @@ class _TranscriptViewState extends State<TranscriptView> {
           if (value is _ActivityGroupRow) return value.message;
           return value;
         }
+
         final gap = index == items.length - 1
             ? 0.0
             : transcriptGapBetween(gapItem(item), gapItem(items[index + 1]));
@@ -7618,8 +9210,7 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
   @override
   Widget build(BuildContext context) {
     final activities = widget.activities;
-    final hiddenCount =
-        expanded || activities.length <= collapsedVisibleCount
+    final hiddenCount = expanded || activities.length <= collapsedVisibleCount
         ? 0
         : activities.length - collapsedVisibleCount;
     return Material(
@@ -7829,10 +9420,7 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
   void initState() {
     super.initState();
     elapsedSeconds = widget.initialElapsedSeconds;
-    animation = AnimationController(
-      vsync: this,
-      duration: AppMotion.signal,
-    );
+    animation = AnimationController(vsync: this, duration: AppMotion.signal);
     timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => elapsedSeconds += 1);
     });
@@ -7883,10 +9471,7 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
           child: AnimatedBuilder(
             animation: animation,
             builder: (context, _) {
-              final frame = (animation.value * 12)
-                  .floor()
-                  .clamp(0, 11)
-                  .toInt();
+              final frame = (animation.value * 12).floor().clamp(0, 11).toInt();
               return CustomPaint(
                 key: const ValueKey('thinking-icon'),
                 size: const Size.square(16),
@@ -7926,11 +9511,7 @@ class _ThinkingBloomPainter extends CustomPainter {
     final stage = frame <= 5 ? frame : 11 - frame;
     final center = size.center(Offset.zero);
     if (stage == 0) {
-      canvas.drawCircle(
-        center,
-        1.45,
-        Paint()..color = AppColors.terracotta,
-      );
+      canvas.drawCircle(center, 1.45, Paint()..color = AppColors.terracotta);
       return;
     }
 
@@ -7967,11 +9548,7 @@ class _ThinkingBloomPainter extends CustomPainter {
         paint,
       );
     }
-    canvas.drawCircle(
-      center,
-      1.05,
-      Paint()..color = AppColors.terracotta,
-    );
+    canvas.drawCircle(center, 1.05, Paint()..color = AppColors.terracotta);
   }
 
   @override
@@ -8000,6 +9577,8 @@ class PromptBar extends StatelessWidget {
     required this.permissionMode,
     required this.allowBypassPermissions,
     this.modelName,
+    this.contextWindow,
+    this.remainingContext,
     this.engine = SessionEngine.claude,
     this.codexSandboxMode = CodexSandboxMode.readOnly,
     this.selectedModel = ClaudeModelPreference.followComputer,
@@ -8029,6 +9608,8 @@ class PromptBar extends StatelessWidget {
   final PermissionMode permissionMode;
   final bool allowBypassPermissions;
   final String? modelName;
+  final int? contextWindow;
+  final int? remainingContext;
   final SessionEngine engine;
   final CodexSandboxMode codexSandboxMode;
   final ClaudeModelPreference selectedModel;
@@ -8229,10 +9810,9 @@ class PromptBar extends StatelessWidget {
                           effort: selectedEffort,
                           enabled:
                               console.canCompose && onEffortSelected != null,
-                          onPressed: () => showClaudeEffortPicker(
+                          onPressed: () => showEffortGaugeOverlay(
                             context,
                             selected: selectedEffort,
-                            engine: engine,
                             onSelected: onEffortSelected!,
                           ),
                         ),
@@ -8257,35 +9837,36 @@ class PromptBar extends StatelessWidget {
                                 ),
                                 const SizedBox(width: AppSpacing.xxs),
                                 if (engine == SessionEngine.codex)
-                                  Flexible(
-                                    child: _ComposerPermissionButton(
-                                      sandboxMode: codexSandboxMode,
-                                      enabled:
-                                          console.canCompose &&
-                                          onCodexSandboxModeSelected != null,
-                                      onPressed: () =>
-                                          showCodexSandboxModePicker(
-                                            context,
-                                            selected: codexSandboxMode,
-                                            onSelected:
-                                                onCodexSandboxModeSelected!,
-                                          ),
+                                  _ComposerPermissionButton(
+                                    sandboxMode: codexSandboxMode,
+                                    enabled:
+                                        console.canCompose &&
+                                        onCodexSandboxModeSelected != null,
+                                    onPressed: () => showCodexSandboxModePicker(
+                                      context,
+                                      selected: codexSandboxMode,
+                                      onSelected: onCodexSandboxModeSelected!,
                                     ),
                                   )
                                 else
-                                  Flexible(
-                                    child: _ComposerPermissionButton(
-                                      mode: permissionMode,
-                                      enabled: console.canCompose,
-                                      onPressed: () => showPermissionModePicker(
-                                        context,
-                                        selected: permissionMode,
-                                        allowBypassPermissions:
-                                            allowBypassPermissions,
-                                        onSelected: onPermissionModeSelected,
-                                      ),
+                                  _ComposerPermissionButton(
+                                    mode: permissionMode,
+                                    enabled: console.canCompose,
+                                    onPressed: () => showPermissionModePicker(
+                                      context,
+                                      selected: permissionMode,
+                                      allowBypassPermissions:
+                                          allowBypassPermissions,
+                                      onSelected: onPermissionModeSelected,
                                     ),
                                   ),
+                                if (remainingContext != null) ...[
+                                  const SizedBox(width: AppSpacing.xxs),
+                                  _ComposerContextIndicator(
+                                    contextWindow: contextWindow,
+                                    remainingContext: remainingContext!,
+                                  ),
+                                ],
                               ],
                             ),
                           ),
@@ -8437,7 +10018,6 @@ class _ComposerEffortButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final explicit = effort != ClaudeEffortPreference.automatic;
     return SizedBox.square(
       dimension: AppSizes.touchTarget,
       child: IconButton(
@@ -8453,14 +10033,10 @@ class _ComposerEffortButton extends StatelessWidget {
             shape: BoxShape.circle,
           ),
           alignment: Alignment.center,
-          child: Icon(
-            LucideIcons.lightbulb,
-            size: 20,
-            color: !enabled
-                ? AppColors.inactive
-                : explicit
-                ? AppColors.terracottaDeep
-                : AppColors.composerControlInk,
+          child: EffortGaugeIcon(
+            key: const ValueKey('composer-effort-visual'),
+            effort: effort,
+            enabled: enabled,
           ),
         ),
       ),
@@ -8522,86 +10098,6 @@ class _ComposerModelButton extends StatelessWidget {
   }
 }
 
-Future<void> showClaudeEffortPicker(
-  BuildContext context, {
-  required ClaudeEffortPreference selected,
-  required ValueChanged<ClaudeEffortPreference> onSelected,
-  SessionEngine engine = SessionEngine.claude,
-}) async {
-  final effort = await showModalBottomSheet<ClaudeEffortPreference>(
-    context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
-    builder: (sheetContext) => SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              engine == SessionEngine.codex ? 'Codex 思考强度' : 'Claude Code 思考强度',
-              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              engine == SessionEngine.codex
-                  ? '映射到 Codex 的 model_reasoning_effort 配置。'
-                  : '与 /effort 对齐；模型不支持某档时由 Claude Code 自动降级。',
-              style: const TextStyle(
-                color: AppColors.muted,
-                fontSize: 13,
-                height: 1.4,
-              ),
-            ),
-            const SizedBox(height: 10),
-            for (final item in ClaudeEffortPreference.values)
-              ListTile(
-                key: ValueKey('effort-option-${item.wireName}'),
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(
-                  LucideIcons.lightbulb,
-                  color: item == ClaudeEffortPreference.automatic
-                      ? AppColors.muted
-                      : AppColors.accent,
-                ),
-                title: Row(
-                  children: [
-                    Text(item.label),
-                    const SizedBox(width: 8),
-                    Text(
-                      item.wireName,
-                      style: const TextStyle(
-                        color: AppColors.muted,
-                        fontSize: 12,
-                        fontFamily: AppTypography.codeFontFamily,
-                        fontFamilyFallback:
-                            AppTypography.codeFontFamilyFallback,
-                      ),
-                    ),
-                  ],
-                ),
-                subtitle: Text(
-                  effortPreferenceDescription(
-                    item,
-                    engineLabel: engine == SessionEngine.codex
-                        ? 'Codex'
-                        : 'Claude Code',
-                  ),
-                ),
-                trailing: item == selected
-                    ? const Icon(LucideIcons.check, color: AppColors.accent)
-                    : null,
-                onTap: () => Navigator.pop(sheetContext, item),
-              ),
-          ],
-        ),
-      ),
-    ),
-  );
-  if (effort == null || !context.mounted) return;
-  onSelected(effort);
-}
-
 class _ComposerPermissionButton extends StatelessWidget {
   const _ComposerPermissionButton({
     this.mode,
@@ -8632,43 +10128,97 @@ class _ComposerPermissionButton extends StatelessWidget {
         : danger
         ? AppColors.stop.withValues(alpha: 0.12)
         : AppColors.composerControlFill;
-    return ConstrainedBox(
-      constraints: const BoxConstraints(
-        minHeight: AppSizes.touchTarget,
-        maxWidth: 132,
-      ),
-      child: TextButton(
+    return SizedBox.square(
+      dimension: AppSizes.touchTarget,
+      child: IconButton(
         key: const ValueKey('permission-mode-chip'),
         onPressed: enabled ? onPressed : null,
-        style: TextButton.styleFrom(
-          foregroundColor: ink,
-          backgroundColor: fill,
-          disabledForegroundColor: AppColors.inactive,
-          disabledBackgroundColor: AppColors.paper,
-          minimumSize: const Size(0, AppSizes.iconControl),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          visualDensity: VisualDensity.compact,
-          textStyle: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            height: 1.2,
-          ),
-          shape: const StadiumBorder(),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, size: 14, color: ink),
-            const SizedBox(width: 5),
-            Flexible(
-              child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
-            ),
-          ],
+        tooltip: '访问权限：$label',
+        padding: EdgeInsets.zero,
+        icon: Container(
+          key: const ValueKey('permission-mode-visual'),
+          width: AppSizes.iconControl,
+          height: AppSizes.iconControl,
+          decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
+          alignment: Alignment.center,
+          child: Icon(icon, size: 18, color: ink),
         ),
       ),
     );
   }
+}
+
+class _ComposerContextIndicator extends StatelessWidget {
+  const _ComposerContextIndicator({
+    required this.contextWindow,
+    required this.remainingContext,
+  });
+
+  final int? contextWindow;
+  final int remainingContext;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasWindow = contextWindow != null && contextWindow! > 0;
+    final fraction = hasWindow
+        ? (remainingContext / contextWindow!).clamp(0.0, 1.0)
+        : null;
+    final usedFraction = fraction == null ? 0.0 : 1 - fraction;
+    final shortLabel = fraction == null
+        ? _formatTokenCount(remainingContext)
+        : '${(fraction * 100).round()}%';
+    final fullLabel = hasWindow
+        ? '上下文剩余 ${_formatTokenCount(remainingContext)} / ${_formatTokenCount(contextWindow!)}，$shortLabel'
+        : '上下文剩余 ${_formatTokenCount(remainingContext)}';
+    return Tooltip(
+      message: fullLabel,
+      child: Semantics(
+        label: fullLabel,
+        child: ExcludeSemantics(
+          child: SizedBox(
+            key: const ValueKey('composer-context-indicator'),
+            height: AppSizes.touchTarget,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(
+                    value: usedFraction,
+                    strokeWidth: 2,
+                    strokeCap: StrokeCap.round,
+                    backgroundColor: AppColors.line,
+                    color: AppColors.inactive,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  shortLabel,
+                  maxLines: 1,
+                  style: const TextStyle(
+                    color: AppColors.muted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    height: 1,
+                    fontFeatures: [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+String _formatTokenCount(int tokens) {
+  if (tokens >= 1000000) {
+    final value = tokens / 1000000;
+    return '${value.toStringAsFixed(value >= 10 ? 0 : 1)}M';
+  }
+  if (tokens >= 1000) return '${(tokens / 1000).round()}K';
+  return '$tokens';
 }
 
 class PendingAttachmentStrip extends StatelessWidget {
@@ -8789,7 +10339,7 @@ extension PermissionModePresentation on PermissionMode {
     PermissionMode.auto => '交给 Claude Code 判断权限',
     PermissionMode.dontAsk => '未预先允许的操作直接拒绝',
     PermissionMode.plan => '只分析和规划，不执行修改',
-    PermissionMode.bypassPermissions => '本次任务跳过全部权限检查',
+    PermissionMode.bypassPermissions => '当前对话跳过全部权限检查',
   };
 
   IconData get icon => switch (this) {
@@ -8870,8 +10420,10 @@ Future<void> showPermissionModePicker(
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('本次任务跳过权限检查'),
-        content: const Text('Claude Code 将能直接修改文件和执行命令。任务结束后会自动恢复询问权限。'),
+        title: const Text('当前对话跳过权限检查'),
+        content: const Text(
+          'Claude Code 将能直接修改文件和执行命令。此设置仅作用于当前对话，切换或新建对话后不会沿用。',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
@@ -8880,7 +10432,7 @@ Future<void> showPermissionModePicker(
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, true),
             style: FilledButton.styleFrom(backgroundColor: AppColors.stop),
-            child: const Text('仅本次开启'),
+            child: const Text('对当前对话开启'),
           ),
         ],
       ),

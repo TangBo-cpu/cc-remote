@@ -115,7 +115,6 @@ export async function createTranscriptState(
 
   if (state.running) {
     state.running = false;
-    state.permissionMode = 'manual';
     if (state.sandboxMode === 'danger-full-access') state.sandboxMode = 'read-only';
     state.pendingPermissions = [];
     state.messages = state.messages.filter(message => message.role !== 'activity');
@@ -228,7 +227,6 @@ export async function createTranscriptState(
       clearPendingAssistantPrefix(pending);
       mutate(() => {
         state.running = false;
-        state.permissionMode = 'manual';
         if (state.sandboxMode === 'danger-full-access') state.sandboxMode = 'read-only';
         state.pendingPermissions = [];
         removeActivities(state.messages);
@@ -244,7 +242,6 @@ export async function createTranscriptState(
       clearPendingAssistantPrefix(pending);
       mutate(() => {
         state.running = false;
-        state.permissionMode = 'manual';
         if (state.sandboxMode === 'danger-full-access') state.sandboxMode = 'read-only';
         state.pendingPermissions = [];
         removeActivities(state.messages);
@@ -258,7 +255,6 @@ export async function createTranscriptState(
       clearPendingAssistantPrefix(pending);
       mutate(() => {
         state.running = false;
-        state.permissionMode = 'manual';
         if (state.sandboxMode === 'danger-full-access') state.sandboxMode = 'read-only';
         state.pendingPermissions = [];
         removeActivities(state.messages);
@@ -272,7 +268,7 @@ export async function createTranscriptState(
       mutate(() => {
         state.running = false;
         state.engineSessionId = undefined;
-        state.permissionMode = 'manual';
+        state.permissionMode = 'auto';
         state.sandboxMode = undefined;
         state.pendingPermissions = [];
         state.sessionInfo = {};
@@ -291,7 +287,7 @@ function emptySnapshot(): TranscriptSnapshot {
     revision: 0,
     running: false,
     updatedAt: Date.now(),
-    permissionMode: 'manual',
+    permissionMode: 'auto',
     pendingPermissions: [],
     sessionInfo: {},
     messages: [],
@@ -316,7 +312,7 @@ async function loadState(statePath: string): Promise<TranscriptSnapshot> {
       sandboxMode: isCodexSandboxMode(parsed.sandboxMode)
         ? parsed.sandboxMode
         : undefined,
-      permissionMode: isPermissionMode(parsed.permissionMode) ? parsed.permissionMode : 'manual',
+      permissionMode: isPermissionMode(parsed.permissionMode) ? parsed.permissionMode : 'auto',
       pendingPermissions: Array.isArray(parsed.pendingPermissions)
         ? parsed.pendingPermissions.filter(isTranscriptPermissionRequest)
         : [],

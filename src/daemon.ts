@@ -1252,7 +1252,7 @@ function promptSignature(
     sessionId: msg.sessionId ?? activeContext.session.id,
     prompt,
     attachmentIds,
-    permissionMode: msg.permissionMode ?? 'manual',
+    permissionMode: msg.permissionMode ?? 'auto',
     model: msg.model ?? null,
     effort: msg.effort ?? null,
     engine,
@@ -1426,7 +1426,7 @@ function parsePermissionMode(value: string | undefined): ClaudePermissionMode {
     || value === 'bypassPermissions') {
     return value;
   }
-  return 'manual';
+  return 'auto';
 }
 
 function permissionRequestMessage(request: ClaudePermissionRequest): Record<string, unknown> {

@@ -35,6 +35,7 @@ cc-remote/
   mobile/lib/
     main.dart                 App shell、网络状态和主要页面
     signal_console_theme.dart 主题令牌与视觉部件
+    effort_gauge.dart          Composer 暖陶思考强度仪表与模态层
     workspace_drawer.dart     只读工作区和 Git diff
     attachments.dart          选择、上传和附件模型
     notification_service.dart Android 本地通知
@@ -69,13 +70,13 @@ daemon 按 `WS_HEARTBEAT_INTERVAL_MS` 发送标准 WebSocket ping，未收到 po
 
 `GET /api/health` 和 `POST /api/pair` 不需要 Bearer token。其余手机 API 都需要授权。
 
-项目与会话接口包括 `/api/status`、`/api/projects`、`/api/sessions/:id`、`/api/search/sessions`、创建会话、选择会话、重命名、归档和删除。全文搜索只接受 Bearer 鉴权请求，在 daemon 内存中的权威 transcript 上匹配标题、用户消息和助手消息，排除 system/activity 噪声；按会话聚合、最多返回 50 条安全片段。活动 Claude 任务运行时禁止切换或创建会话。
+项目与会话接口包括 `/api/status`、`/api/projects`、`/api/sessions/:id`、`/api/search/sessions`、创建会话、选择会话、重命名、归档和删除。全文搜索只接受 Bearer 鉴权请求，在 daemon 内存中的权威 transcript 上匹配标题、用户消息和助手消息，排除 system/activity 噪声；按会话聚合、最多返回 50 条安全片段。任一引擎任务运行时都禁止切换或创建会话。
 
 工作区接口包括 `/api/workspace`、`/api/workspace/file` 和 `/api/workspace/diff`。路径必须位于活动项目内，Git 内部文件、被忽略文件和路径穿越会被拒绝。接口只读。
 
 附件通过 `/api/sessions/:id/attachments` 上传，通过带会话归属的 content 接口读取。上传是事务式的，失败时清理已经写入的同批文件。附件路径不会进入 transcript 或手机 UI。
 
-`POST /api/new-conversation` 是兼容入口，实际会在活动项目下创建新会话。`POST /api/stop` 停止当前进程。`POST /api/logout` 撤销配对。
+`POST /api/new-conversation` 是兼容入口，实际会在活动项目下创建新会话。`POST /api/stop` 请求当前桥接停止：Claude 终止当前进程树；Codex 优先发送 `turn/interrupt`，2 秒内没有结束时再终止 App Server。`POST /api/logout` 撤销配对。
 
 ## WebSocket 运行流
 
@@ -117,4 +118,4 @@ daemon 默认只监听 loopback。公网访问由 tunnel 提供。手机不能�
 
 ## 当前未完成
 
-多设备管理、FCM 推送、发布签名和商店材料尚未实现。公网 health 检查，以及冷启动切项目 / 隧道首字延迟对照仍需专项验证。可选局域网直连属于后续性能项。
+多设备管理、FCM 推送、发布签名和商店材料尚未实现。公网 health 检查、冷启动切项目 / 隧道首字延迟、真实账户连续轮次首字延迟，以及长任务 Stop 回归仍需专项验证。可选局域网直连属于后续性能项。

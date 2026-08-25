@@ -40,12 +40,12 @@ Future<void> openWorkspaceFromHeader(WidgetTester tester) async {
 }
 
 void main() {
-  test('Warm Console theme uses packaged serif for UI and assistant', () {
-    expect(AppTypography.fontFamily, 'NotoSerifSC');
-    expect(AppTypography.assistantFontFamily, 'NotoSerifSC');
+  test('Warm Console theme uses platform fonts for UI and assistant', () {
+    expect(AppTypography.fontFamily, isNull);
+    expect(AppTypography.assistantFontFamily, isNull);
     final theme = buildSignalConsoleTheme();
-    expect(theme.textTheme.bodyLarge?.fontFamily, 'NotoSerifSC');
-    expect(theme.textTheme.labelLarge?.fontFamily, 'NotoSerifSC');
+    expect(theme.textTheme.bodyLarge?.fontFamily, isNot('NotoSerifSC'));
+    expect(theme.textTheme.labelLarge?.fontFamily, isNot('NotoSerifSC'));
   });
 
   setUp(() {
@@ -424,22 +424,15 @@ void main() {
     );
 
     expect(find.text('first task'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('session-engine-badge-claude-session-1')),
-      findsOneWidget,
-    );
-    expect(find.text('CC'), findsOneWidget);
-    expect(find.byKey(const ValueKey('selected-project-path')), findsOneWidget);
+    expect(find.textContaining('CC'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('open-project-browser')));
+    await tester.pump();
     expect(find.text(r'E:\first'), findsOneWidget);
+    expect(find.text(r'E:\second'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('project-project-2')));
     await tester.pump();
     expect(find.text('second task'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('session-engine-badge-codex-session-2')),
-      findsOneWidget,
-    );
-    expect(find.text('Codex'), findsOneWidget);
-    expect(find.text(r'E:\second'), findsOneWidget);
+    expect(find.textContaining('Codex'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('create-session')));
     await tester.pumpAndSettle();
     expect(
@@ -531,6 +524,8 @@ void main() {
       ),
     );
 
+    await tester.tap(find.byKey(const ValueKey('open-session-search')));
+    await tester.pump();
     await tester.enterText(
       find.byKey(const ValueKey('session-search-field')),
       'reconnect',
@@ -547,7 +542,6 @@ void main() {
       findsOneWidget,
     );
     expect(find.textContaining('2 条匹配内容'), findsOneWidget);
-    expect(find.byKey(const ValueKey('selected-project-path')), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('search-session-session-2')));
     expect(selectedSessionId, 'session-2');
@@ -561,6 +555,77 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     await tester.pump();
     expect(find.text('没有找到匹配内容'), findsOneWidget);
+  });
+
+  testWidgets('running session navigator disables navigation mutations', (
+    tester,
+  ) async {
+    var selected = false;
+    var created = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SessionNavigatorSheet(
+            projects: const [
+              RemoteProjectSummary(
+                id: 'project-1',
+                name: 'first',
+                path: r'E:\first',
+                sessionCount: 2,
+                running: true,
+              ),
+            ],
+            sessions: const [
+              RemoteSessionSummary(
+                id: 'session-1',
+                projectId: 'project-1',
+                title: 'active',
+                engine: SessionEngine.claude,
+                updatedAt: 2,
+                running: true,
+                messageCount: 1,
+              ),
+              RemoteSessionSummary(
+                id: 'session-2',
+                projectId: 'project-1',
+                title: 'other',
+                engine: SessionEngine.claude,
+                updatedAt: 1,
+                running: false,
+                messageCount: 1,
+              ),
+            ],
+            activeProjectId: 'project-1',
+            activeSessionId: 'session-1',
+            running: true,
+            onSelect: (_) => selected = true,
+            onSearchResult: (_) {},
+            onCreate: (_, _) => created = true,
+            onRename: (_, _) async {},
+            onArchive: (_) async {},
+            onDelete: (_) async {},
+            onSearch: (_) async => const [],
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const ValueKey('create-session')))
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<ListTile>(find.byKey(const ValueKey('session-session-2')))
+          .onTap,
+      isNull,
+    );
+    expect(find.byKey(const ValueKey('session-menu-session-2')), findsNothing);
+    expect(selected, isFalse);
+    expect(created, isFalse);
   });
 
   test('remote transcript snapshot restores messages and session context', () {
@@ -676,21 +741,46 @@ void main() {
     },
   );
 
-  testWidgets('shows the app shell and advances to pairing', (tester) async {
+  testWidgets('demo startup does not delay pairing', (tester) async {
     await tester.pumpWidget(
       const CcRemoteApp(enableCamera: false, demoMode: true),
     );
 
-    expect(find.text('CC Remote'), findsOneWidget);
-    expect(find.text('正在检查本机连接'), findsOneWidget);
-
-    await tester.pump(const Duration(seconds: 1));
-
     expect(find.text('扫描电脑终端里的二维码'), findsOneWidget);
     expect(find.text('连接这台电脑'), findsOneWidget);
+    expect(find.byKey(const ValueKey('boot')), findsNothing);
+    final shellOverlay = tester
+        .widgetList<AnnotatedRegion<SystemUiOverlayStyle>>(
+          find.byType(AnnotatedRegion<SystemUiOverlayStyle>),
+        )
+        .last;
+    expect(shellOverlay.value.systemNavigationBarColor, AppColors.paper);
   });
 
-  testWidgets('startup and pairing surfaces use warm tonal depth', (
+  testWidgets('new Claude conversations reset to automatic permissions', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+
+    expect(find.byTooltip('访问权限：自动判断'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('permission-mode-chip')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('permission-mode-manual')));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('访问权限：询问权限'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('新对话'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('访问权限：自动判断'), findsOneWidget);
+  });
+
+  testWidgets('startup uses a cool generative field while pairing stays warm', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -700,12 +790,19 @@ void main() {
       ),
     );
 
-    final bootstrapMark = tester.widget<Container>(
-      find.byKey(const ValueKey('bootstrap-mark')),
+    expect(find.byKey(const ValueKey('bootstrap-signal')), findsOneWidget);
+    expect(find.text('SEED'), findsOneWidget);
+    expect(find.text('正在读取连接信息'), findsOneWidget);
+    expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(find.byIcon(LucideIcons.terminal), findsNothing);
+    final bootstrapOverlay = tester
+        .widget<AnnotatedRegion<SystemUiOverlayStyle>>(
+          find.byKey(const ValueKey('boot')),
+        );
+    expect(
+      bootstrapOverlay.value.systemNavigationBarColor,
+      const Color(0xFFF5F6F7),
     );
-    final bootstrapDecoration = bootstrapMark.decoration! as BoxDecoration;
-    expect(bootstrapDecoration.color, AppColors.surface);
-    expect(bootstrapDecoration.boxShadow, isNull);
 
     await tester.pumpWidget(
       MaterialApp(
@@ -731,6 +828,72 @@ void main() {
     expect(pairDecoration.boxShadow, isNull);
     expect(find.byIcon(LucideIcons.monitor), findsOneWidget);
     expect(find.text('相机已就绪'), findsOneWidget);
+  });
+
+  testWidgets('startup reports real bootstrap phases', (tester) async {
+    for (final phase in BootstrapPhase.values) {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildSignalConsoleTheme(),
+          home: Scaffold(
+            body: BootstrapScreen(key: ValueKey(phase), phase: phase),
+          ),
+        ),
+      );
+
+      expect(find.text(phase.label), findsOneWidget);
+    }
+  });
+
+  testWidgets('startup signal honors reduced motion', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: const Scaffold(body: BootstrapScreen()),
+      ),
+    );
+    await tester.pump();
+    expect(tester.hasRunningAnimations, isTrue);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: const MediaQuery(
+          data: MediaQueryData(disableAnimations: true),
+          child: Scaffold(body: BootstrapScreen()),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.hasRunningAnimations, isFalse);
+    expect(find.byKey(const ValueKey('bootstrap-signal')), findsOneWidget);
+  });
+
+  testWidgets('startup composition survives a small phone with large text', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(320, 568));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: const MediaQuery(
+          data: MediaQueryData(
+            size: Size(320, 568),
+            textScaler: TextScaler.linear(1.6),
+            disableAnimations: true,
+          ),
+          child: BootstrapScreen(phase: BootstrapPhase.contactingHost),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull);
+    expect(find.text('正在检查桌面主机'), findsOneWidget);
+    expect(find.text('CC Remote'), findsOneWidget);
   });
 
   testWidgets('settings uses a confirmation before leaving pairing', (
@@ -760,6 +923,11 @@ void main() {
     expect(find.textContaining('上下文'), findsNothing);
     await tester.tap(find.text('设置').last);
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('settings-surface')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('settings-preference-preview')),
+      findsOneWidget,
+    );
     expect(find.text('退出配对'), findsOneWidget);
     expect(find.text('重新连接'), findsOneWidget);
     expect(find.text('后台通知'), findsOneWidget);
@@ -812,6 +980,40 @@ void main() {
       await ClaudeModelPreferenceStore().load(),
       ClaudeModelPreference.sonnet,
     );
+  });
+
+  testWidgets('model picker fits a narrow phone width', (tester) async {
+    tester.view.physicalSize = const Size(320, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: Center(
+              child: FilledButton(
+                onPressed: () => showClaudeModelPicker(
+                  context,
+                  selected: ClaudeModelPreference.opus,
+                ),
+                child: const Text('打开模型选择器'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('打开模型选择器'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('选择模型'), findsOneWidget);
+    expect(find.byKey(const ValueKey('model-option-follow')), findsOneWidget);
+    expect(find.byKey(const ValueKey('model-option-fable')), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('the first prompt waits for the stored model preference', (
@@ -1009,6 +1211,10 @@ void main() {
     );
     await tester.tap(find.byKey(const ValueKey('chat-background-setting')));
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('settings-background-surface')),
+      findsOneWidget,
+    );
 
     await tester.tap(find.text('亚麻'));
     await tester.pumpAndSettle();
@@ -1172,10 +1378,55 @@ void main() {
     );
 
     expect(tester.takeException(), isNull);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('settings-surface'))).height,
+      greaterThan(320),
+    );
+    expect(
+      find.byKey(const ValueKey('settings-preference-preview')),
+      findsOneWidget,
+    );
     await tester.ensureVisible(find.text('退出配对'));
     await tester.pumpAndSettle();
     expect(find.text('退出配对').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('settings notification toggle rolls back after a save error', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: SettingsSheet(
+            session: null,
+            notificationsEnabled: true,
+            chatBackground: ChatBackgroundPreference.defaultValue,
+            currentModel: null,
+            selectedModel: ClaudeModelPreference.followComputer,
+            readingFontScale: kReadingFontScaleDefault,
+            onReconnect: () {},
+            onNotificationsChanged: (_) async => throw StateError('save'),
+            onModelChanged: (_) async {},
+            onChatBackgroundChanged: (preference) async => preference,
+            onPickChatBackgroundImage: (_) async => null,
+            onReadingFontScaleChanged: (scale, {bool persist = true}) async {},
+            onLogout: () {},
+          ),
+        ),
+      ),
+    );
+
+    final toggle = find.byKey(
+      const ValueKey('background-notifications-toggle'),
+    );
+    await tester.ensureVisible(toggle);
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+
+    expect(tester.widget<SwitchListTile>(toggle).value, isTrue);
+    expect(find.text('通知设置保存失败，请重试'), findsOneWidget);
   });
 
   testWidgets('demo chat no longer uses the old fake project scan reply', (
@@ -1495,7 +1746,7 @@ void main() {
     expect(find.text('command-8').hitTestable(), findsOneWidget);
   });
 
-  testWidgets('permission mode picker confirms bypass for one task', (
+  testWidgets('permission mode picker confirms bypass for the conversation', (
     tester,
   ) async {
     final controller = TextEditingController();
@@ -1513,6 +1764,8 @@ void main() {
             offline: false,
             permissionMode: PermissionMode.manual,
             allowBypassPermissions: true,
+            contextWindow: 200000,
+            remainingContext: 174919,
             onPermissionModeSelected: (mode) => selected = mode,
             onCommandSelected: (_) {},
             onReconnect: () {},
@@ -1523,6 +1776,25 @@ void main() {
       ),
     );
 
+    expect(find.byTooltip('访问权限：询问权限'), findsOneWidget);
+    expect(find.bySemanticsLabel('上下文剩余 175K / 200K，87%'), findsOneWidget);
+    expect(find.text('87%'), findsOneWidget);
+    final contextRing = tester.widget<CircularProgressIndicator>(
+      find.descendant(
+        of: find.byKey(const ValueKey('composer-context-indicator')),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+    );
+    expect(contextRing.value, closeTo(0.125405, 0.000001));
+    expect(contextRing.color, AppColors.inactive);
+    expect(
+      tester.getSize(find.byKey(const ValueKey('permission-mode-chip'))),
+      const Size.square(AppSizes.touchTarget),
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey('permission-mode-visual'))),
+      const Size.square(AppSizes.iconControl),
+    );
     await tester.tap(find.byKey(const ValueKey('permission-mode-chip')));
     await tester.pumpAndSettle();
     await tester.ensureVisible(
@@ -1532,14 +1804,14 @@ void main() {
       find.byKey(const ValueKey('permission-mode-bypassPermissions')),
     );
     await tester.pumpAndSettle();
-    expect(find.text('本次任务跳过权限检查'), findsOneWidget);
+    expect(find.text('当前对话跳过权限检查'), findsOneWidget);
 
-    await tester.tap(find.text('仅本次开启'));
+    await tester.tap(find.text('对当前对话开启'));
     await tester.pumpAndSettle();
     expect(selected, PermissionMode.bypassPermissions);
   });
 
-  testWidgets('composer effort picker matches Claude Code levels', (
+  testWidgets('composer effort gauge supports drag, auto, and semantics', (
     tester,
   ) async {
     final controller = TextEditingController();
@@ -1573,18 +1845,45 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('composer-effort-button')));
     await tester.pumpAndSettle();
 
-    for (final effort in ClaudeEffortPreference.values) {
-      expect(
-        find.byKey(ValueKey('effort-option-${effort.wireName}')),
-        findsOneWidget,
-      );
-    }
-    await tester.ensureVisible(
-      find.byKey(const ValueKey('effort-option-xhigh')),
+    expect(find.byKey(const ValueKey('effort-gauge-overlay')), findsOneWidget);
+    expect(find.byKey(const ValueKey('effort-gauge-blur')), findsOneWidget);
+    expect(find.text('高'), findsOneWidget);
+
+    final semantics = tester.ensureSemantics();
+    expect(
+      tester.getSemantics(find.byKey(const ValueKey('effort-gauge-control'))),
+      matchesSemantics(
+        label: '思考强度',
+        value: '高',
+        increasedValue: '超高',
+        decreasedValue: '中',
+        hint: '左右滑动或点击档位；双击跟随模型',
+        isSlider: true,
+        isFocused: true,
+        isFocusable: true,
+        hasTapAction: true,
+        hasFocusAction: true,
+        hasIncreaseAction: true,
+        hasDecreaseAction: true,
+      ),
     );
-    await tester.tap(find.byKey(const ValueKey('effort-option-xhigh')));
+    semantics.dispose();
+
+    final control = find.byKey(const ValueKey('effort-gauge-control'));
+    final rect = tester.getRect(control);
+    await tester.timedDragFrom(
+      Offset(rect.left + 12, rect.top + 36),
+      Offset(rect.width - 24, 0),
+      const Duration(milliseconds: 300),
+    );
     await tester.pumpAndSettle();
-    expect(selected, ClaudeEffortPreference.xhigh);
+    expect(selected, ClaudeEffortPreference.max);
+    expect(find.text('最大'), findsOneWidget);
+
+    await tester.tapAt(Offset(rect.center.dx, rect.top + rect.height * 0.53));
+    await tester.pumpAndSettle();
+    expect(selected, ClaudeEffortPreference.automatic);
+    expect(find.text('自动'), findsOneWidget);
   });
 
   testWidgets('Codex composer exposes only three sandbox modes', (
@@ -1657,6 +1956,8 @@ void main() {
               offline: false,
               permissionMode: PermissionMode.manual,
               allowBypassPermissions: false,
+              contextWindow: 200000,
+              remainingContext: 174919,
               selectedModel: ClaudeModelPreference.sonnet,
               selectedEffort: ClaudeEffortPreference.xhigh,
               onEffortSelected: (_) {},
@@ -1676,6 +1977,18 @@ void main() {
       find.byKey(const ValueKey('composer-effort-button')),
       findsOneWidget,
     );
+    final contextRect = tester.getRect(
+      find.byKey(const ValueKey('composer-context-indicator')),
+    );
+    expect(contextRect.left, greaterThanOrEqualTo(0));
+    expect(contextRect.right, lessThanOrEqualTo(320));
+    await tester.tap(find.byKey(const ValueKey('composer-effort-button')));
+    await tester.pumpAndSettle();
+    final gaugeRect = tester.getRect(
+      find.byKey(const ValueKey('effort-gauge-control')),
+    );
+    expect(gaugeRect.left, greaterThanOrEqualTo(0));
+    expect(gaugeRect.right, lessThanOrEqualTo(320));
     expect(tester.takeException(), isNull);
   });
 
@@ -2546,17 +2859,14 @@ void main() {
     // Plain text skips MarkdownBody; markup still uses it.
     expect(find.byType(MarkdownBody), findsOneWidget);
     final markdown = tester.widget<MarkdownBody>(find.byType(MarkdownBody));
-    expect(
-      markdown.styleSheet!.tableColumnWidth,
-      isA<IntrinsicColumnWidth>(),
-    );
+    expect(markdown.styleSheet!.tableColumnWidth, isA<IntrinsicColumnWidth>());
     expect(
       markdown.styleSheet!.tableCellsPadding,
       const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
     );
-    expect(markdown.styleSheet!.p!.fontFamily, 'NotoSerifSC');
+    expect(markdown.styleSheet!.p!.fontFamily, isNot('NotoSerifSC'));
     expect(markdown.styleSheet!.p!.fontSize, AppTypography.assistantBodySize);
-    expect(markdown.styleSheet!.h1!.fontFamily, 'NotoSerifSC');
+    expect(markdown.styleSheet!.h1!.fontFamily, isNot('NotoSerifSC'));
     expect(markdown.styleSheet!.blockSpacing, 5);
     expect(
       markdown.styleSheet!.h1Padding,
@@ -2728,9 +3038,7 @@ void main() {
     expect(find.byKey(const ValueKey('thinking-icon')), findsOneWidget);
     expect(find.byKey(const ValueKey('thinking-signal')), findsNothing);
     expect(find.text('思考中 · 本轮已运行 12 秒'), findsOneWidget);
-    final liveStatus = tester.getSemantics(
-      find.bySemanticsLabel('正在思考'),
-    );
+    final liveStatus = tester.getSemantics(find.bySemanticsLabel('正在思考'));
     expect(liveStatus.getSemanticsData().flagsCollection.isLiveRegion, isTrue);
     final elapsedStatus = tester.getSemantics(
       find.bySemanticsLabel('本轮已运行 12 秒'),
@@ -2856,10 +3164,7 @@ void main() {
 
     await tester.tap(find.text('搜索代码'));
     await tester.pump();
-    expect(
-      find.byKey(const ValueKey('activity-detail-t2')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('activity-detail-t2')), findsOneWidget);
     expect(find.text('needle pattern'), findsOneWidget);
   });
 
@@ -2877,8 +3182,8 @@ void main() {
       SystemChannels.platform,
       (call) async {
         if (call.method == 'Clipboard.setData') {
-          copiedText = (call.arguments as Map<Object?, Object?>)['text']
-              as String?;
+          copiedText =
+              (call.arguments as Map<Object?, Object?>)['text'] as String?;
         }
         return null;
       },
@@ -3013,6 +3318,45 @@ void main() {
       find.byKey(const ValueKey('transcript-search-hit-126')),
       findsNothing,
     );
+  });
+
+  testWidgets('transcript opens at the latest message', (tester) async {
+    tester.view.physicalSize = const Size(393, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: TranscriptView(
+            messages: [
+              for (var index = 0; index < 80; index++)
+                TranscriptMessage.user('restored message $index'),
+            ],
+            activeSessionId: 'session-1',
+            connected: true,
+            offline: false,
+            pendingPermissions: const [],
+            respondingPermissionIds: const {},
+            onFillPrompt: (_) {},
+            onReconnect: () {},
+            onPermissionAllow: (_) {},
+            onPermissionDeny: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final list = tester.widget<ListView>(
+      find.byKey(const ValueKey('transcript-list')),
+    );
+    final position = list.controller!.position;
+    expect(position.maxScrollExtent, greaterThan(0));
+    expect(position.extentAfter, lessThan(1));
+    expect(find.text('restored message 79'), findsOneWidget);
   });
 
   testWidgets('tool activity expands to show its target', (tester) async {

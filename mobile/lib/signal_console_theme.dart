@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 class AppColors {
@@ -9,15 +10,19 @@ class AppColors {
   static const muted = Color(0xFF65625C);
   static const inactive = Color(0xFF8B877F);
   static const inactiveLight = Color(0xFFB8B4AB);
+
   /// Brand mark / large fills only — not body text or small labels.
   static const terracotta = Color(0xFFDA7756);
+
   /// CTA fills and terracotta-on-paper text that must meet ~4.5:1.
   static const terracottaDeep = Color(0xFFA65338);
   static const danger = Color(0xFF9E4D35);
   static const line = Color(0xFFD8D5CD);
   static const lineStrong = inactiveLight;
+
   /// Quiet warm-clay wash for the user's compact message bubble.
   static const userBubble = Color(0xFFE9E1D8);
+
   /// Soft wash behind composer + / model controls.
   static const composerControlFill = Color(0xFFF0E4DB);
   static const composerControlInk = Color(0xFF8A5340);
@@ -38,18 +43,13 @@ class AppColors {
 }
 
 class AppTypography {
-  /// Warm Console CJK face: serif for UI chrome and reading text.
-  static const fontFamily = 'NotoSerifSC';
-  static const fontFamilyFallback = <String>[
-    'Noto Serif SC',
-    'Source Han Serif SC',
-    'Songti SC',
-    'serif',
-  ];
+  /// Null lets Flutter resolve the native UI font for the current platform.
+  static const String? fontFamily = null;
+  static const List<String>? fontFamilyFallback = null;
 
-  /// Same serif face as UI; kept as a named alias for assistant markdown.
-  static const assistantFontFamily = fontFamily;
-  static const assistantFontFamilyFallback = fontFamilyFallback;
+  /// Assistant text follows the same platform-native family as the UI.
+  static const String? assistantFontFamily = fontFamily;
+  static const List<String>? assistantFontFamilyFallback = fontFamilyFallback;
   static const codeFontFamily = 'monospace';
   static const codeFontFamilyFallback = <String>[
     'JetBrains Mono',
@@ -59,10 +59,10 @@ class AppTypography {
   ];
 
   /// Base assistant body before reading-font scale factor.
-  static const assistantBodySize = 15.5;
-  static const assistantBodyHeight = 1.7;
+  static const assistantBodySize = 15.0;
+  static const assistantBodyHeight = 1.6;
   static const userBodySize = 15.0;
-  static const userBodyHeight = 1.5;
+  static const userBodyHeight = 1.6;
 }
 
 class AppSpacing {
@@ -87,9 +87,11 @@ class AppRadii {
   static const control = 12.0;
   static const surface = 16.0;
   static const header = 22.0;
+
   /// Floating composer shell — softer than a docked bar.
   static const composerFloat = 28.0;
   static const pill = 999.0;
+
   /// Soft chat bubbles (Claude / iMessage-like).
   static const bubbleSoft = 22.0;
 
@@ -163,8 +165,6 @@ ThemeData buildSignalConsoleTheme() {
   }) {
     return (base ?? const TextStyle()).copyWith(
       color: color,
-      fontFamily: AppTypography.fontFamily,
-      fontFamilyFallback: AppTypography.fontFamilyFallback,
       fontSize: size,
       fontWeight: weight,
       height: height,
@@ -173,11 +173,10 @@ ThemeData buildSignalConsoleTheme() {
     );
   }
 
-  final materialText = Typography.blackMountainView.apply(
-    bodyColor: AppColors.ink,
-    displayColor: AppColors.ink,
-    fontFamily: AppTypography.fontFamily,
-  );
+  final materialText = Typography.material2021(
+    platform: defaultTargetPlatform,
+    colorScheme: scheme,
+  ).black;
   final textTheme = materialText.copyWith(
     displayLarge: signalText(
       materialText.displayLarge,
@@ -291,8 +290,6 @@ ThemeData buildSignalConsoleTheme() {
     splashFactory: InkSparkle.splashFactory,
     colorScheme: scheme,
     scaffoldBackgroundColor: AppColors.paper,
-    fontFamily: AppTypography.fontFamily,
-    fontFamilyFallback: AppTypography.fontFamilyFallback,
     textTheme: textTheme,
     primaryTextTheme: textTheme,
     appBarTheme: AppBarTheme(
@@ -544,4 +541,3 @@ class TaskRailFrame extends StatelessWidget {
     );
   }
 }
-

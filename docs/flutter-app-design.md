@@ -14,7 +14,7 @@ Flutter App 是产品主入口。当前实现集中在少量文件中，优先�
 
 ## 主要文件
 
-`main.dart` 包含配对、HTTP、WebSocket、项目与会话、transcript、权限模式、主要页面和组件。`signal_console_theme.dart` 包含 Warm Console 的颜色、字体、圆角、弹层主题、动效和视觉基础部件。`workspace_drawer.dart` 实现文件树、文件阅读和 Git diff。`attachments.dart` 实现相机、相册、文件选择与 multipart 上传。`notification_service.dart` 封装 Android 本地通知和偏好保存。
+`main.dart` 包含配对、HTTP、WebSocket、项目与会话、transcript、权限模式、主要页面和组件。`signal_console_theme.dart` 包含 Warm Console 的颜色、字体、圆角、弹层主题、动效和视觉基础部件。`effort_gauge.dart` 实现 Composer 暖陶思考强度仪表与系统级模态层。`workspace_drawer.dart` 实现文件树、文件阅读和 Git diff。`attachments.dart` 实现相机、相册、文件选择与 multipart 上传。`notification_service.dart` 封装 Android 本地通知和偏好保存。
 
 ## 页面与组件
 
@@ -22,15 +22,15 @@ Flutter App 是产品主入口。当前实现集中在少量文件中，优先�
 
 `ChatScreen` 由 `ConnectionHeader`、可选 `ConsoleStatusStrip`、`TranscriptView` 和 `PromptBar` 组成。`ConnectionHeader` 是分离式紧凑会话头（菜单 + 新建/更多），不在 chrome 内堆连接文案；非 `connected` 相位时在头下方显示 `ConsoleStatusStrip`。模型选择位于输入台。“···”菜单不显示剩余上下文 token，底栏最多保留具有屏读语义的当前模型名。
 
-`TranscriptView` 展示用户消息、Claude 回复（`AssistantBubbleFrame` elevated 气泡 + 衬线；流式/无标记纯文本用 `Text`，带 Markdown 标记再用共享 `MarkdownStyleSheet`）、活动状态、审批卡，以及空状态下的连接中卡 / 离线重连卡 / 已连接快捷芯片。助手 Markdown 链接只接受绝对 `http` / `https` URL，点击后由 `url_launcher` 交给系统浏览器；无效协议保持不可跳转。`MessageBlock` 与附件组件负责历史内容。`ActivityBlock` 合并思考和工具活动，任务结束后清理临时活动。
+`TranscriptView` 展示用户消息、Claude 回复（`AssistantBubbleFrame` elevated 气泡 + 系统默认字体；流式/无标记纯文本用 `Text`，带 Markdown 标记再用共享 `MarkdownStyleSheet`）、活动状态、审批卡，以及空状态下的连接中卡 / 离线重连卡 / 已连接快捷芯片。助手 Markdown 链接只接受绝对 `http` / `https` URL，点击后由 `url_launcher` 交给系统浏览器；无效协议保持不可跳转。`MessageBlock` 与附件组件负责历史内容。`ActivityBlock` 合并思考和工具活动，任务结束后清理临时活动。
 
-`PromptBar` 处理权限模式、附件预览、多行输入、模型选择、发送和停止。当前为叠在 transcript 上的不透明暖白 Composer：上方输入，下方工具行依次为圆形附件 `+`、**紧贴的**暖色模型胶囊与权限模式胶囊、以及 `terracotta-deep` 圆形发送/停止。`+` 只开附件；权限模式点开既有 sheet（含 bypass 二次确认）。剩余上下文 token 不再显示，也不影响指令建议区高度。输入以 `/` 开头且没有空格时，`CommandSuggestions` 继续按前缀优先规则筛选 daemon 同步的 Claude Code 指令。
+`PromptBar` 处理权限模式、附件预览、多行输入、思考强度、模型选择、上下文余量、发送和停止。当前为叠在 transcript 上的不透明暖白 Composer：上方输入，下方工具行依次为圆形附件 `+`、暖陶小仪表、暖色模型胶囊、图标化权限入口、紧凑上下文百分比，以及 `terracotta-deep` 圆形发送/停止。点击小仪表后页面整体柔焦，只保留悬浮大仪表清晰；沿圆弧滑动吸附低、中、高、超高、最大，点击中心切回自动，松手后写入既有偏好。模型选择器保持冰川蓝渐变的双栏索引样式，当前行使用深蓝指示；窄屏仍保持可见且不溢出。`+` 只开附件；权限图标点开既有 sheet（含 bypass 二次确认），并保留当前模式的 tooltip / 屏读语义。上下文余量使用无底色浅灰细环，深灰短弧表示已消耗比例，右侧只显示剩余百分比；完整 token 数通过 tooltip / 屏读语义提供，不影响指令建议区高度。输入以 `/` 开头且没有空格时，`CommandSuggestions` 继续按前缀优先规则筛选 daemon 同步的 Claude Code 指令。
 
 `PermissionRequestCard` 为全宽决策面：命令 → 工作目录（`session.workspaceDir` 或 fallback 文案）→ 影响 → 范围 →「仅本次允许」/「拒绝并返回」。
 
-`SessionNavigatorSheet` 展示项目和各自会话，允许切换或创建会话；新建会话时先弹出引擎选择器（Claude / Codex），会话创建后引擎不可更改，会话摘要与搜索结果都带引擎标签。输入搜索词后切换为跨项目全文搜索，使用 300ms 防抖、加载线、匹配片段高亮、项目/角色/匹配数信息和空态/错误态。搜索结果由 daemon 的权威 transcript 生成，点击后复用现有会话切换；`TranscriptView` 等目标会话快照加载后按原始消息索引定位，并以规范化片段作为索引漂移时的安全回退，再短暂高亮既有气泡。`SettingsSheet` 按 Warm Console 分组管理设备信息、模型、背景、通知、重连和退出配对。`WorkspaceDrawer` 只读显示活动项目文件与 Git diff。
+`SessionNavigatorSheet` 是约 92% 高度、保留顶部拖拽柄并适配底部安全区的临时 bottom sheet。默认视图展示当前项目的会话，保留「所有项目」入口和少量项目快捷项；完整项目列表在面板内项目子视图中选择后返回会话视图。项目与会话采用连续暖纸背景上的扁平列表，不堆叠卡片。新建会话时先弹出引擎选择器（Claude / Codex），会话创建后引擎不可更改，会话摘要显示引擎标签。搜索按需进入跨项目子视图，使用 300ms 防抖、加载线、匹配片段高亮、项目/角色/匹配数信息和空态/错误态，并提供清除、重试和返回入口。搜索结果由 daemon 的权威 transcript 生成，点击后复用现有会话切换；`TranscriptView` 等目标会话快照加载后按原始消息索引定位，并以规范化片段作为索引漂移时的安全回退，再短暂高亮既有气泡。以上仅改变导航呈现，不改变 catalog、运行中禁用、搜索 API、引擎选择或 transcript 定位契约。`SettingsSheet` 是约 94% 高的独立 Preference Gallery：顶部实时合成模型、聊天背景和阅读字号预览；偏好与主机信息各使用一块扁平分组，暖色只允许出现在聊天预览内部。聊天背景页复用设置容器；模型选择器保留原有冰川蓝双栏视觉。`WorkspaceDrawer` 只读显示活动项目文件与 Git diff。
 
-主界面与工作区图标统一来自 `lucide_icons_flutter` 3.1.15。主题打包 `NotoSerifSC`（UI 与助手统一衬线）。思考态使用 `AnimationController` 驱动固定中心的暖陶花形帧动画，由 `CustomPainter` 在圆点、四瓣、六瓣和八瓣星芒间生长 / 收缩；系统关闭动画时固定为完整花形。可见计时明确标为「本轮已运行」，屏读 live region 只播报一次「正在思考」，不会随秒数重复播报。普通活动 running 继续使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`，保留 `SignalPressEffect` 等已有原生交互效果。
+主界面与工作区默认使用 `lucide_icons_flutter` 3.1.15；Project and Session Navigator 是受控例外，使用 `phosphor_flutter` 2.1.0 的 Regular/Fill：Regular 用于普通导航、文件夹、搜索和会话，Fill 只用于当前选中状态，其他页面不扩展该例外。主题不打包自定义字体，UI 与助手正文使用当前手机的系统默认字体。思考态使用 `AnimationController` 驱动固定中心的暖陶花形帧动画，由 `CustomPainter` 在圆点、四瓣、六瓣和八瓣星芒间生长 / 收缩；系统关闭动画时固定为完整花形。可见计时明确标为「本轮已运行」，屏读 live region 只播报一次「正在思考」，不会随秒数重复播报。普通活动 running 继续使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`，保留 `SignalPressEffect` 等已有原生交互效果。
 
 ## 核心状态
 
@@ -52,9 +52,9 @@ WebSocket 处理 `status`、`catalog`、`transcript_snapshot`、`permission_capa
 
 ## 权限模式
 
-App 支持 `manual`、`acceptEdits`、`auto`、`dontAsk`、`plan` 和 `bypassPermissions`。默认是 `manual`。权限请求只能允许一次或拒绝；Warm Console 可以将审批呈现为独立决策面，但不能新增协议不支持的永久授权操作。
+App 支持 `manual`、`acceptEdits`、`auto`、`dontAsk`、`plan` 和 `bypassPermissions`。新会话默认是 `auto`，权限模式保存在当前会话中并作用于后续各轮。权限请求仍只能允许一次或拒绝；Warm Console 可以将审批呈现为独立决策面，但不能新增协议不支持的永久授权操作。
 
-如果 daemon 关闭 bypass 能力，选择项禁用。选择 bypass 时必须弹出确认，任务结束后自动恢复询问权限。
+如果 daemon 关闭 bypass 能力，选择项禁用。选择 bypass 时必须弹出确认，并持续到用户切换或新建会话。
 
 Codex 会话不使用权限模式，改用三档沙箱模式（只读 / 工作区可写 / 完全访问），由 daemon 下发的 `codexSandboxModes` 驱动选择项；选择 `danger-full-access` 发送一次后自动回落为 `read-only`。Codex 会话的附件仅允许图片，违反时提示「Codex 会话只支持图片附件」。
 
@@ -76,11 +76,11 @@ Codex 会话不使用权限模式，改用三档沙箱模式（只读 / 工作�
 
 IME 动画的真实 `viewInsets.bottom` 只用于 `AppBackground` 外层避让；传给聊天子树的 `MediaQuery.viewInsets` 被稳定为“关闭 0 / 打开 1”两态，避免长 transcript、Markdown 与 Composer 随键盘每个高度帧重复 build。`ChatScreen` 不再使用覆盖整页的 `LayoutBuilder`，指令建议通过 `Flexible` 在剩余高度内收缩，Composer 使用独立 `RepaintBoundary`。最终键盘避让距离、底部圆角和阴影切换保持不变。
 
-系统大字体、小屏、横屏和键盘场景都有回归测试。中文 UI 依赖打包的 Noto 子集字体；widget 测试环境的 Ahem 字体只用于布局几何。
+系统大字体、小屏、横屏和键盘场景都有回归测试。中文 UI 使用手机系统默认字体，应用不在 APK 中打包 Noto、LXGW 等正文字体；widget 测试环境的 Ahem 字体只用于布局几何。
 
 ## 测试范围
 
-`mobile/test/widget_test.dart` 覆盖启动、配对、Warm Console 设置与菜单、当前模型屏读语义、菜单去上下文 token、会话导航与全文搜索跳转、工作区、指令筛选、Composer 44/36px 尺寸、权限模式、审批卡（含工作目录与 fallback）、运行和停止状态、花形思考动画 / 本轮计时 / live region、原生进度指示器、共享恢复面板、减少动态效果、小屏大字体、横屏扫码、离线重连、Markdown 来源链接、回复和活动展示。键盘回归会模拟连续 inset 帧，确认已打开期间消息与 Composer 实例不重复重建。实际测试总数以 `flutter test` 输出为准。
+`mobile/test/widget_test.dart` 覆盖启动、配对、Warm Console 设置与菜单、当前模型屏读语义、菜单去上下文 token、Composer 上下文余量与权限图标语义、恢复 transcript 自动定位到底部、会话导航与全文搜索跳转、工作区、指令筛选、Composer 44/36px 尺寸、思考仪表滑动 / 自动档 / 屏读调节 / 320px 窄屏、权限模式、审批卡（含工作目录与 fallback）、运行和停止状态、花形思考动画 / 本轮计时 / live region、原生进度指示器、共享恢复面板、减少动态效果、小屏大字体、横屏扫码、离线重连、Markdown 来源链接、回复和活动展示。键盘回归会模拟连续 inset 帧，确认已打开期间消息与 Composer 实例不重复重建。实际测试总数以 `flutter test` 输出为准。
 
 `mobile/test/attachments_test.dart` 覆盖附件上传、限制和错误清理。提交前运行：
 

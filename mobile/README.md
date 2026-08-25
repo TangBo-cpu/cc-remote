@@ -4,11 +4,11 @@ Flutter 手机 App，用于扫码配对本机 CC Remote daemon，并远程控制
 
 ## 当前能力
 
-App 已支持扫码确认、Secure Storage、启动恢复、WebSocket 自动重连、活动任务恢复、流式对话、停止任务、斜杠指令、Markdown、模型选择、Claude Code 思考强度与上下文状态同步、六种权限模式、一次性工具审批、多项目与多会话、只读工作区、Git diff、图片与文件附件，以及 Android 后台本地通知。
+App 已支持扫码确认、Secure Storage、启动恢复、WebSocket 自动重连、活动任务恢复、流式对话、停止任务、Claude / Codex 会话引擎、Codex 三档沙箱、Claude 斜杠指令与六档思考强度、Markdown 来源链接、跨项目会话搜索、模型和上下文状态同步、一次性工具审批、多项目与多会话、只读工作区、Git diff、图片与文件附件，以及 Android 后台本地通知。
 
-`v1.3.0` 在“暖纸控制台 / Warm Console”基础上加入 Codex 引擎与沙箱模式、跨项目会话搜索、来源链接跳转、任务恢复状态、时间线与代码块工具栏，以及更轻量的思考动效；电脑端桥接改为常驻 Claude Streaming Input 与 Codex App Server，后续轮次不再重复启动 CLI。
+`v1.3.1` 在“暖纸控制台 / Warm Console”基础上加入 Apple 风格设置界面、持久化权限模式、上下文余量指示与恢复对话时自动定位到底部，并继续保留 Codex 引擎、跨项目会话搜索、任务恢复状态与更轻量的思考动效。
 
-Composer 悬浮在 transcript 之上：列表可滚入 dock 背后，dock 本身不透明以免滚动叠字掉帧；工具行为圆形附件按钮（仅附件）、Lucide 灯泡思考强度、**紧贴的**暖色模型胶囊 + 权限模式胶囊、以及 `terracotta-deep` 圆形发送/停止，不显示剩余上下文 token。思考强度与 Claude Code `/effort` 对齐为自动、低、中、高、超高、最大六档；`max` 不保存为跨会话默认。底边平时用 `viewPadding` 抬离系统手势条，键盘打开时取消底部间隙和阴影并与 IME 连续衔接。长列表滚动侧：消息四角统一 22px，助手阅读面使用无描边 `surface`；气泡无 soft shadow、共享 Markdown 样式表、无标记纯文本跳过 Markdown、活动轨去掉 `IntrinsicHeight`。“···”菜单底栏最多保留当前模型名，并提供对应屏读语义。主界面和工作区统一使用 `lucide_icons_flutter`；字体打包 `NotoSerifSC` 于 `fonts/`（UI 与助手统一衬线）。思考态是原生脉冲 brain 图标，活动 running 状态仍使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`。
+Composer 悬浮在 transcript 之上：列表可滚入 dock 背后，dock 本身不透明以免滚动叠字掉帧；工具行为圆形附件按钮（仅附件）、暖陶仪表思考强度、暖色模型胶囊、图标化权限入口、紧凑上下文余量，以及 `terracotta-deep` 圆形发送/停止。权限图标保留完整模式 tooltip / 屏读语义和 44px 命中区；上下文使用无底色浅灰细环，深灰短弧表示已消耗比例，右侧只显示剩余百分比，完整 token 数通过 tooltip / 屏读语义提供。点击小仪表后背景整体柔焦，只保留大仪表清晰；沿圆弧滑动吸附低、中、高、超高、最大，点击中心切回自动。思考强度与 Claude Code `/effort` 对齐为六档；`max` 不保存为跨会话默认。底边平时用 `viewPadding` 抬离系统手势条，键盘打开时取消底部间隙和阴影并与 IME 连续衔接。长列表滚动侧：消息四角统一 22px，助手阅读面使用无描边 `surface`；气泡无 soft shadow、共享 Markdown 样式表、无标记纯文本跳过 Markdown、活动轨去掉 `IntrinsicHeight`；恢复或切换到对话时默认定位到最新消息，用户主动上翻后不会被后续刷新强制拉回。“···”菜单底栏最多保留当前模型名，并提供对应屏读语义。主界面和工作区默认使用 `lucide_icons_flutter`；Project and Session Navigator 受控使用 `phosphor_flutter` 2.1.0 的 Regular/Fill，Regular 表示普通状态，Fill 仅表示当前选中状态；应用不打包自定义字体，UI 与助手正文使用手机系统默认字体。思考态由 `CustomPainter` 绘制固定中心的暖陶花形帧动画，系统关闭动画时固定为完整花形；其他活动 running 仍使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`。
 
 ## 开发运行
 
@@ -30,9 +30,9 @@ flutter run
 
 ## Android 安装
 
-当前公开版本是 [`v1.3.0`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.3.0)：
+当前公开版本是 [`v1.3.1`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.3.1)：
 
-- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.0/cc-remote-v1.3.0-android.apk)
+- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.1/cc-remote-v1.3.1-android.apk)
 
 下载后在 Android 手机上允许当前来源安装未知应用，并打开 APK 完成安装。当前 APK 使用测试签名，适合个人测试，不应作为应用商店正式包分发。
 
@@ -78,7 +78,7 @@ adb shell monkey -p com.example.cc_remote -c android.intent.category.LAUNCHER 1
 
 WebSocket 鉴权后，App 接收项目 catalog、当前 transcript、权限能力、指令、模型和上下文。发送任务时携带唯一 `promptId`、当前 `sessionId`、文本、附件 ID、权限模式、模型覆盖项和 Claude Code `effort`；daemon 接管后返回 `prompt_accepted`。
 
-输入 `/` 会显示 daemon 同步的 Claude Code 指令。运行中会显示思考计时和安全化工具活动；调用 `Skill` 时会显示具体 Skill 名称。完成后临时活动收起，最终回复保留。连接异常时 WebSocket 按退避间隔自动重连；只有尚未收到确认的 Prompt 会使用同一 `promptId` 重发，daemon 去重后不会重复启动 Claude。重连后再以 daemon 的 transcript snapshot 和运行状态恢复内容、活动任务与 Stop 中间态。
+Claude 会话输入 `/` 会显示 daemon 同步的 Claude Code 指令，Codex 会话不发现斜杠指令。运行中会显示思考计时和安全化工具活动；调用 `Skill` 时会显示具体 Skill 名称。完成后临时活动收起，最终回复保留。连接异常时 WebSocket 按退避间隔自动重连；只有尚未收到确认的 Prompt 会使用同一 `promptId` 重发，daemon 去重后不会重复启动当前引擎任务。重连后再以 daemon 的 transcript snapshot 和运行状态恢复内容、活动任务与 Stop 中间态。
 
 项目只能从电脑端注册：在目标目录运行 `cc-remote`，或 daemon 已在跑时再执行一次。App 可以切换已注册项目与会话，并在当前项目创建新会话，但不能添加任意磁盘路径。运行任务或上传附件时禁止切换。
 
@@ -100,10 +100,10 @@ App 在后台或锁屏时可以发送任务完成、失败、停止和等待权�
 
 ## 代码入口
 
-`lib/main.dart` 是应用状态和主要页面。`lib/signal_console_theme.dart` 是主题与视觉部件（含 CTA / 字体 token）。`lib/workspace_drawer.dart` 是只读工作区。`lib/attachments.dart` 是附件选择与上传。`lib/notification_service.dart` 是本地通知。`fonts/` 为打包的 Noto 子集。
+`lib/main.dart` 是应用状态和主要页面。`lib/signal_console_theme.dart` 是主题与视觉部件（含 CTA / 字体 token）。`lib/effort_gauge.dart` 是 Composer 暖陶思考强度仪表与系统级模态层。`lib/workspace_drawer.dart` 是只读工作区。`lib/attachments.dart` 是附件选择与上传。`lib/notification_service.dart` 是本地通知。UI 与助手正文使用手机系统默认字体，`pubspec.yaml` 不声明自定义正文字体，因此 Noto/LXGW 不会打包进 APK。
 
 更完整的设计和架构说明见 `../docs/mobile-ui-app-design.md`、`../docs/mobile-app-architecture.md` 和 `../docs/flutter-app-design.md`。
 
 ## 当前验证状态
 
-当前开发代码通过 `flutter analyze`；`mobile/test/widget_test.dart` 等测试通过（含权限芯片直达、明文跳过 Markdown、附件发送、离线重连、Composer 尺寸）。开发 release 已装 Android 真机，验证悬浮 Composer、模型/权限紧贴与更宽气泡；逐屏视觉清单仍可继续补齐。第二轮 session resume 与 Stop 长任务均已完成真机验证，Stop 后 daemon 没有残留 Claude 子进程。
+`v1.3.1` 发布门禁已通过：`flutter analyze` 零问题，Flutter 137 项测试通过；daemon 测试按当前配置执行。`1.3.1+5` APK 使用覆盖安装方式保留本地数据与配对状态；日常调试构建产物为 `app-debug.apk`。

@@ -11,7 +11,7 @@ enum PermissionMode {
   static PermissionMode fromWire(Object? value) {
     return PermissionMode.values.firstWhere(
       (mode) => mode.wireName == value,
-      orElse: () => PermissionMode.manual,
+      orElse: () => PermissionMode.auto,
     );
   }
 }

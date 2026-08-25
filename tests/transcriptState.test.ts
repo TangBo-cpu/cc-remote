@@ -10,6 +10,7 @@ test('persists the authoritative transcript and restores it after restart', asyn
   const path = join(dir, 'transcript.json');
   try {
     const state = await createTranscriptState(path);
+    assert.equal(state.snapshot().permissionMode, 'auto');
     state.beginPrompt('检查项目', 'manual');
     state.appendText('已经检查完成');
     state.setSessionInfo({ model: 'claude-opus-4-8', contextWindow: 200000, remainingTokens: 175000 });
@@ -158,7 +159,7 @@ test('keeps safe activity metadata and clears the conversation atomically', asyn
   }
 });
 
-test('persists pending approvals and resets bypass mode after the task', async () => {
+test('persists bypass mode for the whole conversation', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-remote-transcript-'));
   const path = join(dir, 'transcript.json');
   try {
@@ -183,8 +184,11 @@ test('persists pending approvals and resets bypass mode after the task', async (
 
     state.removePermission('permission-1');
     await state.finishStopped();
-    assert.equal(state.snapshot().permissionMode, 'manual');
+    assert.equal(state.snapshot().permissionMode, 'bypassPermissions');
     assert.deepEqual(state.snapshot().pendingPermissions, []);
+
+    const restored = await createTranscriptState(path);
+    assert.equal(restored.snapshot().permissionMode, 'bypassPermissions');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

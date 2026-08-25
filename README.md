@@ -4,13 +4,21 @@
 
 扫码配对后，你就能在 Warm Console 里发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更——电脑端 daemon 继续跑 Claude Code CLI，手机只是随身控制台。
 
-[下载 Android APK · v1.3.0](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.0/cc-remote-v1.3.0-android.apk)
+[下载 Android APK · v1.3.1](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.1/cc-remote-v1.3.1-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.3.0)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.3.1)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
 ```
+
+<p align="center">
+  <img src="docs/images/warm-console-home.png" alt="Warm Console 主界面" width="280" />
+</p>
+
+<p align="center"><sub>Warm Console · v1.2 视觉基线；v1.3 新增能力见下方功能清单</sub></p>
+
+---
 
 ## 它能做什么
 
@@ -28,6 +36,22 @@
 - daemon 默认只听 `127.0.0.1`，公网走 Tunnel
 - 一次性扫码配对，Bearer token；退出配对即撤销
 - 手机不能注册任意目录、不能跑任意 shell、不能远程编辑 / 提交
+
+---
+
+## 界面参考
+
+以下真机截图记录的是 v1.2 Warm Console 视觉基线，尚未覆盖 v1.3.0 新增的 Codex、会话搜索、活动时间线、代码块工具栏和花形思考状态。
+
+| 主控制台 | 项目与会话 | 更多菜单 |
+| :---: | :---: | :---: |
+| <img src="docs/images/warm-console-home.png" width="220" alt="主控制台" /> | <img src="docs/images/06-sessions.png" width="220" alt="项目与会话" /> | <img src="docs/images/02-more-menu.png" width="220" alt="更多菜单" /> |
+
+| 设置（字号滑杆） | 工作区文件 | Git 修改 |
+| :---: | :---: | :---: |
+| <img src="docs/images/03-settings.png" width="220" alt="设置" /> | <img src="docs/images/04-workspace.png" width="220" alt="工作区" /> | <img src="docs/images/05-diff.png" width="220" alt="Diff" /> |
+
+暖白纸感背景、衬线阅读正文、更宽助手气泡、`terracotta-deep` 发送按钮；顶部只有圆形菜单 + 新建/更多胶囊，模型放在 Composer。设计规格见 [`DESIGN.md`](DESIGN.md)。
 
 ---
 
@@ -78,7 +102,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v1.3.0 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.0/cc-remote-v1.3.0-android.apk)（测试签名，个人使用）
+1. 安装 [v1.3.1 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.1/cc-remote-v1.3.1-android.apk)（测试签名，个人使用）
 2. 允许「未知来源」安装
 3. 打开 App → 扫终端二维码 → 确认电脑名与服务地址 → 进入控制台
 
@@ -105,8 +129,9 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 - Claude Streaming Input 与 Codex App Server 常驻复用，后续轮次不重复启动 CLI
 - 助手 Markdown 中的搜索来源 / 引用链接可点击，仅允许 `http` / `https` 并交给系统浏览器打开
 - 停止任务、暖陶花形思考状态与本轮运行计时、安全化工具活动
+- Composer 暖陶思考强度仪表与六档思考强度（自动 + 低、中、高、超高、最大五手动档）
 - Claude Code 斜杠指令
-- 模型选择（Composer 暖色胶囊）
+- 模型选择（Composer 暖色触发胶囊 + 冰川蓝渐变双栏选择器）
 - 六种权限模式 + 一次性工具审批
 - Codex 沙箱模式三档（read-only / workspace-write / danger-full-access），danger 发送一次后自动回落 read-only
 - 图片 / 文件附件（每轮最多 5 个，单文件 ≤ 25MB；Codex 会话仅支持图片）
@@ -212,7 +237,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v1.3.0](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.3.0)**
-APK：[`cc-remote-v1.3.0-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.0/cc-remote-v1.3.0-android.apk)
+当前公开版：**[v1.3.1](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.3.1)**
+APK：[`cc-remote-v1.3.1-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.1/cc-remote-v1.3.1-android.apk)
 
-`v1.3.0` 在 Warm Console 基础上加入 Codex 引擎与沙箱模式、跨项目会话搜索、来源链接跳转、任务恢复状态、时间线与代码块工具栏，并通过 Claude Streaming Input 与 Codex App Server 常驻复用缩短后续轮次响应时间。
+`v1.3.1` 在 Warm Console 基础上加入 Apple 风格设置界面、持久化权限模式、上下文余量指示与恢复对话时自动定位到底部，并继续保留 Codex 引擎、跨项目会话搜索和任务恢复能力。
