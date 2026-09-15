@@ -10,6 +10,8 @@ void main() {
   test('reading font scale defaults and persists continuous values', () async {
     final store = ReadingFontSizePreferenceStore();
 
+    expect(kReadingFontScaleDefault, 1.0);
+    expect(readingFontSizeLabel(kReadingFontScaleDefault), '100%');
     expect(await store.load(), kReadingFontScaleDefault);
     await store.save(1.15);
     expect(await store.load(), closeTo(1.15, 0.001));
@@ -38,6 +40,11 @@ void main() {
       await ReadingFontSizePreferenceStore().load(),
       kReadingFontScaleDefault,
     );
+  });
+
+  test('default scale is labeled 100 percent', () {
+    expect(readingFontSizeDescription(1.0), '默认阅读尺寸');
+    expect(readingFontSizeDescription(0.95), '更紧凑，适合一屏看更多');
   });
 
   test('snap and clamp keep slider values in range', () {

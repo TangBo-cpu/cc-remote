@@ -486,8 +486,11 @@ export function extractClaudeActivities(event: unknown): ClaudeActivity[] {
 
 export function extractClaudeCommands(event: unknown): string[] {
   if (!isRecord(event) || event.type !== 'system' || event.subtype !== 'init') return [];
-  if (!Array.isArray(event.skills)) return [];
-  return [...new Set(event.skills
+  const commands = [
+    ...(Array.isArray(event.slash_commands) ? event.slash_commands : []),
+    ...(Array.isArray(event.skills) ? event.skills : []),
+  ];
+  return [...new Set(commands
     .filter((command): command is string => typeof command === 'string')
     .map(command => command.trim().replace(/^\/+/, ''))
     .filter(Boolean))]
@@ -501,7 +504,18 @@ export function extractClaudeSessionInfo(event: unknown): ClaudeSessionInfo | nu
     return { model: event.model };
   }
 
+  // modelUsage on result events is cumulative across every API turn of the
+  // run, so summing it tracks billed tokens, not the current context fill.
+  // Per-request usage (assistant events while streaming, top-level result
+  // usage at the end) is what the context window actually holds.
+  if (event.type === 'assistant' && isRecord(event.message)) {
+    return claudeSessionInfoFromRequest(event.message.model, event.message.usage, event.modelUsage);
+  }
+  if (event.type === 'result' && isRecord(event.usage)) {
+    return claudeSessionInfoFromRequest(event.model, event.usage, event.modelUsage);
+  }
   if (event.type !== 'result' || !isRecord(event.modelUsage)) return null;
+  // Legacy fallback for Claude Code builds that omit top-level usage.
   let selected: ClaudeSessionInfo | null = null;
   for (const [model, value] of Object.entries(event.modelUsage)) {
     if (!isRecord(value) || typeof value.contextWindow !== 'number') continue;
@@ -517,6 +531,54 @@ export function extractClaudeSessionInfo(event: unknown): ClaudeSessionInfo | nu
     if (!selected || usedTokens > (selected.usedTokens ?? 0)) selected = candidate;
   }
   return selected;
+}
+
+function claudeSessionInfoFromRequest(
+  model: unknown,
+  usage: unknown,
+  modelUsage: unknown,
+): ClaudeSessionInfo | null {
+  if (!isRecord(usage)) return null;
+  const usedTokens = tokenValue(usage.input_tokens)
+    + tokenValue(usage.cache_read_input_tokens)
+    + tokenValue(usage.cache_creation_input_tokens);
+  if (usedTokens <= 0) return null;
+  if (model === '<synthetic>') return null;
+  const contextWindow = claudeContextWindowForRequest(model, modelUsage, usedTokens);
+  const info: ClaudeSessionInfo = {
+    contextWindow,
+    usedTokens,
+    remainingTokens: Math.max(0, contextWindow - usedTokens),
+  };
+  if (typeof model === 'string' && model) info.model = model;
+  return info;
+}
+
+function claudeContextWindowForRequest(
+  model: unknown,
+  modelUsage: unknown,
+  usedTokens: number,
+): number {
+  if (isRecord(modelUsage)) {
+    if (typeof model === 'string' && isRecord(modelUsage[model])
+      && typeof modelUsage[model].contextWindow === 'number') {
+      return modelUsage[model].contextWindow;
+    }
+    let best: number | undefined;
+    let bestUsed = -1;
+    for (const value of Object.values(modelUsage)) {
+      if (!isRecord(value) || typeof value.contextWindow !== 'number') continue;
+      const candidateUsed = tokenValue(value.inputTokens)
+        + tokenValue(value.cacheReadInputTokens)
+        + tokenValue(value.cacheCreationInputTokens);
+      if (candidateUsed > bestUsed) {
+        bestUsed = candidateUsed;
+        best = value.contextWindow;
+      }
+    }
+    if (best !== undefined) return best;
+  }
+  return contextWindowForModel(typeof model === 'string' ? model : '');
 }
 
 export async function restoreClaudeSessionInfo({
@@ -540,12 +602,18 @@ export async function restoreClaudeSessionInfo({
     try {
       const entry = JSON.parse(line) as unknown;
       if (!isRecord(entry) || entry.type !== 'assistant' || !isRecord(entry.message)) continue;
+      // Sidechain entries belong to subagent contexts, not the main thread.
+      if (entry.isSidechain === true) continue;
       const message = entry.message;
-      if (typeof message.model === 'string') latestModel = message.model;
+      if (typeof message.model === 'string' && message.model !== '<synthetic>') {
+        latestModel = message.model;
+      }
       if (!isRecord(message.usage)) continue;
-      latestUsedTokens = tokenValue(message.usage.input_tokens)
+      const usedTokens = tokenValue(message.usage.input_tokens)
         + tokenValue(message.usage.cache_read_input_tokens)
         + tokenValue(message.usage.cache_creation_input_tokens);
+      if (usedTokens <= 0) continue;
+      latestUsedTokens = usedTokens;
     } catch {}
   }
 
@@ -601,7 +669,8 @@ async function readConfiguredClaudeModel(
 }
 
 function contextWindowForModel(model: string): number {
-  return /(?:^|[-_])(1m|1000k)(?:$|[-_])/i.test(model) ? 1_000_000 : 200_000;
+  // "[1m]" is how Claude Code marks the 1M-context beta model variant.
+  return /(?:^|[-_[])(?:1m|1000k)(?:$|[-_\].])/i.test(model) ? 1_000_000 : 200_000;
 }
 
 export async function discoverClaudeCommands(options: ClaudeBridgeOptions): Promise<string[]> {

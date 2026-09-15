@@ -1,13 +1,27 @@
+/*
+THESIS: CC Remote uses quiet system glass for controls and navigation, never as
+content decoration or a card wall.
+OWN-WORLD: static ice-gray ground, neutral translucent materials, graphite
+labels, one restrained blue accent, and pure-black/white depth rings.
+STORY: users immediately read connection and task state, then act through a
+small set of familiar floating controls without losing transcript context.
+FIRST VIEWPORT: split header controls float above the transcript; the reading
+surface stays calm; a thick rounded composer anchors the bottom action.
+FORM: Pale System Glass, grounded direction 6, seed 63e4c41a.
+FINISH: unreviewed and undocumented is unfinished; this build ends with the
+finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance.
+*/
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
+import 'package:phosphor_icons/phosphor_icons.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:markdown/markdown.dart' as md;
@@ -30,7 +44,8 @@ import 'signal_console_theme.dart';
 import 'workspace_drawer.dart';
 
 void main() {
-  runApp(const CcRemoteApp());
+  const isPreview = bool.fromEnvironment('CC_REMOTE_PREVIEW');
+  runApp(CcRemoteApp(enableCamera: !isPreview, demoMode: isPreview));
 }
 
 /// Keep a healthy chat socket across app resume / picker returns.
@@ -124,20 +139,6 @@ class _CcRemoteAppState extends State<CcRemoteApp> {
       title: 'CC Remote',
       debugShowCheckedModeBanner: false,
       theme: buildSignalConsoleTheme(),
-      builder: (context, child) {
-        return ValueListenableBuilder<double>(
-          valueListenable: readingFontScale,
-          builder: (context, scale, _) {
-            final media = MediaQuery.of(context);
-            return MediaQuery(
-              data: media.copyWith(
-                textScaler: multiplyReadingTextScaler(media.textScaler, scale),
-              ),
-              child: child ?? const SizedBox.shrink(),
-            );
-          },
-        );
-      },
       home: DemoShell(
         enableCamera: widget.enableCamera,
         demoMode: widget.demoMode,
@@ -312,7 +313,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   int connectionRefreshGeneration = 0;
   DateTime? appBackgroundedAt;
   // ponytail: batch stream paint/persist; tighten if first glyph feels late
-  static const streamTextBatchInterval = Duration(milliseconds: 40);
+  static const streamTextBatchInterval = Duration(milliseconds: 80);
   static const streamPersistInterval = Duration(milliseconds: 1500);
   String pendingAssistantText = '';
   Timer? streamTextFlushTimer;
@@ -952,6 +953,55 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       commands
         ..clear()
         ..addAll(['caveman:caveman-help', 'frontend-design', 'review']);
+      projects
+        ..clear()
+        ..addAll(const [
+          RemoteProjectSummary(
+            id: 'demo-cc-remote',
+            name: 'cc-remote',
+            path: '/workspace/cc-remote',
+            sessionCount: 2,
+            running: false,
+          ),
+          RemoteProjectSummary(
+            id: 'demo-mobile',
+            name: 'mobile',
+            path: '/workspace/cc-remote/mobile',
+            sessionCount: 1,
+            running: false,
+          ),
+        ]);
+      remoteSessions
+        ..clear()
+        ..addAll(const [
+          RemoteSessionSummary(
+            id: 'demo-session-polish',
+            projectId: 'demo-cc-remote',
+            title: '图标改成实心小标',
+            updatedAt: 3,
+            running: false,
+            messageCount: 8,
+          ),
+          RemoteSessionSummary(
+            id: 'demo-session-glass',
+            projectId: 'demo-cc-remote',
+            title: '玻璃控制面',
+            updatedAt: 2,
+            running: false,
+            messageCount: 4,
+          ),
+          RemoteSessionSummary(
+            id: 'demo-session-mobile',
+            projectId: 'demo-mobile',
+            title: '配对页扫码',
+            engine: SessionEngine.codex,
+            updatedAt: 1,
+            running: false,
+            messageCount: 3,
+          ),
+        ]);
+      activeProjectId = 'demo-cc-remote';
+      activeSessionId = 'demo-session-polish';
     });
   }
 
@@ -1132,6 +1182,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             pendingPermissions[index] = request;
           } else {
             pendingPermissions.add(request);
+            // A permission decision is the product's highest-stakes moment;
+            // give it the same physical nudge the gauge detents already use.
+            HapticFeedback.selectionClick();
           }
         });
         showBackgroundNotification(
@@ -1377,22 +1430,24 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       return;
     }
     setState(() {
-      final start =
-          messages.lastIndexWhere(
-            (message) => message.role == MessageRole.user,
-          ) +
-          1;
-      finishRunningActivities(
-        messages,
-        ActivityState.done,
-        start: start,
-        kind: ActivityKind.thinking,
-      );
-      if (messages.isNotEmpty && messages.last.role == MessageRole.assistant) {
-        final last = messages.removeLast();
-        final merged = last.text + text;
+      if (!lastIsAssistant) {
+        final start =
+            messages.lastIndexWhere(
+              (message) => message.role == MessageRole.user,
+            ) +
+            1;
+        finishRunningActivities(
+          messages,
+          ActivityState.done,
+          start: start,
+          kind: ActivityKind.thinking,
+        );
+      }
+      if (lastIsAssistant) {
+        final lastIndex = messages.length - 1;
+        final merged = messages[lastIndex].text + text;
         if (merged.trim().isEmpty) return;
-        messages.add(TranscriptMessage.assistant(merged));
+        messages[lastIndex] = TranscriptMessage.assistant(merged);
       } else {
         messages.add(TranscriptMessage.assistant(text));
       }
@@ -2236,130 +2291,131 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    return ValueListenableBuilder<double>(
-      valueListenable: widget.readingFontScaleListenable,
-      builder: (context, readingFontScale, _) {
-        final screen = switch (route) {
-          ShellRoute.boot => BootstrapScreen(phase: bootstrapPhase),
-          ShellRoute.pair => PairScreen(
-            enableCamera: widget.enableCamera,
-            cameraPermissionService: cameraPermissionService,
-            pairing: pairing,
-            canResetScan: pausedQrRaw != null,
-            error: pairError,
-            onQr: handleQr,
-            onClearError: resetScanner,
-            onDemoConnect: widget.demoMode ? connectDemoDevice : null,
-          ),
-          ShellRoute.chat => ChatScreen(
-            session: session,
-            activeSessionId: activeSessionId,
-            running: running,
-            stopping: stopping,
-            runStartedAt: runStartedAt,
-            uploadingAttachments: uploadingAttachments,
-            connected: wsReady,
-            offline: remoteOffline,
-            reconnectSnapshot: reconnectSnapshot,
-            modelName: modelName,
-            selectedModel: selectedModel,
-            engine: activeSessionEngine,
-            selectedEffort: selectedEffort,
-            contextWindow: contextWindow,
-            remainingContext: remainingContext,
-            messages: messages,
-            transcriptJumpRequest: transcriptJumpRequest,
-            commands: commands,
-            permissionMode: running
-                ? activePermissionMode
-                : selectedPermissionMode,
-            allowBypassPermissions: allowBypassPermissions,
-            codexSandboxMode: running
-                ? activeCodexSandboxMode
-                : selectedCodexSandboxMode,
-            pendingPermissions: pendingPermissions,
-            respondingPermissionIds: respondingPermissionIds,
-            promptController: promptController,
-            pendingAttachments: pendingAttachments,
-            onFillPrompt: fillPrompt,
-            onReconnect: reconnectNow,
-            onOpenSettings: () => showSettingsSheet(
-              context,
-              session,
-              notificationsEnabled,
-              chatBackground,
-              modelName,
-              selectedModel,
-              readingFontScale,
-              refreshConnection,
-              setNotificationsEnabled,
-              setModelPreference,
-              setChatBackground,
-              pickChatBackgroundImage,
-              widget.onReadingFontScaleChanged,
-              logoutPairedDevice,
+    final screen = switch (route) {
+      ShellRoute.boot => BootstrapScreen(phase: bootstrapPhase),
+      ShellRoute.pair => PairScreen(
+        enableCamera: widget.enableCamera,
+        cameraPermissionService: cameraPermissionService,
+        pairing: pairing,
+        canResetScan: pausedQrRaw != null,
+        error: pairError,
+        onQr: handleQr,
+        onClearError: resetScanner,
+        onDemoConnect: widget.demoMode ? connectDemoDevice : null,
+      ),
+      ShellRoute.chat => ChatScreen(
+        session: session,
+        activeSessionId: activeSessionId,
+        running: running,
+        stopping: stopping,
+        runStartedAt: runStartedAt,
+        uploadingAttachments: uploadingAttachments,
+        connected: wsReady,
+        offline: remoteOffline,
+        reconnectSnapshot: reconnectSnapshot,
+        modelName: modelName,
+        selectedModel: selectedModel,
+        engine: activeSessionEngine,
+        selectedEffort: selectedEffort,
+        contextWindow: contextWindow,
+        remainingContext: remainingContext,
+        messages: messages,
+        transcriptJumpRequest: transcriptJumpRequest,
+        readingFontScaleListenable: widget.readingFontScaleListenable,
+        commands: commands,
+        permissionMode: running ? activePermissionMode : selectedPermissionMode,
+        allowBypassPermissions: allowBypassPermissions,
+        codexSandboxMode: running
+            ? activeCodexSandboxMode
+            : selectedCodexSandboxMode,
+        pendingPermissions: pendingPermissions,
+        respondingPermissionIds: respondingPermissionIds,
+        promptController: promptController,
+        pendingAttachments: pendingAttachments,
+        onFillPrompt: fillPrompt,
+        onReconnect: reconnectNow,
+        onOpenSettings: () => showSettingsSheet(
+          context,
+          session,
+          notificationsEnabled,
+          chatBackground,
+          modelName,
+          selectedModel,
+          widget.readingFontScaleListenable.value,
+          refreshConnection,
+          setNotificationsEnabled,
+          setModelPreference,
+          setChatBackground,
+          pickChatBackgroundImage,
+          widget.onReadingFontScaleChanged,
+          logoutPairedDevice,
+        ),
+        onOpenModelPicker: () => openModelPicker(context),
+        onEffortSelected: (effort) => unawaited(setEffortPreference(effort)),
+        onNewConversation: beginNewConversation,
+        onOpenSessions: openSessions,
+        onOpenWorkspace: openWorkspace,
+        onTranscriptJumpHandled: handleTranscriptJumpHandled,
+        onPermissionModeSelected: selectPermissionMode,
+        onCodexSandboxModeSelected: selectCodexSandboxMode,
+        onPermissionAllow: (request) => respondToPermission(request, 'allow'),
+        onPermissionDeny: (request) => respondToPermission(request, 'deny'),
+        onAddAttachment: chooseAttachments,
+        onRemoveAttachment: removePendingAttachment,
+        onSend: sendPrompt,
+        onStop: stopRun,
+      ),
+    };
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: route == ShellRoute.boot
+          ? const SystemUiOverlayStyle(
+              statusBarColor: Colors.transparent,
+              statusBarIconBrightness: Brightness.dark,
+              statusBarBrightness: Brightness.light,
+              systemNavigationBarColor: _BootstrapPalette.ground,
+              systemNavigationBarIconBrightness: Brightness.dark,
+              systemNavigationBarDividerColor: Colors.transparent,
+            )
+          : const SystemUiOverlayStyle(
+              statusBarColor: Colors.transparent,
+              statusBarIconBrightness: Brightness.dark,
+              statusBarBrightness: Brightness.light,
+              systemNavigationBarColor: AppColors.paper,
+              systemNavigationBarIconBrightness: Brightness.dark,
+              systemNavigationBarDividerColor: Colors.transparent,
             ),
-            onOpenModelPicker: () => openModelPicker(context),
-            onEffortSelected: (effort) =>
-                unawaited(setEffortPreference(effort)),
-            onNewConversation: beginNewConversation,
-            onOpenSessions: openSessions,
-            onOpenWorkspace: openWorkspace,
-            onTranscriptJumpHandled: handleTranscriptJumpHandled,
-            onPermissionModeSelected: selectPermissionMode,
-            onCodexSandboxModeSelected: selectCodexSandboxMode,
-            onPermissionAllow: (request) =>
-                respondToPermission(request, 'allow'),
-            onPermissionDeny: (request) => respondToPermission(request, 'deny'),
-            onAddAttachment: chooseAttachments,
-            onRemoveAttachment: removePendingAttachment,
-            onSend: sendPrompt,
-            onStop: stopRun,
-          ),
-        };
-        return AnnotatedRegion<SystemUiOverlayStyle>(
-          value: route == ShellRoute.boot
-              ? const SystemUiOverlayStyle(
-                  statusBarColor: Colors.transparent,
-                  statusBarIconBrightness: Brightness.dark,
-                  statusBarBrightness: Brightness.light,
-                  systemNavigationBarColor: _BootstrapPalette.ground,
-                  systemNavigationBarIconBrightness: Brightness.dark,
-                  systemNavigationBarDividerColor: Colors.transparent,
-                )
-              : const SystemUiOverlayStyle(
-                  statusBarColor: Colors.transparent,
-                  statusBarIconBrightness: Brightness.dark,
-                  statusBarBrightness: Brightness.light,
-                  systemNavigationBarColor: AppColors.paper,
-                  systemNavigationBarIconBrightness: Brightness.dark,
-                  systemNavigationBarDividerColor: Colors.transparent,
+      child: AppBackground(
+        chatBackground: route == ShellRoute.chat
+            ? chatBackground
+            : ChatBackgroundPreference.defaultValue,
+        child: AnimatedSwitcher(
+          key: const ValueKey('shell-route-switcher'),
+          duration: reduceMotion ? Duration.zero : AppMotion.standard,
+          reverseDuration: reduceMotion ? Duration.zero : AppMotion.fast,
+          switchInCurve: AppMotion.enter,
+          switchOutCurve: AppMotion.exit,
+          transitionBuilder: (child, animation) {
+            if (reduceMotion) return child;
+            final offset = Tween<Offset>(
+              begin: const Offset(0.035, 0),
+              end: Offset.zero,
+            ).animate(animation);
+            // Fade+slide over a boundary: shell rasters are cached and each
+            // transition frame only re-composites them.
+            return FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: offset,
+                child: SnapshotWhileAnimating(
+                  animation: animation,
+                  child: RepaintBoundary(child: child),
                 ),
-          child: AppBackground(
-            chatBackground: route == ShellRoute.chat
-                ? chatBackground
-                : ChatBackgroundPreference.defaultValue,
-            child: AnimatedSwitcher(
-              duration: reduceMotion ? Duration.zero : AppMotion.standard,
-              reverseDuration: reduceMotion ? Duration.zero : AppMotion.fast,
-              switchInCurve: AppMotion.enter,
-              switchOutCurve: AppMotion.exit,
-              transitionBuilder: (child, animation) {
-                if (reduceMotion) return child;
-                final offset = Tween<Offset>(
-                  begin: const Offset(0.035, 0),
-                  end: Offset.zero,
-                ).animate(animation);
-                return FadeTransition(
-                  opacity: animation,
-                  child: SlideTransition(position: offset, child: child),
-                );
-              },
-              child: KeyedSubtree(key: ValueKey(route), child: screen),
-            ),
-          ),
-        );
-      },
+              ),
+            );
+          },
+          child: KeyedSubtree(key: ValueKey(route), child: screen),
+        ),
+      ),
     );
   }
 }
@@ -2999,7 +3055,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                               Icon(
                                 LucideIcons.smartphone,
                                 size: 18,
-                                color: AppColors.terracottaDeep,
+                                color: AppColors.accentStrong,
                               ),
                               SizedBox(width: 7),
                               Text(
@@ -3046,7 +3102,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                       child: const Icon(
                         LucideIcons.monitor,
                         size: 26,
-                        color: AppColors.terracottaDeep,
+                        color: AppColors.accentStrong,
                       ),
                     ),
                   ],
@@ -3102,7 +3158,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                             child: const Icon(
                               LucideIcons.scanLine,
                               size: 20,
-                              color: AppColors.terracottaDeep,
+                              color: AppColors.accentStrong,
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -3176,7 +3232,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                           borderRadius: BorderRadius.circular(AppRadii.pill),
                           child: const LinearProgressIndicator(
                             minHeight: 2,
-                            color: AppColors.terracotta,
+                            color: AppColors.accent,
                             backgroundColor: AppColors.line,
                           ),
                         ),
@@ -3186,6 +3242,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                         SizedBox(
                           width: double.infinity,
                           child: SignalPressEffect(
+                            scaleOnPress: false,
                             child: FilledButton.icon(
                               onPressed: widget.onDemoConnect,
                               icon: const Icon(LucideIcons.link),
@@ -3207,7 +3264,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                             Icon(
                               LucideIcons.scan,
                               size: 18,
-                              color: AppColors.inactive,
+                              color: AppColors.muted,
                             ),
                             SizedBox(width: 8),
                             Expanded(
@@ -3278,7 +3335,7 @@ class CameraPermissionPlaceholder extends StatelessWidget {
               Icon(
                 LucideIcons.camera,
                 size: compact ? 26 : 34,
-                color: AppColors.terracottaDeep,
+                color: AppColors.accentStrong,
               ),
               SizedBox(height: compact ? 6 : 10),
               Text(
@@ -3341,7 +3398,7 @@ class ScanPlaceholder extends StatelessWidget {
           child: Icon(
             LucideIcons.qrCode,
             size: compact ? 28 : 42,
-            color: AppColors.terracottaDeep,
+            color: AppColors.accentStrong,
           ),
         ),
         SizedBox(height: compact ? 6 : 14),
@@ -3367,6 +3424,7 @@ Future<bool?> showPairReviewSheet(
 ) {
   return showModalBottomSheet<bool>(
     context: context,
+    sheetAnimationStyle: appOverlayAnimationStyle(context),
     backgroundColor: Colors.transparent,
     builder: (context) => PairReviewSheet(payload: payload),
   );
@@ -3383,7 +3441,7 @@ class PairReviewSheet extends StatelessWidget {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-        child: WarmSheetSurface(
+        child: AppSheetSurface(
           padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -3402,7 +3460,7 @@ class PairReviewSheet extends StatelessWidget {
                     child: const Icon(
                       LucideIcons.monitor,
                       size: 20,
-                      color: AppColors.terracottaDeep,
+                      color: AppColors.accentStrong,
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -3446,10 +3504,17 @@ class PairReviewSheet extends StatelessWidget {
                 width: double.infinity,
                 child: SignalPressEffect(
                   enabled: !expired,
+                  scaleOnPress: false,
                   child: FilledButton(
                     onPressed: expired
                         ? null
-                        : () => Navigator.pop(context, true),
+                        : () {
+                            // The scan's emotional peak needs a physical
+                            // confirmation; the sheet's exit animation is
+                            // too quiet to carry it alone.
+                            HapticFeedback.mediumImpact();
+                            Navigator.pop(context, true);
+                          },
                     style: FilledButton.styleFrom(
                       backgroundColor: AppColors.cta,
                       foregroundColor: AppColors.onCta,
@@ -3493,7 +3558,7 @@ enum ConsolePhase {
   offline,
 }
 
-enum ConsoleTone { neutral, active, danger }
+enum ConsoleTone { neutral, active, warning, danger }
 
 @immutable
 class ConsolePresentation {
@@ -3559,11 +3624,11 @@ class ConsolePresentation {
   ConsoleTone get tone => switch (phase) {
     ConsolePhase.running ||
     ConsolePhase.awaitingPermission ||
-    ConsolePhase.stopping ||
     ConsolePhase.uploading => ConsoleTone.active,
-    ConsolePhase.stopTimedOut ||
-    ConsolePhase.failed ||
-    ConsolePhase.offline => ConsoleTone.danger,
+    // Unconfirmed stop and a host that is gone but retrying are "degraded
+    // but alive": amber, not red — red is reserved for finished failures.
+    ConsolePhase.stopping || ConsolePhase.stopTimedOut => ConsoleTone.warning,
+    ConsolePhase.failed || ConsolePhase.offline => ConsoleTone.danger,
     _ => ConsoleTone.neutral,
   };
 
@@ -3598,64 +3663,72 @@ class ConsolePresentation {
   };
 }
 
-int currentTurnEvidenceStart(List<TranscriptMessage> messages) {
-  return messages.lastIndexWhere(
-        (message) => message.role == MessageRole.user,
-      ) +
-      1;
-}
+({
+  bool stopTimedOut,
+  bool stopped,
+  bool failed,
+  String? failureDetail,
+  String? previousPrompt,
+})
+_currentTurnEvidence(List<TranscriptMessage> messages) {
+  var stopTimedOut = false;
+  var stopped = false;
+  var failed = false;
+  var foundFailureDetail = false;
+  String? failureDetail;
+  String? previousPrompt;
+  var inCurrentTurn = true;
 
-bool hasStopTimeoutEvidence(List<TranscriptMessage> messages) {
-  return messages
-      .skip(currentTurnEvidenceStart(messages))
-      .any(
-        (message) =>
-            message.role == MessageRole.system &&
-            message.text == '停止请求未确认，任务仍在运行',
-      );
-}
-
-bool hasConfirmedStopEvidence(List<TranscriptMessage> messages) {
-  return messages
-      .skip(currentTurnEvidenceStart(messages))
-      .any(
-        (message) =>
-            message.activityState == ActivityState.stopped ||
-            (message.role == MessageRole.system && message.text == '已停止'),
-      );
-}
-
-bool hasCurrentFailureEvidence(List<TranscriptMessage> messages) {
-  return messages
-      .skip(currentTurnEvidenceStart(messages))
-      .any(
-        (message) =>
-            message.activityState == ActivityState.error ||
-            (message.role == MessageRole.system &&
-                message.text.startsWith('错误：')),
-      );
-}
-
-String? currentFailureDetail(List<TranscriptMessage> messages) {
   for (final message in messages.reversed) {
-    if (message.role == MessageRole.user) break;
-    if (message.role != MessageRole.system || !message.text.startsWith('错误：')) {
+    if (message.role == MessageRole.user) {
+      inCurrentTurn = false;
+      if (previousPrompt == null && message.text.trim().isNotEmpty) {
+        previousPrompt = message.text;
+        break;
+      }
       continue;
     }
-    final detail = message.text.substring('错误：'.length).trim();
-    return detail.isEmpty ? null : detail;
+    if (!inCurrentTurn) continue;
+
+    if (message.role == MessageRole.system) {
+      stopTimedOut |= message.text == '停止请求未确认，任务仍在运行';
+      stopped |= message.text == '已停止';
+      if (message.text.startsWith('错误：')) {
+        failed = true;
+        if (!foundFailureDetail) {
+          foundFailureDetail = true;
+          final detail = message.text.substring('错误：'.length).trim();
+          failureDetail = detail.isEmpty ? null : detail;
+        }
+      }
+    }
+    stopped |= message.activityState == ActivityState.stopped;
+    failed |= message.activityState == ActivityState.error;
   }
-  return null;
+
+  return (
+    stopTimedOut: stopTimedOut,
+    stopped: stopped,
+    failed: failed,
+    failureDetail: failureDetail,
+    previousPrompt: previousPrompt,
+  );
 }
 
-String? lastUserPromptText(List<TranscriptMessage> messages) {
-  for (final message in messages.reversed) {
-    if (message.role == MessageRole.user && message.text.trim().isNotEmpty) {
-      return message.text;
-    }
-  }
-  return null;
-}
+bool hasStopTimeoutEvidence(List<TranscriptMessage> messages) =>
+    _currentTurnEvidence(messages).stopTimedOut;
+
+bool hasConfirmedStopEvidence(List<TranscriptMessage> messages) =>
+    _currentTurnEvidence(messages).stopped;
+
+bool hasCurrentFailureEvidence(List<TranscriptMessage> messages) =>
+    _currentTurnEvidence(messages).failed;
+
+String? currentFailureDetail(List<TranscriptMessage> messages) =>
+    _currentTurnEvidence(messages).failureDetail;
+
+String? lastUserPromptText(List<TranscriptMessage> messages) =>
+    _currentTurnEvidence(messages).previousPrompt;
 
 String? safeConnectionError(Object? error) {
   if (error == null) return null;
@@ -3719,6 +3792,7 @@ class ChatScreen extends StatelessWidget {
     required this.remainingContext,
     required this.messages,
     this.transcriptJumpRequest,
+    this.readingFontScaleListenable,
     required this.commands,
     required this.permissionMode,
     required this.allowBypassPermissions,
@@ -3762,6 +3836,10 @@ class ChatScreen extends StatelessWidget {
   final int? contextWindow;
   final int? remainingContext;
   final List<TranscriptMessage> messages;
+  final ValueListenable<double>? readingFontScaleListenable;
+
+  // ponytail: static fallback so tests without a listening shell skip wiring
+  static final ValueNotifier<double> _unityReadingScale = ValueNotifier(1.0);
   final TranscriptJumpRequest? transcriptJumpRequest;
   final List<String> commands;
   final PermissionMode permissionMode;
@@ -3791,6 +3869,7 @@ class ChatScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final evidence = _currentTurnEvidence(messages);
     final presentation = ConsolePresentation.resolve(
       connected: connected,
       offline: offline,
@@ -3798,15 +3877,16 @@ class ChatScreen extends StatelessWidget {
       stopping: stopping,
       uploading: uploadingAttachments,
       awaitingPermission: pendingPermissions.isNotEmpty,
-      stopTimedOut: hasStopTimeoutEvidence(messages),
-      stopped: hasConfirmedStopEvidence(messages),
-      failed: hasCurrentFailureEvidence(messages),
+      stopTimedOut: evidence.stopTimedOut,
+      stopped: evidence.stopped,
+      failed: evidence.failed,
     );
-    final previousPrompt = lastUserPromptText(messages);
+    final previousPrompt = evidence.previousPrompt;
     final canRestorePreviousPrompt =
         presentation.phase == ConsolePhase.failed &&
         previousPrompt != null &&
         promptController.text.trim().isEmpty;
+    final media = MediaQuery.of(context);
     final header = RepaintBoundary(
       child: ConnectionHeader(
         session: session,
@@ -3870,13 +3950,11 @@ class ChatScreen extends StatelessWidget {
                 hostLabel: session?.deviceName,
               ),
             ],
-            if (!keyboardVisible &&
-                RecoveryStatePanel.shouldShow(presentation)) ...[
-              const SizedBox(height: 8),
+            if (!keyboardVisible)
               RecoveryStatePanel(
                 presentation: presentation,
                 hostLabel: session?.deviceName,
-                failureDetail: currentFailureDetail(messages),
+                failureDetail: evidence.failureDetail,
                 reconnectSnapshot: reconnectSnapshot,
                 hasTranscript: messages.isNotEmpty,
                 hasDraft:
@@ -3889,56 +3967,69 @@ class ChatScreen extends StatelessWidget {
                     ? () => onFillPrompt(previousPrompt)
                     : null,
               ),
-            ],
             const SizedBox(height: 12),
             Expanded(
-              child: Stack(
-                // Let transcript paint under the floating composer.
-                clipBehavior: Clip.none,
-                children: [
-                  Positioned.fill(child: transcript),
-                  if (showComposer)
-                    Align(
-                      alignment: Alignment.bottomCenter,
-                      child: Padding(
-                        padding: EdgeInsets.only(bottom: composerBottomGap),
-                        child: RepaintBoundary(
-                          child: PromptBar(
-                            controller: promptController,
-                            attachments: pendingAttachments,
-                            commands: commands,
-                            running: running,
-                            stopping: stopping,
-                            uploading: uploadingAttachments,
-                            connected: connected,
-                            offline: offline,
-                            permissionMode: permissionMode,
-                            allowBypassPermissions: allowBypassPermissions,
-                            modelName: modelName,
-                            contextWindow: contextWindow,
-                            remainingContext: remainingContext,
-                            engine: engine,
-                            selectedModel: selectedModel,
-                            selectedEffort: selectedEffort,
-                            codexSandboxMode: codexSandboxMode,
-                            presentation: presentation,
-                            onPermissionModeSelected: onPermissionModeSelected,
-                            onCodexSandboxModeSelected:
-                                onCodexSandboxModeSelected,
-                            onCommandSelected: (command) =>
-                                onFillPrompt('/$command '),
-                            onAddAttachment: onAddAttachment,
-                            onRemoveAttachment: onRemoveAttachment,
-                            onModelPressed: onOpenModelPicker,
-                            onEffortSelected: onEffortSelected,
-                            onReconnect: onReconnect,
-                            onSend: onSend,
-                            onStop: onStop,
+              child: ValueListenableBuilder<double>(
+                valueListenable:
+                    readingFontScaleListenable ?? _unityReadingScale,
+                builder: (context, scale, child) => MediaQuery(
+                  data: media.copyWith(
+                    textScaler: multiplyReadingTextScaler(
+                      media.textScaler,
+                      scale,
+                    ),
+                  ),
+                  child: child!,
+                ),
+                child: Stack(
+                  // Let transcript paint under the floating composer.
+                  clipBehavior: Clip.none,
+                  children: [
+                    Positioned.fill(child: transcript),
+                    if (showComposer)
+                      Align(
+                        alignment: Alignment.bottomCenter,
+                        child: Padding(
+                          padding: EdgeInsets.only(bottom: composerBottomGap),
+                          child: RepaintBoundary(
+                            child: PromptBar(
+                              controller: promptController,
+                              attachments: pendingAttachments,
+                              commands: commands,
+                              running: running,
+                              stopping: stopping,
+                              uploading: uploadingAttachments,
+                              connected: connected,
+                              offline: offline,
+                              permissionMode: permissionMode,
+                              allowBypassPermissions: allowBypassPermissions,
+                              modelName: modelName,
+                              contextWindow: contextWindow,
+                              remainingContext: remainingContext,
+                              engine: engine,
+                              selectedModel: selectedModel,
+                              selectedEffort: selectedEffort,
+                              codexSandboxMode: codexSandboxMode,
+                              presentation: presentation,
+                              onPermissionModeSelected:
+                                  onPermissionModeSelected,
+                              onCodexSandboxModeSelected:
+                                  onCodexSandboxModeSelected,
+                              onCommandSelected: (command) =>
+                                  onFillPrompt('/$command '),
+                              onAddAttachment: onAddAttachment,
+                              onRemoveAttachment: onRemoveAttachment,
+                              onModelPressed: onOpenModelPicker,
+                              onEffortSelected: onEffortSelected,
+                              onReconnect: onReconnect,
+                              onSend: onSend,
+                              onStop: onStop,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
             ),
           ],
@@ -4000,12 +4091,17 @@ class ConnectionHeader extends StatelessWidget {
       height: AppSizes.sessionHeader,
       child: Row(
         children: [
-          DecoratedBox(
-            key: const ValueKey('session-menu-surface'),
-            decoration: BoxDecoration(
-              color: AppColors.surfaceElevated,
-              shape: BoxShape.circle,
-              border: Border.all(color: AppColors.line),
+          SignalPressEffect(
+            builder: (context, pressed, child) => SignalAnimatedSurface(
+              key: const ValueKey('session-menu-surface'),
+              duration: appPressAnimationDuration(context, pressed),
+              blurSigma: 8,
+              decoration: AppLiquidGlass.thin(
+                shape: BoxShape.circle,
+                pressed: pressed,
+                backdrop: true,
+              ),
+              child: child,
             ),
             child: _HeaderIconButton(
               tooltip: '项目与会话',
@@ -4014,12 +4110,17 @@ class ConnectionHeader extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          DecoratedBox(
-            key: const ValueKey('session-actions-surface'),
-            decoration: BoxDecoration(
-              color: AppColors.surfaceElevated,
-              borderRadius: BorderRadius.circular(AppRadii.pill),
-              border: Border.all(color: AppColors.line),
+          SignalPressEffect(
+            builder: (context, pressed, child) => SignalAnimatedSurface(
+              key: const ValueKey('session-actions-surface'),
+              duration: appPressAnimationDuration(context, pressed),
+              blurSigma: 8,
+              decoration: AppLiquidGlass.thin(
+                borderRadius: BorderRadius.circular(AppRadii.pill),
+                pressed: pressed,
+                backdrop: true,
+              ),
+              child: child,
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -4065,7 +4166,8 @@ class ConsoleStatusStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final toneColor = switch (presentation.tone) {
-      ConsoleTone.active => AppColors.terracottaDeep,
+      ConsoleTone.active => AppColors.accentStrong,
+      ConsoleTone.warning => AppColors.warning,
       ConsoleTone.danger => AppColors.danger,
       ConsoleTone.neutral => AppColors.muted,
     };
@@ -4141,7 +4243,7 @@ class ConsoleStatusStrip extends StatelessWidget {
   }
 }
 
-class RecoveryStatePanel extends StatelessWidget {
+class RecoveryStatePanel extends StatefulWidget {
   const RecoveryStatePanel({
     super.key,
     required this.presentation,
@@ -4180,23 +4282,117 @@ class RecoveryStatePanel extends StatelessWidget {
   }
 
   @override
+  State<RecoveryStatePanel> createState() => _RecoveryStatePanelState();
+}
+
+class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
+  Timer? completionTimer;
+  Timer? reconnectCountdownTimer;
+  DateTime? reconnectCountdownTarget;
+  int? reconnectSecondsRemaining;
+  bool showCompletion = false;
+
+  @override
+  void initState() {
+    super.initState();
+    syncReconnectCountdown();
+  }
+
+  @override
+  void didUpdateWidget(covariant RecoveryStatePanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final completed =
+        widget.presentation.phase == ConsolePhase.connected &&
+        switch (oldWidget.presentation.phase) {
+          ConsolePhase.running ||
+          ConsolePhase.awaitingPermission ||
+          ConsolePhase.stopping ||
+          ConsolePhase.stopTimedOut => true,
+          _ => false,
+        };
+    if (completed) {
+      showCompletion = true;
+      // The turn's end moment: the thinking bloom vanishes and text starts
+      // streaming, which reads as "still going". A light tick marks the
+      // finish for a user who is looking away from the screen.
+      HapticFeedback.lightImpact();
+      completionTimer?.cancel();
+      completionTimer = Timer(AppMotion.signal, () {
+        if (!mounted) return;
+        setState(() => showCompletion = false);
+      });
+    } else if (widget.presentation.phase != ConsolePhase.connected &&
+        showCompletion) {
+      completionTimer?.cancel();
+      showCompletion = false;
+    }
+    syncReconnectCountdown();
+  }
+
+  @override
+  void dispose() {
+    completionTimer?.cancel();
+    reconnectCountdownTimer?.cancel();
+    super.dispose();
+  }
+
+  void syncReconnectCountdown() {
+    final snapshot = widget.reconnectSnapshot;
+    final target = snapshot.phase == RemoteConnectionPhase.retrying
+        ? snapshot.nextRetryAt
+        : null;
+    if (target == reconnectCountdownTarget) return;
+    reconnectCountdownTimer?.cancel();
+    reconnectCountdownTimer = null;
+    reconnectCountdownTarget = target;
+    if (target == null) {
+      reconnectSecondsRemaining = null;
+      return;
+    }
+    final remaining = target.difference(DateTime.now()).inMilliseconds;
+    reconnectSecondsRemaining = max(0, (remaining / 1000).ceil());
+    if (reconnectSecondsRemaining == 0) return;
+    reconnectCountdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      final current = reconnectSecondsRemaining ?? 0;
+      if (!mounted || current <= 0) {
+        reconnectCountdownTimer?.cancel();
+        reconnectCountdownTimer = null;
+        return;
+      }
+      setState(() => reconnectSecondsRemaining = current - 1);
+      if (current == 1) {
+        reconnectCountdownTimer?.cancel();
+        reconnectCountdownTimer = null;
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final host = hostLabel?.trim();
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final host = widget.hostLabel?.trim();
     final hostName = host == null || host.isEmpty ? '电脑端' : host;
-    final reconnectAttempt = reconnectSnapshot.attempt;
+    final reconnectAttempt = widget.reconnectSnapshot.attempt;
     final reconnecting =
-        reconnectSnapshot.phase == RemoteConnectionPhase.retrying ||
-        (reconnectSnapshot.phase == RemoteConnectionPhase.connecting &&
+        widget.reconnectSnapshot.phase == RemoteConnectionPhase.retrying ||
+        (widget.reconnectSnapshot.phase == RemoteConnectionPhase.connecting &&
             reconnectAttempt > 0);
-    final connectionError = safeConnectionError(reconnectSnapshot.lastError);
-    final preservation = preservedConnectionEvidence(
-      hasTranscript: hasTranscript,
-      hasDraft: hasDraft,
+    final connectionError = safeConnectionError(
+      widget.reconnectSnapshot.lastError,
     );
-    final reconnectDetail = switch (reconnectSnapshot.phase) {
+    final preservation = preservedConnectionEvidence(
+      hasTranscript: widget.hasTranscript,
+      hasDraft: widget.hasDraft,
+    );
+    final reconnectTiming = switch (reconnectSecondsRemaining) {
+      null => reconnectTimingLabel(widget.reconnectSnapshot.nextRetryAt),
+      0 => '即将再次尝试',
+      final seconds => '约 $seconds 秒后再次尝试',
+    };
+    final reconnectDetail = switch (widget.reconnectSnapshot.phase) {
       RemoteConnectionPhase.retrying =>
         '自动重连第 $reconnectAttempt 次，'
-            '${reconnectTimingLabel(reconnectSnapshot.nextRetryAt)}。',
+            '$reconnectTiming。',
       RemoteConnectionPhase.connecting when reconnectAttempt > 0 =>
         '自动重连第 $reconnectAttempt 次正在进行，等待 $hostName 响应。',
       _ => '暂时无法连接 $hostName。恢复后会继续同步电脑端状态。',
@@ -4204,179 +4400,243 @@ class RecoveryStatePanel extends StatelessWidget {
     final reconnectDetailWithError = connectionError == null
         ? reconnectDetail
         : '$reconnectDetail\n最近状态：$connectionError';
-    final content = switch (presentation.phase) {
-      ConsolePhase.connecting => _RecoveryPanelContent(
-        title: '正在连接电脑端',
-        detail: '正在获取最新会话状态，无需重复操作。',
-        evidence: preservation,
-        icon: LucideIcons.monitor,
-        loading: true,
-      ),
-      ConsolePhase.offline => _RecoveryPanelContent(
-        title: reconnectAttempt >= 6
-            ? '连接仍未恢复'
-            : reconnecting
-            ? '正在自动重连'
-            : '连接已断开',
-        detail: reconnectDetailWithError,
-        evidence: reconnectAttempt >= 6
-            ? '$preservation；请检查电脑端服务和网络'
-            : preservation,
-        icon: LucideIcons.unlink,
-        actionLabel: '立即重连',
-        actionIcon: LucideIcons.refreshCw,
-        action: onReconnect,
-      ),
-      ConsolePhase.stopping => const _RecoveryPanelContent(
-        title: '停止请求已发送',
-        detail: '正在等待电脑端确认，请不要重复点击。',
-        evidence: '确认前任务仍按运行中处理',
-        icon: LucideIcons.square,
-      ),
-      ConsolePhase.stopTimedOut => _RecoveryPanelContent(
-        title: '停止尚未确认',
-        detail: '电脑端没有在预期时间内返回确认，任务可能仍在运行。',
-        evidence: '对话记录和工作区状态已保留',
-        icon: LucideIcons.square,
-        actionLabel: '再次停止',
-        actionIcon: LucideIcons.square,
-        action: onStop,
-        danger: true,
-      ),
-      ConsolePhase.stopped => _RecoveryPanelContent(
-        title: '任务已停止',
-        detail: '电脑端已确认停止。你可以检查变更，或继续给 Claude 新指令。',
-        evidence: '对话记录和工作区状态已保留',
-        icon: LucideIcons.circlePause,
-        actionLabel: '查看工作区',
-        actionIcon: LucideIcons.folderOpen,
-        action: onOpenWorkspace,
-      ),
-      ConsolePhase.failed => _RecoveryPanelContent(
-        title: '任务执行失败',
-        detail: failureDetail?.trim().isNotEmpty == true
-            ? failureDetail!.trim()
-            : 'Claude Code 没有完成这次任务。请检查错误后重试。',
-        evidence: '对话记录和工作区变更仍保留',
-        icon: LucideIcons.circleAlert,
-        actionLabel: onEditPreviousPrompt == null ? null : '重新编辑上条指令',
-        actionIcon: onEditPreviousPrompt == null ? null : LucideIcons.pencil,
-        action: onEditPreviousPrompt,
-      ),
-      _ => null,
-    };
-    if (content == null) return const SizedBox.shrink();
-
-    final toneColor = switch (presentation.tone) {
-      ConsoleTone.active => AppColors.terracottaDeep,
-      ConsoleTone.danger => AppColors.danger,
-      ConsoleTone.neutral => AppColors.muted,
-    };
-    return Semantics(
-      liveRegion: true,
-      container: true,
-      label:
-          '${content.title}，${content.detail}，${content.evidence}'
-          '${content.actionLabel == null ? '' : '，${content.actionLabel}'}',
-      child: Material(
-        key: ValueKey('recovery-state-${presentation.phase.name}'),
-        color: AppColors.surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(AppRadii.surface),
-          side: const BorderSide(color: AppColors.line),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.md),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    width: AppSizes.iconControl,
-                    height: AppSizes.iconControl,
-                    decoration: BoxDecoration(
-                      color: AppColors.control,
-                      borderRadius: BorderRadius.circular(AppRadii.control),
-                    ),
-                    alignment: Alignment.center,
-                    child: content.loading
-                        ? SizedBox.square(
-                            dimension: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: toneColor,
+    final content = showCompletion
+        ? const _RecoveryPanelContent(
+            title: '任务已完成',
+            detail: '电脑端已确认完成，可以查看结果或继续输入。',
+            evidence: '最新输出已保留在对话中',
+            icon: LucideIcons.circleCheck,
+          )
+        : switch (widget.presentation.phase) {
+            ConsolePhase.connecting => _RecoveryPanelContent(
+              title: '正在连接电脑端',
+              detail: '正在获取最新会话状态，无需重复操作。',
+              evidence: preservation,
+              icon: LucideIcons.monitor,
+              loading: true,
+            ),
+            ConsolePhase.offline => _RecoveryPanelContent(
+              title: reconnectAttempt >= 6
+                  ? '连接仍未恢复'
+                  : reconnecting
+                  ? '正在自动重连'
+                  : '连接已断开',
+              detail: reconnectDetailWithError,
+              evidence: reconnectAttempt >= 6
+                  ? '$preservation；请检查电脑端服务和网络'
+                  : preservation,
+              icon: LucideIcons.unlink,
+              actionLabel: '立即重连',
+              actionIcon: LucideIcons.refreshCw,
+              action: widget.onReconnect,
+            ),
+            ConsolePhase.stopping => const _RecoveryPanelContent(
+              title: '停止请求已发送',
+              detail: '正在等待电脑端确认，请不要重复点击。',
+              evidence: '确认前任务仍按运行中处理',
+              icon: LucideIcons.square,
+            ),
+            ConsolePhase.stopTimedOut => _RecoveryPanelContent(
+              title: '停止尚未确认',
+              detail: '电脑端没有在预期时间内返回确认，任务可能仍在运行。',
+              evidence: '对话记录和工作区状态已保留',
+              icon: LucideIcons.square,
+              actionLabel: '再次停止',
+              actionIcon: LucideIcons.square,
+              action: widget.onStop,
+              danger: true,
+            ),
+            ConsolePhase.stopped => _RecoveryPanelContent(
+              title: '任务已停止',
+              detail: '电脑端已确认停止。你可以检查变更，或继续给 Claude 新指令。',
+              evidence: '对话记录和工作区状态已保留',
+              icon: LucideIcons.circlePause,
+              actionLabel: '查看工作区',
+              actionIcon: LucideIcons.folderOpen,
+              action: widget.onOpenWorkspace,
+            ),
+            ConsolePhase.failed => _RecoveryPanelContent(
+              title: '任务执行失败',
+              detail: widget.failureDetail?.trim().isNotEmpty == true
+                  ? widget.failureDetail!.trim()
+                  : 'Claude Code 没有完成这次任务。请检查错误后重试。',
+              evidence: '对话记录和工作区变更仍保留',
+              icon: LucideIcons.circleAlert,
+              actionLabel: widget.onEditPreviousPrompt == null
+                  ? null
+                  : '重新编辑上条指令',
+              actionIcon: widget.onEditPreviousPrompt == null
+                  ? null
+                  : LucideIcons.pencil,
+              action: widget.onEditPreviousPrompt,
+            ),
+            _ => null,
+          };
+    final toneColor = showCompletion
+        ? AppColors.accentStrong
+        : widget.presentation.phase == ConsolePhase.offline && reconnecting
+        ? AppColors.warning
+        : switch (widget.presentation.tone) {
+            ConsoleTone.active => AppColors.accentStrong,
+            ConsoleTone.warning => AppColors.warning,
+            ConsoleTone.danger => AppColors.danger,
+            ConsoleTone.neutral => AppColors.muted,
+          };
+    final semanticsDetail =
+        widget.presentation.phase == ConsolePhase.offline && reconnecting
+        ? '正在自动重连 $hostName。'
+        : content?.detail;
+    final phaseKey = showCompletion
+        ? 'completed'
+        : widget.presentation.phase.name;
+    final transitionKey = widget.presentation.phase == ConsolePhase.offline
+        ? '$phaseKey-${widget.reconnectSnapshot.phase.name}'
+        : phaseKey;
+    final duration = reduceMotion ? Duration.zero : AppMotion.standard;
+    return AnimatedSize(
+      duration: duration,
+      curve: AppMotion.enter,
+      alignment: Alignment.topCenter,
+      child: content != null
+          ? Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Semantics(
+                liveRegion: true,
+                container: true,
+                label:
+                    '${content.title}，$semanticsDetail，${content.evidence}'
+                    '${content.actionLabel == null ? '' : '，${content.actionLabel}'}',
+                child: Material(
+                  key: const ValueKey('recovery-state-panel'),
+                  color: AppColors.surface,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppRadii.surface),
+                    side: const BorderSide(color: AppColors.line),
+                  ),
+                  clipBehavior: Clip.antiAlias,
+                  child: AnimatedSwitcher(
+                    duration: reduceMotion ? Duration.zero : AppMotion.fast,
+                    reverseDuration: reduceMotion
+                        ? Duration.zero
+                        : AppMotion.fast,
+                    switchInCurve: AppMotion.enter,
+                    switchOutCurve: AppMotion.exit,
+                    child: KeyedSubtree(
+                      key: ValueKey('recovery-content-$transitionKey'),
+                      child: Padding(
+                        key: ValueKey('recovery-state-$phaseKey'),
+                        padding: const EdgeInsets.all(AppSpacing.md),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  width: AppSizes.iconControl,
+                                  height: AppSizes.iconControl,
+                                  decoration: BoxDecoration(
+                                    color: AppColors.control,
+                                    borderRadius: BorderRadius.circular(
+                                      AppRadii.control,
+                                    ),
+                                  ),
+                                  alignment: Alignment.center,
+                                  child: content.loading
+                                      ? reduceMotion
+                                            ? Icon(
+                                                LucideIcons.loader,
+                                                size: 20,
+                                                color: toneColor,
+                                              )
+                                            : SizedBox.square(
+                                                dimension: 18,
+                                                child:
+                                                    CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                      color: toneColor,
+                                                    ),
+                                              )
+                                      : Icon(
+                                          content.icon,
+                                          size: 20,
+                                          color: toneColor,
+                                        ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        content.title,
+                                        style: const TextStyle(
+                                          fontSize: 16,
+                                          height: 1.3,
+                                          fontWeight: FontWeight.w700,
+                                          letterSpacing: -0.2,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        content.detail,
+                                        maxLines: 3,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          color: AppColors.muted,
+                                          fontSize: 13,
+                                          height: 1.45,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
                             ),
-                          )
-                        : Icon(content.icon, size: 20, color: toneColor),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          content.title,
-                          style: const TextStyle(
-                            fontSize: 16,
-                            height: 1.3,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: -0.2,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          content.detail,
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: AppColors.muted,
-                            fontSize: 13,
-                            height: 1.45,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Text(
-                content.evidence,
-                style: const TextStyle(
-                  color: AppColors.muted,
-                  fontSize: 12,
-                  height: 1.4,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              if (content.action != null && content.actionLabel != null) ...[
-                const SizedBox(height: 12),
-                SizedBox(
-                  height: AppSizes.touchTarget,
-                  child: SignalPressEffect(
-                    child: FilledButton.icon(
-                      onPressed: content.action,
-                      style: FilledButton.styleFrom(
-                        backgroundColor: content.danger
-                            ? AppColors.danger
-                            : AppColors.cta,
-                        foregroundColor: AppColors.onCta,
-                        minimumSize: const Size.fromHeight(
-                          AppSizes.touchTarget,
+                            const SizedBox(height: 10),
+                            Text(
+                              content.evidence,
+                              style: const TextStyle(
+                                color: AppColors.muted,
+                                fontSize: 12,
+                                height: 1.4,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            if (content.action != null &&
+                                content.actionLabel != null) ...[
+                              const SizedBox(height: 12),
+                              SizedBox(
+                                height: AppSizes.touchTarget,
+                                child: SignalPressEffect(
+                                  scaleOnPress: false,
+                                  child: FilledButton.icon(
+                                    onPressed: content.action,
+                                    style: FilledButton.styleFrom(
+                                      backgroundColor: content.danger
+                                          ? AppColors.danger
+                                          : AppColors.cta,
+                                      foregroundColor: AppColors.onCta,
+                                      minimumSize: const Size.fromHeight(
+                                        AppSizes.touchTarget,
+                                      ),
+                                    ),
+                                    icon: Icon(content.actionIcon, size: 18),
+                                    label: Text(content.actionLabel!),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
                         ),
                       ),
-                      icon: Icon(content.actionIcon, size: 18),
-                      label: Text(content.actionLabel!),
                     ),
                   ),
                 ),
-              ],
-            ],
-          ),
-        ),
-      ),
+              ),
+            )
+          : const SizedBox.shrink(),
     );
   }
 }
@@ -4613,116 +4873,102 @@ Future<void> showSettingsSheet(
   Future<ChatBackgroundPreference?> Function(double) onPickChatBackgroundImage,
   Future<void> Function(double scale, {bool persist}) onReadingFontScaleChanged,
   VoidCallback onLogout,
-) {
-  return showModalBottomSheet<void>(
+) async {
+  FocusManager.instance.primaryFocus?.unfocus();
+  await showModalBottomSheet<void>(
     context: context,
+    sheetAnimationStyle: appOverlayAnimationStyle(context),
     backgroundColor: Colors.transparent,
-    barrierColor: _SettingsPalette.barrier,
+    barrierColor: Colors.transparent,
     isScrollControlled: true,
+    requestFocus: false,
     showDragHandle: false,
-    builder: (context) => SettingsSheet(
-      session: session,
-      notificationsEnabled: notificationsEnabled,
-      chatBackground: chatBackground,
-      currentModel: currentModel,
-      selectedModel: selectedModel,
-      readingFontScale: readingFontScale,
-      onReconnect: onReconnect,
-      onNotificationsChanged: onNotificationsChanged,
-      onModelChanged: onModelChanged,
-      onChatBackgroundChanged: onChatBackgroundChanged,
-      onPickChatBackgroundImage: onPickChatBackgroundImage,
-      onReadingFontScaleChanged: onReadingFontScaleChanged,
-      onLogout: onLogout,
+    builder: (context) => appModalSheetScaffold(
+      SettingsSheet(
+        session: session,
+        notificationsEnabled: notificationsEnabled,
+        chatBackground: chatBackground,
+        currentModel: currentModel,
+        selectedModel: selectedModel,
+        readingFontScale: readingFontScale,
+        onReconnect: onReconnect,
+        onNotificationsChanged: onNotificationsChanged,
+        onModelChanged: onModelChanged,
+        onChatBackgroundChanged: onChatBackgroundChanged,
+        onPickChatBackgroundImage: onPickChatBackgroundImage,
+        onReadingFontScaleChanged: onReadingFontScaleChanged,
+        onLogout: onLogout,
+      ),
+      barrierColor: _SettingsPalette.barrier,
     ),
   );
+  FocusManager.instance.primaryFocus?.unfocus();
 }
 
 Future<SessionEngine?> showSessionEnginePicker(
   BuildContext context, {
   SessionEngine selected = SessionEngine.claude,
-}) {
-  return showModalBottomSheet<SessionEngine>(
+}) async {
+  FocusManager.instance.primaryFocus?.unfocus();
+  final engine = await showModalBottomSheet<SessionEngine>(
     context: context,
+    sheetAnimationStyle: appOverlayAnimationStyle(context),
+    requestFocus: false,
+    backgroundColor: Colors.transparent,
+    barrierColor: Colors.transparent,
+    isScrollControlled: true,
     showDragHandle: true,
-    builder: (sheetContext) => SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              '选择会话引擎',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              '每个会话独立保存引擎，创建后可在会话面板中切换。',
-              style: TextStyle(color: AppColors.muted, fontSize: 13),
-            ),
-            const SizedBox(height: 10),
-            for (final engine in SessionEngine.values)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: ListTile(
-                  key: ValueKey('session-engine-${engine.wireName}'),
-                  selected: engine == selected,
-                  selectedColor: AppColors.ink,
-                  tileColor: AppColors.surfaceElevated,
-                  selectedTileColor: AppColors.composerControlFill,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 4,
+    builder: (sheetContext) {
+      final media = MediaQuery.of(sheetContext);
+      final available = media.size.height - media.padding.vertical - 120;
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: available),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const AppOptionSheetHeader(
+                    title: '选择会话引擎',
+                    detail: '每个会话独立保存引擎，创建后不可更改。',
                   ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(AppRadii.surface),
-                    side: BorderSide(
-                      color: engine == selected
-                          ? AppColors.terracottaDeep
-                          : AppColors.line,
+                  const SizedBox(height: 12),
+                  for (final engine in SessionEngine.values)
+                    AppOptionRow(
+                      key: ValueKey('session-engine-${engine.wireName}'),
+                      title: engine == SessionEngine.claude
+                          ? 'Claude Code'
+                          : 'Codex',
+                      description: engine == SessionEngine.claude
+                          ? '使用 Claude Code'
+                          : '使用 Codex CLI',
+                      selected: engine == selected,
+                      leading: Padding(
+                        key: ValueKey('session-engine-icon-${engine.wireName}'),
+                        padding: const EdgeInsets.all(8),
+                        child: Image.asset(
+                          engine == SessionEngine.claude
+                              ? 'assets/brands/claude-mark.png'
+                              : 'assets/brands/openai-mark.png',
+                          excludeFromSemantics: true,
+                          filterQuality: FilterQuality.high,
+                        ),
+                      ),
+                      onTap: () => Navigator.pop(sheetContext, engine),
                     ),
-                  ),
-                  leading: Container(
-                    key: ValueKey('session-engine-icon-${engine.wireName}'),
-                    width: 48,
-                    height: 48,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: AppColors.surfaceElevated,
-                      borderRadius: BorderRadius.circular(AppRadii.control),
-                    ),
-                    child: Image.asset(
-                      engine == SessionEngine.claude
-                          ? 'assets/brands/claude-mark.png'
-                          : 'assets/brands/openai-mark.png',
-                      excludeFromSemantics: true,
-                      filterQuality: FilterQuality.high,
-                    ),
-                  ),
-                  title: Text(
-                    engine == SessionEngine.claude ? 'Claude Code' : 'Codex',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  subtitle: Text(
-                    engine == SessionEngine.claude
-                        ? '使用 Claude Code'
-                        : '使用 Codex CLI',
-                  ),
-                  trailing: engine == selected
-                      ? const Icon(
-                          PhosphorIconsFill.checkCircle,
-                          color: AppColors.terracottaDeep,
-                        )
-                      : null,
-                  onTap: () => Navigator.pop(sheetContext, engine),
-                ),
+                ],
               ),
-          ],
+            ),
+          ),
         ),
-      ),
-    ),
+      );
+    },
   );
+  FocusManager.instance.primaryFocus?.unfocus();
+  return engine;
 }
 
 Future<void> showSessionNavigator(
@@ -4741,41 +4987,42 @@ Future<void> showSessionNavigator(
   required Future<List<RemoteSessionSearchResult>> Function(String query)
   onSearch,
 }) {
-  return showModalBottomSheet<void>(
-    context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
-    builder: (sheetContext) => SessionNavigatorSheet(
-      projects: projects,
-      sessions: sessions,
-      activeProjectId: activeProjectId,
-      activeSessionId: activeSessionId,
-      running: running,
-      onSelect: (sessionId) {
-        Navigator.pop(sheetContext);
-        onSelect(sessionId);
-      },
-      onSearchResult: (result) {
-        Navigator.pop(sheetContext);
-        onSearchResult(result);
-      },
-      onCreate: (projectId, engine) {
-        Navigator.pop(sheetContext);
-        onCreate(projectId, engine);
-      },
-      onRename: (sessionId, title) async {
-        Navigator.pop(sheetContext);
-        await onRename(sessionId, title);
-      },
-      onArchive: (sessionId) async {
-        Navigator.pop(sheetContext);
-        await onArchive(sessionId);
-      },
-      onDelete: (sessionId) async {
-        Navigator.pop(sheetContext);
-        await onDelete(sessionId);
-      },
-      onSearch: onSearch,
+  FocusManager.instance.primaryFocus?.unfocus();
+  return Navigator.of(context).push(
+    AppMaterialPageRoute<void>(
+      reduceMotion: MediaQuery.disableAnimationsOf(context),
+      builder: (pageContext) => SessionNavigatorPage(
+        projects: projects,
+        sessions: sessions,
+        activeProjectId: activeProjectId,
+        activeSessionId: activeSessionId,
+        running: running,
+        onSelect: (sessionId) {
+          Navigator.pop(pageContext);
+          onSelect(sessionId);
+        },
+        onSearchResult: (result) {
+          Navigator.pop(pageContext);
+          onSearchResult(result);
+        },
+        onCreate: (projectId, engine) {
+          Navigator.pop(pageContext);
+          onCreate(projectId, engine);
+        },
+        onRename: (sessionId, title) async {
+          Navigator.pop(pageContext);
+          await onRename(sessionId, title);
+        },
+        onArchive: (sessionId) async {
+          Navigator.pop(pageContext);
+          await onArchive(sessionId);
+        },
+        onDelete: (sessionId) async {
+          Navigator.pop(pageContext);
+          await onDelete(sessionId);
+        },
+        onSearch: onSearch,
+      ),
     ),
   );
 }
@@ -4784,8 +5031,8 @@ enum _SessionNavigatorView { home, projects, search }
 
 enum _SessionAction { rename, archive, delete }
 
-class SessionNavigatorSheet extends StatefulWidget {
-  const SessionNavigatorSheet({
+class SessionNavigatorPage extends StatefulWidget {
+  const SessionNavigatorPage({
     super.key,
     required this.projects,
     required this.sessions,
@@ -4815,17 +5062,118 @@ class SessionNavigatorSheet extends StatefulWidget {
   final Future<List<RemoteSessionSearchResult>> Function(String query) onSearch;
 
   @override
-  State<SessionNavigatorSheet> createState() => _SessionNavigatorSheetState();
+  State<SessionNavigatorPage> createState() => _SessionNavigatorPageState();
 }
 
-class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
+/// Linear-style smart iconography inference for projects.
+IconData inferProjectIcon(String name, [String? path]) {
+  final target = '${name.toLowerCase()} ${(path ?? '').toLowerCase()}';
+  if (target.contains('ios') || target.contains('apple')) {
+    return PhosphorIconsFill.appleLogo;
+  }
+  if (target.contains('android')) {
+    return PhosphorIconsFill.androidLogo;
+  }
+  if (target.contains('mobile') || target.contains('flutter')) {
+    return PhosphorIconsFill.deviceMobile;
+  }
+  if (target.contains('web') ||
+      target.contains('front') ||
+      target.contains('ui') ||
+      target.contains('vue') ||
+      target.contains('react')) {
+    return PhosphorIconsFill.globe;
+  }
+  if (target.contains('server') ||
+      target.contains('api') ||
+      target.contains('back') ||
+      target.contains('service')) {
+    return PhosphorIconsFill.hardDrives;
+  }
+  if (target.contains('cli') ||
+      target.contains('tool') ||
+      target.contains('script') ||
+      target.contains('terminal')) {
+    return PhosphorIconsFill.terminal;
+  }
+  if (target.contains('doc') ||
+      target.contains('wiki') ||
+      target.contains('spec') ||
+      target.contains('prd')) {
+    return PhosphorIconsFill.fileText;
+  }
+  return PhosphorIconsFill.cube;
+}
+
+/// Linear-style smart iconography inference for sessions.
+IconData inferSessionIcon(String title, [bool archived = false]) {
+  if (archived) return PhosphorIconsFill.archive;
+  final t = title.toLowerCase();
+  if (t.contains('ai') ||
+      t.contains('agent') ||
+      t.contains('思考') ||
+      t.contains('prompt')) {
+    return PhosphorIconsFill.sparkle;
+  }
+  if (t.contains('fix') ||
+      t.contains('bug') ||
+      t.contains('报错') ||
+      t.contains('修复') ||
+      t.contains('排查')) {
+    return PhosphorIconsFill.bug;
+  }
+  if (t.contains('doc') ||
+      t.contains('prd') ||
+      t.contains('设计') ||
+      t.contains('文档') ||
+      t.contains('spec')) {
+    return PhosphorIconsFill.fileText;
+  }
+  if (t.contains('review') ||
+      t.contains('检查') ||
+      t.contains('审视') ||
+      t.contains('优化') ||
+      t.contains('polish')) {
+    return PhosphorIconsFill.sparkle;
+  }
+  if (t.contains('sync') ||
+      t.contains('配对') ||
+      t.contains('连接') ||
+      t.contains('triage')) {
+    return PhosphorIconsFill.arrowsLeftRight;
+  }
+  if (t.contains('plan') || t.contains('roadmap') || t.contains('路线')) {
+    return PhosphorIconsFill.mapTrifold;
+  }
+  if (t.contains('mobile') ||
+      t.contains('flutter') ||
+      t.contains('ios') ||
+      t.contains('android')) {
+    return PhosphorIconsFill.deviceMobile;
+  }
+  return PhosphorIconsFill.chatCircle;
+}
+
+class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
+  // Session navigation shares the console's single blue. Gradients and a
+  // second blue here made the page feel like a different product.
+  static const _selectedStatusColor = AppColors.accentStrong;
+  static const _projectAccentGradient = LinearGradient(
+    begin: Alignment.topLeft,
+    end: Alignment.bottomRight,
+    colors: [AppColors.accent, AppColors.accentStrong],
+  );
+
   late String selectedProjectId =
       widget.activeProjectId ??
       (widget.projects.isEmpty ? '' : widget.projects.first.id);
   _SessionNavigatorView view = _SessionNavigatorView.home;
+  bool viewMovingForward = true;
+  bool searchTransitionActive = false;
   final TextEditingController searchController = TextEditingController();
   final FocusNode searchFocusNode = FocusNode();
   Timer? searchDebounce;
+  Timer? searchFocusDelay;
   int searchGeneration = 0;
   String searchQuery = '';
   bool searching = false;
@@ -4842,6 +5190,7 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
   @override
   void dispose() {
     searchDebounce?.cancel();
+    searchFocusDelay?.cancel();
     searchController.dispose();
     searchFocusNode.dispose();
     super.dispose();
@@ -4906,6 +5255,9 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
   }
 
   void openView(_SessionNavigatorView next) {
+    if (next == view) return;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    searchFocusDelay?.cancel();
     if (view == _SessionNavigatorView.search && next != view) {
       searchDebounce?.cancel();
       searchGeneration += 1;
@@ -4918,10 +5270,25 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
       searchError = null;
       searching = false;
     }
-    setState(() => view = next);
+    setState(() {
+      searchTransitionActive =
+          next == _SessionNavigatorView.search ||
+          view == _SessionNavigatorView.search;
+      viewMovingForward = next != _SessionNavigatorView.home;
+      view = next;
+    });
     if (next == _SessionNavigatorView.search) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) searchFocusNode.requestFocus();
+        if (!mounted || view != _SessionNavigatorView.search) return;
+        if (reduceMotion) {
+          searchFocusNode.requestFocus();
+          return;
+        }
+        searchFocusDelay = Timer(AppMotion.standard, () {
+          if (mounted && view == _SessionNavigatorView.search) {
+            searchFocusNode.requestFocus();
+          }
+        });
       });
     }
   }
@@ -4929,6 +5296,8 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
   void chooseProject(String projectId) {
     setState(() {
       selectedProjectId = projectId;
+      searchTransitionActive = false;
+      viewMovingForward = false;
       view = _SessionNavigatorView.home;
     });
   }
@@ -4963,16 +5332,13 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
-              PhosphorIconsRegular.magnifyingGlass,
-              color: AppColors.muted,
-            ),
+            const Icon(LucideIcons.search, size: 24, color: AppColors.muted),
             const SizedBox(height: 8),
             Text(searchError!),
             const SizedBox(height: 8),
             TextButton.icon(
               onPressed: () => submitSearch(searchController.text),
-              icon: const Icon(PhosphorIconsRegular.arrowsClockwise, size: 17),
+              icon: const Icon(LucideIcons.refreshCw, size: 17),
               label: const Text('重试'),
             ),
           ],
@@ -4983,7 +5349,21 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
       return const Center(child: Text('正在搜索所有会话…'));
     }
     if (searchResults.isEmpty) {
-      return const Center(child: Text('没有找到匹配内容'));
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(LucideIcons.search, color: AppColors.inactive, size: 28),
+            const SizedBox(height: 12),
+            const Text('没有找到匹配内容'),
+            const SizedBox(height: 6),
+            const Text(
+              '试试项目名、会话标题或报错关键词',
+              style: TextStyle(color: AppColors.muted, fontSize: 13),
+            ),
+          ],
+        ),
+      );
     }
     return ListView.separated(
       itemCount: searchResults.length,
@@ -5000,11 +5380,12 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
             horizontal: 4,
             vertical: 4,
           ),
-          leading: Icon(
-            result.archived
-                ? PhosphorIconsRegular.archive
-                : PhosphorIconsRegular.chatCircle,
-            color: AppColors.muted,
+          leading: PhosphorIcon(
+            inferSessionIcon(result.title, result.archived),
+            size: AppMark.size,
+            color: result.archived
+                ? AppColors.inactive
+                : AppMark.of(result.sessionId, index),
           ),
           title: Text(
             result.title,
@@ -5032,11 +5413,13 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
           ),
           trailing: active
               ? const Icon(
-                  PhosphorIconsFill.checkCircle,
-                  color: AppColors.terracottaDeep,
+                  LucideIcons.check,
+                  size: 20,
+                  color: _selectedStatusColor,
                 )
               : const Icon(
-                  PhosphorIconsRegular.caretRight,
+                  LucideIcons.chevronRight,
+                  size: 16,
                   color: AppColors.inactive,
                 ),
           onTap: canOpen ? () => widget.onSearchResult(result) : null,
@@ -5061,7 +5444,7 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
           TextSpan(
             text: result.snippet.substring(start, end),
             style: const TextStyle(
-              color: AppColors.terracottaDeep,
+              color: AppColors.accentStrong,
               backgroundColor: AppColors.composerControlFill,
               fontWeight: FontWeight.w700,
             ),
@@ -5077,35 +5460,55 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
 
   Widget buildSectionTitle(String text) {
     return Padding(
-      padding: const EdgeInsets.only(top: 24, bottom: 6),
+      padding: const EdgeInsets.only(top: 32, bottom: 12),
       child: Text(
         text,
-        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-          color: AppColors.inactive,
+        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+          color: AppColors.muted,
           fontWeight: FontWeight.w700,
+          fontSize: 18,
+          letterSpacing: -0.2,
         ),
       ),
     );
   }
 
-  Widget buildSessionStatus(RemoteSessionSummary item, bool active) {
+  Widget buildSessionStatus(RemoteSessionSummary item, {int? index}) {
+    final iconData = inferSessionIcon(item.title, item.archived);
+    final color =
+        item.archived ? AppColors.inactive : AppMark.of(item.id, index);
+
     if (item.running) {
-      return const SizedBox.square(
+      return SizedBox.square(
         dimension: 24,
-        child: CircularProgressIndicator(
-          strokeWidth: 2.2,
-          color: AppColors.accent,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            PhosphorIcon(
+              iconData,
+              size: AppMark.size,
+              color: color,
+            ),
+            Positioned(
+              right: 1,
+              top: 1,
+              child: Container(
+                width: 6,
+                height: 6,
+                decoration: const BoxDecoration(
+                  color: AppColors.accent,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+          ],
         ),
       );
     }
-    return Icon(
-      item.archived
-          ? PhosphorIconsRegular.archive
-          : active
-          ? PhosphorIconsFill.checkCircle
-          : PhosphorIconsRegular.chatCircle,
-      size: active ? 22 : 21,
-      color: active ? AppColors.terracottaDeep : AppColors.muted,
+    return PhosphorIcon(
+      iconData,
+      size: AppMark.size,
+      color: color,
     );
   }
 
@@ -5131,7 +5534,7 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
     }
   }
 
-  Widget buildSessionRow(RemoteSessionSummary item) {
+  Widget buildSessionRow(RemoteSessionSummary item, {int? index}) {
     final active = item.id == widget.activeSessionId;
     final canOpen = !item.archived && (!widget.running || active);
     final canMutate = !widget.running && !item.running;
@@ -5149,11 +5552,12 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
       child: ListTile(
         key: ValueKey('session-${item.id}'),
         enabled: canOpen,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+        contentPadding: EdgeInsets.zero,
         horizontalTitleGap: 12,
+        minVerticalPadding: 4,
         leading: SizedBox(
-          width: 28,
-          child: Center(child: buildSessionStatus(item, active)),
+          width: 30,
+          child: Center(child: buildSessionStatus(item, index: index)),
         ),
         title: Text(
           item.title,
@@ -5161,6 +5565,8 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.titleMedium?.copyWith(
             fontWeight: active ? FontWeight.w700 : FontWeight.w600,
+            fontSize: 16,
+            letterSpacing: -0.15,
           ),
         ),
         subtitle: Text(
@@ -5168,24 +5574,23 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: item.running ? AppColors.terracottaDeep : AppColors.muted,
+            color: item.running ? AppColors.ink : AppColors.muted,
+            fontSize: 12,
+            height: 1.2,
           ),
         ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (canMutate)
-              PopupMenuButton<_SessionAction>(
+        trailing: canMutate
+            ? PopupMenuButton<_SessionAction>(
                 key: ValueKey('session-menu-${item.id}'),
                 tooltip: '${item.title} 的更多操作',
-                icon: const Icon(PhosphorIconsRegular.dotsThree, size: 21),
+                icon: const Icon(LucideIcons.moreHorizontal, size: 20),
                 onSelected: (action) => handleSessionAction(item, action),
                 itemBuilder: (context) => [
                   const PopupMenuItem(
                     value: _SessionAction.rename,
                     child: Row(
                       children: [
-                        Icon(PhosphorIconsRegular.pencilSimple, size: 18),
+                        Icon(LucideIcons.pencil, size: 18),
                         SizedBox(width: 12),
                         Text('重命名'),
                       ],
@@ -5196,7 +5601,7 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
                       value: _SessionAction.archive,
                       child: Row(
                         children: [
-                          Icon(PhosphorIconsRegular.archive, size: 18),
+                          Icon(LucideIcons.archive, size: 18),
                           SizedBox(width: 12),
                           Text('归档'),
                         ],
@@ -5207,7 +5612,7 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
                     child: Row(
                       children: [
                         Icon(
-                          PhosphorIconsRegular.trash,
+                          LucideIcons.trash2,
                           size: 18,
                           color: AppColors.danger,
                         ),
@@ -5217,21 +5622,21 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
                     ),
                   ),
                 ],
-              ),
-            if (!active)
-              const Icon(
-                PhosphorIconsRegular.caretRight,
-                size: 18,
+              )
+            : active
+            ? null
+            : const Icon(
+                LucideIcons.chevronRight,
+                size: 16,
                 color: AppColors.inactive,
               ),
-          ],
-        ),
         onTap: canOpen && !active ? () => widget.onSelect(item.id) : null,
       ),
     );
   }
 
-  Widget buildProjectRow(RemoteProjectSummary project, {bool compact = false}) {
+  Widget buildProjectRow(RemoteProjectSummary project,
+      {bool compact = false, int? index}) {
     final active = project.id == selectedProjectId;
     final subtitle = compact
         ? active
@@ -5245,14 +5650,18 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
       selected: active,
       child: ListTile(
         key: ValueKey('project-${project.id}'),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+        contentPadding: EdgeInsets.zero,
         horizontalTitleGap: 12,
+        minVerticalPadding: 4,
         leading: SizedBox(
-          width: 28,
-          child: Icon(
-            active ? PhosphorIconsFill.folder : PhosphorIconsRegular.folder,
-            size: 21,
-            color: active ? AppColors.terracottaDeep : AppColors.muted,
+          width: 24,
+          child: Center(
+            child: PhosphorIcon(
+              inferProjectIcon(project.name, project.path),
+              key: ValueKey('project-icon-${project.id}'),
+              size: AppMark.size,
+              color: AppMark.of(project.id, index),
+            ),
           ),
         ),
         title: Text(
@@ -5261,6 +5670,8 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.titleMedium?.copyWith(
             fontWeight: active ? FontWeight.w700 : FontWeight.w600,
+            fontSize: 16,
+            letterSpacing: -0.15,
           ),
         ),
         subtitle: Text(
@@ -5268,12 +5679,14 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
           maxLines: compact ? 1 : 2,
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: active ? AppColors.terracottaDeep : AppColors.muted,
+            color: AppColors.muted,
+            fontSize: 12,
+            height: 1.2,
           ),
         ),
         trailing: const Icon(
-          PhosphorIconsRegular.caretRight,
-          size: 18,
+          LucideIcons.chevronRight,
+          size: 16,
           color: AppColors.inactive,
         ),
         onTap: () => chooseProject(project.id),
@@ -5289,97 +5702,89 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
               .where((session) => session.projectId == project.id)
               .toList();
 
-    return ListView(
+    return ListView.builder(
       key: const ValueKey('session-home-view'),
-      padding: const EdgeInsets.only(bottom: 20),
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      padding: const EdgeInsets.only(top: 12, bottom: 104),
+      itemCount: sessions.length + 2,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                '项目与会话',
+                key: const ValueKey('session-page-title'),
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  color: AppColors.ink,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 32,
+                  height: 1.08,
+                  letterSpacing: -0.9,
+                ),
+              ),
+              const SizedBox(height: 30),
+              ListTile(
+                key: const ValueKey('open-project-browser'),
+                contentPadding: EdgeInsets.zero,
+                horizontalTitleGap: 12,
+                leading: const SizedBox(
+                  width: 24,
+                  child: PhosphorIcon(
+                    PhosphorIconsFill.squaresFour,
+                    size: AppMark.size,
+                    color: AppMark.slate,
+                  ),
+                ),
+                title: Text(
+                  '所有项目',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    fontSize: 17,
+                    letterSpacing: -0.2,
+                  ),
+                ),
+                trailing: const Icon(
+                  LucideIcons.chevronRight,
+                  size: 16,
+                  color: AppColors.inactive,
+                ),
+                onTap: () => openView(_SessionNavigatorView.projects),
+              ),
+              buildSectionTitle('会话'),
+              if (sessions.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
+                  child: OutlinedButton.icon(
+                    key: const ValueKey('session-empty-create'),
+                    onPressed: widget.running ? null : createSession,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.ink,
+                      backgroundColor: AppColors.surface,
+                      side: const BorderSide(color: AppColors.lineStrong),
+                      minimumSize: const Size.fromHeight(48),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(AppRadii.control),
+                      ),
+                    ),
+                    icon: const Icon(LucideIcons.plus, size: 18),
+                    label: const Text('新建第一个会话'),
+                  ),
+                ),
+            ],
+          );
+        }
+        if (index <= sessions.length) {
+          return buildSessionRow(sessions[index - 1], index: index - 1);
+        }
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    project?.name ?? '项目',
-                    key: const ValueKey('session-context-project'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: AppColors.muted,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    '项目与会话',
-                    key: const ValueKey('session-sheet-title'),
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      color: AppColors.ink,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: -0.7,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            IconButton(
-              key: const ValueKey('open-session-search'),
-              tooltip: '搜索所有会话',
-              onPressed: () => openView(_SessionNavigatorView.search),
-              icon: const Icon(PhosphorIconsRegular.magnifyingGlass, size: 21),
-            ),
-            IconButton(
-              key: const ValueKey('create-session'),
-              tooltip: '新建会话',
-              onPressed: widget.running ? null : createSession,
-              icon: Icon(
-                PhosphorIconsRegular.plus,
-                size: 21,
-                color: widget.running ? null : AppColors.terracottaDeep,
-              ),
-            ),
+            buildSectionTitle('项目'),
+            for (var i = 0; i < widget.projects.take(3).length; i++)
+              buildProjectRow(widget.projects[i], compact: true, index: i),
           ],
-        ),
-        const SizedBox(height: 20),
-        ListTile(
-          key: const ValueKey('open-project-browser'),
-          contentPadding: const EdgeInsets.symmetric(horizontal: 4),
-          horizontalTitleGap: 12,
-          leading: const SizedBox(
-            width: 28,
-            child: Icon(PhosphorIconsRegular.squaresFour, size: 21),
-          ),
-          title: Text(
-            '所有项目',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-          ),
-          trailing: const Icon(
-            PhosphorIconsRegular.caretRight,
-            size: 18,
-            color: AppColors.inactive,
-          ),
-          onTap: () => openView(_SessionNavigatorView.projects),
-        ),
-        buildSectionTitle('会话'),
-        if (sessions.isEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 4),
-            child: Text(
-              '这个项目还没有会话',
-              style: Theme.of(
-                context,
-              ).textTheme.bodyMedium?.copyWith(color: AppColors.muted),
-            ),
-          )
-        else
-          for (final session in sessions) buildSessionRow(session),
-        buildSectionTitle('项目'),
-        for (final item in widget.projects.take(3))
-          buildProjectRow(item, compact: true),
-      ],
+        );
+      },
     );
   }
 
@@ -5389,56 +5794,23 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
         .where((project) => project.id != selectedProjectId)
         .toList();
 
-    return Column(
+    return ListView.builder(
       key: const ValueKey('session-project-view'),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            IconButton(
-              key: const ValueKey('session-back-projects'),
-              tooltip: '返回项目与会话',
-              onPressed: () => openView(_SessionNavigatorView.home),
-              icon: const Icon(PhosphorIconsRegular.arrowLeft, size: 21),
-            ),
-            const SizedBox(width: 4),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '项目',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: AppColors.muted,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '选择项目',
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 18),
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.only(top: 4, bottom: 32),
+      itemCount: others.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               buildSectionTitle('当前项目'),
-              if (current != null) buildProjectRow(current),
+              if (current != null) buildProjectRow(current, index: 0),
               buildSectionTitle('其他项目'),
-              for (final project in others) buildProjectRow(project),
             ],
-          ),
-        ),
-      ],
+          );
+        }
+        return buildProjectRow(others[index - 1], index: index);
+      },
     );
   }
 
@@ -5448,7 +5820,7 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
         mainAxisSize: MainAxisSize.min,
         children: [
           const Icon(
-            PhosphorIconsRegular.magnifyingGlass,
+            LucideIcons.search,
             size: 28,
             color: AppColors.inactive,
           ),
@@ -5476,71 +5848,6 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
       key: const ValueKey('session-search-view'),
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            IconButton(
-              key: const ValueKey('session-back-search'),
-              tooltip: '返回项目与会话',
-              onPressed: () => openView(_SessionNavigatorView.home),
-              icon: const Icon(PhosphorIconsRegular.arrowLeft, size: 21),
-            ),
-            const SizedBox(width: 4),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '所有项目',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: AppColors.muted,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '搜索会话',
-                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 18),
-        TextField(
-          key: const ValueKey('session-search-field'),
-          controller: searchController,
-          focusNode: searchFocusNode,
-          maxLength: 200,
-          buildCounter:
-              (
-                context, {
-                required currentLength,
-                required isFocused,
-                required maxLength,
-              }) => null,
-          textInputAction: TextInputAction.search,
-          onChanged: handleSearchChanged,
-          onSubmitted: submitSearch,
-          decoration: InputDecoration(
-            hintText: '搜索标题与会话内容',
-            prefixIcon: const Icon(
-              PhosphorIconsRegular.magnifyingGlass,
-              size: 20,
-            ),
-            suffixIcon: searchQuery.isEmpty
-                ? null
-                : IconButton(
-                    key: const ValueKey('session-search-clear'),
-                    tooltip: '清除搜索',
-                    onPressed: clearSearch,
-                    icon: const Icon(PhosphorIconsRegular.x, size: 19),
-                  ),
-          ),
-        ),
         if (searching) const LinearProgressIndicator(minHeight: 2),
         const SizedBox(height: 12),
         Expanded(
@@ -5552,16 +5859,303 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: SizedBox(
-        height: MediaQuery.sizeOf(context).height * 0.92,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-          child: switch (view) {
-            _SessionNavigatorView.home => buildHomeView(),
-            _SessionNavigatorView.projects => buildProjectView(),
-            _SessionNavigatorView.search => buildSearchView(),
-          },
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final currentProjectName = selectedProject?.name ?? '项目';
+    final titleText = switch (view) {
+      _SessionNavigatorView.home => currentProjectName,
+      _SessionNavigatorView.projects => '选择项目',
+      _SessionNavigatorView.search => '',
+    };
+    final viewKey = switch (view) {
+      _SessionNavigatorView.home => const ValueKey('session-home-transition'),
+      _SessionNavigatorView.projects => const ValueKey(
+        'session-project-transition',
+      ),
+      _SessionNavigatorView.search => const ValueKey(
+        'session-search-transition',
+      ),
+    };
+
+    return PopScope(
+      canPop: view == _SessionNavigatorView.home,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && view != _SessionNavigatorView.home) {
+          openView(_SessionNavigatorView.home);
+        }
+      },
+      child: Scaffold(
+        key: const ValueKey('session-navigator-page'),
+        backgroundColor: Colors.white,
+        appBar: AppBar(
+          backgroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          leading: IconButton(
+            key: view == _SessionNavigatorView.home
+                ? const ValueKey('session-page-back')
+                : view == _SessionNavigatorView.projects
+                ? const ValueKey('session-back-projects')
+                : const ValueKey('session-back-search'),
+            tooltip: view == _SessionNavigatorView.home ? '返回聊天' : '返回项目与会话',
+            onPressed: view == _SessionNavigatorView.home
+                ? () => Navigator.maybePop(context)
+                : () => openView(_SessionNavigatorView.home),
+            icon: const Icon(LucideIcons.arrowLeft, size: 22),
+          ),
+          title: Row(
+            children: [
+              SizedBox(
+                key: const ValueKey('session-index-marker'),
+                width: 22,
+                height: 22,
+                child: AnimatedSwitcher(
+                  duration: reduceMotion ? Duration.zero : AppMotion.fast,
+                  switchInCurve: AppMotion.enter,
+                  switchOutCurve: AppMotion.exit,
+                  child: view == _SessionNavigatorView.home
+                      ? ShaderMask(
+                          key: const ValueKey('session-context-icon-home'),
+                          blendMode: BlendMode.srcIn,
+                          shaderCallback: (bounds) =>
+                              _projectAccentGradient.createShader(bounds),
+                          child: PhosphorIcon(
+                            selectedProject != null
+                                ? inferProjectIcon(
+                                    selectedProject!.name,
+                                    selectedProject!.path,
+                                  )
+                                : PhosphorIconsFill.cube,
+                            size: 18,
+                            color: Colors.white,
+                          ),
+                        )
+                      : Icon(
+                          view == _SessionNavigatorView.projects
+                              ? LucideIcons.layoutGrid
+                              : LucideIcons.search,
+                          key: ValueKey('session-context-icon-${view.name}'),
+                          size: 20,
+                          color: view == _SessionNavigatorView.projects
+                              ? AppColors.ink
+                              : AppColors.accentStrong,
+                        ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: AnimatedSwitcher(
+                  key: const ValueKey('session-title-switcher'),
+                  duration: reduceMotion ? Duration.zero : AppMotion.standard,
+                  reverseDuration: reduceMotion
+                      ? Duration.zero
+                      : AppMotion.fast,
+                  switchInCurve: AppMotion.enter,
+                  switchOutCurve: AppMotion.exit,
+                  transitionBuilder: (child, animation) {
+                    if (reduceMotion) return child;
+                    final isSearchField =
+                        child.key == const ValueKey('session-search-field');
+                    final offset = Tween<Offset>(
+                      begin: isSearchField
+                          ? const Offset(0.08, 0)
+                          : const Offset(0, 0.12),
+                      end: Offset.zero,
+                    ).animate(animation);
+                    return FadeTransition(
+                      opacity: animation,
+                      child: SlideTransition(position: offset, child: child),
+                    );
+                  },
+                  child: view == _SessionNavigatorView.search
+                      ? TextField(
+                          key: const ValueKey('session-search-field'),
+                          controller: searchController,
+                          focusNode: searchFocusNode,
+                          maxLength: 200,
+                          buildCounter:
+                              (
+                                context, {
+                                required currentLength,
+                                required isFocused,
+                                required maxLength,
+                              }) => null,
+                          textInputAction: TextInputAction.search,
+                          onChanged: handleSearchChanged,
+                          onSubmitted: submitSearch,
+                          decoration: InputDecoration(
+                            hintText: '搜索标题与会话内容',
+                            isDense: true,
+                            filled: true,
+                            fillColor: AppColors.control,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 10,
+                            ),
+                            prefixIcon: const Icon(
+                              LucideIcons.search,
+                              size: 19,
+                            ),
+                            suffixIcon: searchQuery.isEmpty
+                                ? null
+                                : IconButton(
+                                    key: const ValueKey('session-search-clear'),
+                                    tooltip: '清除搜索',
+                                    onPressed: clearSearch,
+                                    icon: const Icon(LucideIcons.x, size: 18),
+                                  ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(
+                                AppRadii.control,
+                              ),
+                              borderSide: BorderSide.none,
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(
+                                AppRadii.control,
+                              ),
+                              borderSide: BorderSide.none,
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(
+                                AppRadii.control,
+                              ),
+                              borderSide: const BorderSide(
+                                color: AppColors.accentStrong,
+                                width: 2,
+                              ),
+                            ),
+                          ),
+                        )
+                      : Text(
+                          titleText,
+                          key: ValueKey(
+                            'session-title-${view.name}-$selectedProjectId',
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(
+                                color: AppColors.ink,
+                                fontWeight: FontWeight.w700,
+                                letterSpacing: -0.2,
+                              ),
+                        ),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            AnimatedSwitcher(
+              key: const ValueKey('session-actions-switcher'),
+              duration: reduceMotion ? Duration.zero : AppMotion.fast,
+              switchInCurve: AppMotion.enter,
+              switchOutCurve: AppMotion.exit,
+              transitionBuilder: (child, animation) {
+                if (reduceMotion) return child;
+                return FadeTransition(
+                  opacity: animation,
+                  child: ScaleTransition(
+                    scale: Tween<double>(
+                      begin: 0.96,
+                      end: 1,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                );
+              },
+              child: view == _SessionNavigatorView.home
+                  ? Row(
+                      key: const ValueKey('session-home-actions'),
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          key: const ValueKey('open-session-search'),
+                          tooltip: '搜索所有会话',
+                          onPressed: () =>
+                              openView(_SessionNavigatorView.search),
+                          icon: const Icon(LucideIcons.search, size: 22),
+                        ),
+                        IconButton(
+                          key: const ValueKey('create-session'),
+                          tooltip: '新建会话',
+                          onPressed: widget.running ? null : createSession,
+                          style: IconButton.styleFrom(padding: EdgeInsets.zero),
+                          icon: AnimatedContainer(
+                            duration: reduceMotion
+                                ? Duration.zero
+                                : AppMotion.fast,
+                            width: 38,
+                            height: 38,
+                            decoration: BoxDecoration(
+                              color: widget.running
+                                  ? AppColors.control
+                                  : AppColors.ink,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Center(
+                              child: Icon(
+                                LucideIcons.plus,
+                                size: 18,
+                                color: widget.running
+                                    ? AppColors.inactive
+                                    : Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  : const SizedBox(key: ValueKey('session-no-actions')),
+            ),
+            const SizedBox(width: 6),
+          ],
+        ),
+        body: SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(22, 0, 22, 20),
+            child: AnimatedSwitcher(
+              key: const ValueKey('session-view-switcher'),
+              duration: reduceMotion ? Duration.zero : AppMotion.standard,
+              reverseDuration: reduceMotion ? Duration.zero : AppMotion.fast,
+              switchInCurve: AppMotion.enter,
+              switchOutCurve: AppMotion.exit,
+              transitionBuilder: (child, animation) {
+                if (reduceMotion) return child;
+                if (searchTransitionActive) {
+                  return FadeTransition(
+                    opacity: animation,
+                    child: ScaleTransition(
+                      scale: Tween<double>(
+                        begin: 0.99,
+                        end: 1,
+                      ).animate(animation),
+                      child: child,
+                    ),
+                  );
+                }
+                final incoming = child.key == viewKey;
+                final direction = viewMovingForward ? 1.0 : -1.0;
+                final offset = Tween<Offset>(
+                  begin: Offset((incoming ? 0.045 : -0.025) * direction, 0),
+                  end: Offset.zero,
+                ).animate(animation);
+                return FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(position: offset, child: child),
+                );
+              },
+              child: KeyedSubtree(
+                key: viewKey,
+                child: switch (view) {
+                  _SessionNavigatorView.home => buildHomeView(),
+                  _SessionNavigatorView.projects => buildProjectView(),
+                  _SessionNavigatorView.search => buildSearchView(),
+                },
+              ),
+            ),
+          ),
         ),
       ),
     );
@@ -5569,20 +6163,19 @@ class _SessionNavigatorSheetState extends State<SessionNavigatorSheet> {
 }
 
 abstract final class _SettingsPalette {
-  static const background = Color(0xFFF2F4F7);
-  static const surface = Color(0xFFFFFFFF);
-  static const ink = Color(0xFF111318);
-  static const secondary = Color(0xFF6E7580);
-  static const tertiary = Color(0xFF9AA1AB);
-  static const line = Color(0xFFE2E6EB);
-  static const iconFill = Color(0xFFF0F2F5);
-  static const accent = Color(0xFF0A84FF);
-  static const danger = Color(0xFFFF3B30);
-  static const barrier = Color(0x66111318);
+  static const background = AppColors.bgTop;
+  static const surface = AppColors.surfaceElevated;
+  static const ink = AppColors.ink;
+  static const secondary = AppColors.muted;
+  static const tertiary = AppColors.inactive;
+  static const line = AppColors.line;
+  static const iconFill = AppColors.control;
+  static const accent = AppColors.accentStrong;
+  static const danger = AppColors.danger;
+  static const barrier = AppColors.scrim;
 }
 
-ThemeData _settingsTheme(BuildContext context) {
-  final base = Theme.of(context);
+ThemeData _settingsTheme(ThemeData base) {
   final scheme = base.colorScheme.copyWith(
     primary: _SettingsPalette.accent,
     onPrimary: Colors.white,
@@ -5627,11 +6220,29 @@ ThemeData _settingsTheme(BuildContext context) {
   );
 }
 
-class _SettingsModalSurface extends StatelessWidget {
+class _SettingsModalSurface extends StatefulWidget {
   const _SettingsModalSurface({required this.child, this.surfaceKey});
 
   final Widget child;
   final Key? surfaceKey;
+
+  @override
+  State<_SettingsModalSurface> createState() => _SettingsModalSurfaceState();
+}
+
+class _SettingsModalSurfaceState extends State<_SettingsModalSurface> {
+  ThemeData? _theme;
+  ThemeData? _themeBase;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final base = Theme.of(context);
+    if (!identical(base, _themeBase)) {
+      _themeBase = base;
+      _theme = _settingsTheme(base);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -5641,31 +6252,28 @@ class _SettingsModalSurface extends StatelessWidget {
       media.size.height - media.padding.top - 8,
     );
     const radius = Radius.circular(28);
+    const borderRadius = BorderRadius.only(topLeft: radius, topRight: radius);
     return Theme(
-      data: _settingsTheme(context),
+      data: _theme!,
       child: Align(
         alignment: Alignment.bottomCenter,
-        child: Container(
-          key: surfaceKey,
-          height: height,
-          decoration: BoxDecoration(
-            color: _SettingsPalette.background,
-            borderRadius: const BorderRadius.only(
-              topLeft: radius,
-              topRight: radius,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: _SettingsPalette.ink.withValues(alpha: 0.14),
-                blurRadius: 36,
-                offset: const Offset(0, -4),
+        // Outer boundary: the sheet entrance only shifts this layer, so the
+        // gradient, shadows, and clip are not re-rasterized per frame.
+        child: RepaintBoundary(
+          child: Container(
+            key: widget.surfaceKey,
+            height: height,
+            decoration: AppLiquidGlass.strong(borderRadius: borderRadius),
+            child: ClipRRect(
+              clipBehavior: Clip.hardEdge,
+              borderRadius: borderRadius,
+              child: Padding(
+                padding: EdgeInsets.only(bottom: media.padding.bottom),
+                // Inner boundary: page switches repaint inside here without
+                // dragging the decorated sheet background along.
+                child: RepaintBoundary(child: widget.child),
               ),
-            ],
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: Padding(
-            padding: EdgeInsets.only(bottom: media.padding.bottom),
-            child: child,
+            ),
           ),
         ),
       ),
@@ -5721,6 +6329,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
   bool changingNotifications = false;
   bool changingModel = false;
   bool savingReadingFontScale = false;
+  bool showingChatBackground = false;
 
   Future<void> changeNotifications(bool value) async {
     if (changingNotifications) return;
@@ -5819,252 +6428,303 @@ class _SettingsSheetState extends State<SettingsSheet> {
       height: 1.4,
     );
     final modelLabel = _settingsModelLabel(selectedModel, widget.currentModel);
-    final previewKey = ValueKey(
-      '$modelLabel-${chatBackground.hashCode}-${readingFontSizeLabel(readingFontScale)}',
-    );
+    // Font-scale ticks must not re-key the preview: a changing key restarts
+    // the AnimatedSwitcher cross-fade on every slider tick.
+    final previewKey = ValueKey('$modelLabel-${chatBackground.hashCode}');
 
-    return _SettingsModalSurface(
-      surfaceKey: const ValueKey('settings-surface'),
-      child: Column(
-        children: [
-          _SettingsPageHeader(
-            title: '设置',
-            onClose: () => Navigator.pop(context),
-          ),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+    final background = chatBackground;
+    if (background.kind == ChatBackgroundKind.localImage &&
+        background.imagePath != null) {
+      // The background page's preview decodes a 900px variant nothing else
+      // loads; warm it while settings opens so the page switch does not
+      // decode mid-transition.
+      precacheImage(
+        ResizeImage(
+          FileImage(File(background.imagePath!)),
+          width: 900,
+          allowUpscaling: false,
+        ),
+        context,
+      );
+    }
+
+    final settingsPage = Column(
+      key: const ValueKey('settings-page'),
+      children: [
+        _SettingsPageHeader(title: '设置', onClose: () => Navigator.pop(context)),
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
+            children: [
+              const _SettingsSectionLabel('当前偏好'),
+              const SizedBox(height: 10),
+              AnimatedSwitcher(
+                duration: MediaQuery.disableAnimationsOf(context)
+                    ? Duration.zero
+                    : AppMotion.standard,
+                switchInCurve: AppMotion.enter,
+                switchOutCurve: AppMotion.exit,
+                child: _PreferenceGalleryPreview(
+                  key: previewKey,
+                  modelLabel: modelLabel,
+                  chatBackground: chatBackground,
+                  readingFontScale: readingFontScale,
+                ),
+              ),
+              const SizedBox(height: 22),
+              const _SettingsSectionLabel('对话偏好'),
+              const SizedBox(height: 10),
+              _SettingsGroupCard(
                 children: [
-                  const _SettingsSectionLabel('当前偏好'),
-                  const SizedBox(height: 10),
-                  AnimatedSwitcher(
-                    duration: MediaQuery.disableAnimationsOf(context)
-                        ? Duration.zero
-                        : AppMotion.standard,
-                    switchInCurve: AppMotion.enter,
-                    switchOutCurve: AppMotion.exit,
-                    child: _PreferenceGalleryPreview(
-                      key: previewKey,
-                      modelLabel: modelLabel,
-                      chatBackground: chatBackground,
-                      readingFontScale: readingFontScale,
+                  _SettingsPreferenceRow(
+                    key: const ValueKey('model-setting'),
+                    icon: LucideIcons.slidersHorizontal,
+                    title: '模型',
+                    subtitle: modelPreferenceDescription(
+                      selectedModel,
+                      widget.currentModel == null
+                          ? null
+                          : formatModelName(widget.currentModel!),
                     ),
+                    trailing: changingModel
+                        ? const SizedBox.square(
+                            dimension: 20,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(LucideIcons.chevronRight, size: 20),
+                    onTap: changingModel ? null : chooseModel,
                   ),
-                  const SizedBox(height: 22),
-                  const _SettingsSectionLabel('对话偏好'),
-                  const SizedBox(height: 10),
-                  _SettingsGroupCard(
-                    children: [
-                      _SettingsPreferenceRow(
-                        key: const ValueKey('model-setting'),
-                        icon: LucideIcons.slidersHorizontal,
-                        title: '模型',
-                        subtitle: modelPreferenceDescription(
-                          selectedModel,
-                          widget.currentModel == null
-                              ? null
-                              : formatModelName(widget.currentModel!),
-                        ),
-                        trailing: changingModel
-                            ? const SizedBox.square(
-                                dimension: 20,
+                  const _SettingsDivider(),
+                  _SettingsPreferenceRow(
+                    key: const ValueKey('chat-background-setting'),
+                    leading: ChatBackgroundThumbnail(
+                      preference: chatBackground,
+                    ),
+                    title: '聊天背景',
+                    subtitle: chatBackgroundLabel(chatBackground),
+                    trailing: const Icon(LucideIcons.chevronRight, size: 20),
+                    onTap: () => setState(() => showingChatBackground = true),
+                  ),
+                  const _SettingsDivider(),
+                  Padding(
+                    key: const ValueKey('reading-font-size-setting'),
+                    padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const _SettingsLeadingIcon(icon: LucideIcons.type),
+                            const SizedBox(width: 12),
+                            Expanded(child: Text('字体大小', style: rowTitleStyle)),
+                            Text(
+                              readingFontSizeLabel(readingFontScale),
+                              style: textTheme.labelLarge?.copyWith(
+                                color: _SettingsPalette.accent,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            if (savingReadingFontScale) ...[
+                              const SizedBox(width: 8),
+                              const SizedBox.square(
+                                dimension: 16,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 2,
                                 ),
-                              )
-                            : const Icon(LucideIcons.chevronRight, size: 20),
-                        onTap: changingModel ? null : chooseModel,
-                      ),
-                      const _SettingsDivider(),
-                      _SettingsPreferenceRow(
-                        key: const ValueKey('chat-background-setting'),
-                        leading: ChatBackgroundThumbnail(
-                          preference: chatBackground,
-                        ),
-                        title: '聊天背景',
-                        subtitle: chatBackgroundLabel(chatBackground),
-                        trailing: const Icon(
-                          LucideIcons.chevronRight,
-                          size: 20,
-                        ),
-                        onTap: () => showChatBackgroundSheet(
-                          context,
-                          preference: chatBackground,
-                          onChanged: changeChatBackground,
-                          onPickImage: pickChatBackgroundImage,
-                        ),
-                      ),
-                      const _SettingsDivider(),
-                      Padding(
-                        key: const ValueKey('reading-font-size-setting'),
-                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 10),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              children: [
-                                const _SettingsLeadingIcon(
-                                  icon: LucideIcons.type,
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text('字体大小', style: rowTitleStyle),
-                                ),
-                                Text(
-                                  readingFontSizeLabel(readingFontScale),
-                                  style: textTheme.labelLarge?.copyWith(
-                                    color: _SettingsPalette.accent,
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                                if (savingReadingFontScale) ...[
-                                  const SizedBox(width: 8),
-                                  const SizedBox.square(
-                                    dimension: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  ),
-                                ],
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              readingFontSizeDescription(readingFontScale),
-                              style: rowSubtitleStyle,
-                            ),
-                            const SizedBox(height: 8),
-                            Row(
-                              children: [
-                                Text(
-                                  'A',
-                                  style: textTheme.bodySmall?.copyWith(
-                                    fontSize: 12,
-                                    color: _SettingsPalette.secondary,
-                                  ),
-                                ),
-                                Expanded(
-                                  child: Slider(
-                                    key: const ValueKey(
-                                      'reading-font-size-slider',
-                                    ),
-                                    value: readingFontScale.clamp(
-                                      kReadingFontScaleMin,
-                                      kReadingFontScaleMax,
-                                    ),
-                                    min: kReadingFontScaleMin,
-                                    max: kReadingFontScaleMax,
-                                    divisions: 11,
-                                    label: readingFontSizeLabel(
-                                      readingFontScale,
-                                    ),
-                                    onChanged: previewReadingFontScale,
-                                    onChangeEnd: commitReadingFontScale,
-                                  ),
-                                ),
-                                Text(
-                                  'A',
-                                  style: textTheme.bodySmall?.copyWith(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w700,
-                                    color: _SettingsPalette.ink,
-                                  ),
-                                ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ],
                         ),
-                      ),
-                      const _SettingsDivider(),
-                      SwitchListTile(
-                        key: const ValueKey('background-notifications-toggle'),
-                        contentPadding: const EdgeInsets.fromLTRB(14, 4, 10, 4),
-                        value: notificationsEnabled,
-                        onChanged: changingNotifications
-                            ? null
-                            : changeNotifications,
-                        secondary: const _SettingsLeadingIcon(
-                          icon: LucideIcons.bell,
-                        ),
-                        title: Text('后台通知', style: rowTitleStyle),
-                        subtitle: Text(
-                          '任务完成、失败或等待权限时提醒',
+                        const SizedBox(height: 4),
+                        Text(
+                          readingFontSizeDescription(readingFontScale),
                           style: rowSubtitleStyle,
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 22),
-                  const _SettingsSectionLabel('桌面主机'),
-                  const SizedBox(height: 10),
-                  _SettingsGroupCard(
-                    children: [
-                      _SettingsPreferenceRow(
-                        icon: LucideIcons.monitor,
-                        title: widget.session?.deviceName ?? '未配对主机',
-                        subtitle:
-                            widget.session?.workspaceName ??
-                            widget.session?.workspaceDir ??
-                            '暂无工作区信息',
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(72, 0, 16, 12),
-                        child: Column(
+                        const SizedBox(height: 8),
+                        Row(
                           children: [
-                            _SettingsDetailLine(
-                              label: '服务',
-                              value:
-                                  widget.session?.origin.toString() ?? '暂无服务信息',
+                            Text(
+                              'A',
+                              style: textTheme.bodySmall?.copyWith(
+                                fontSize: 12,
+                                color: _SettingsPalette.secondary,
+                              ),
                             ),
-                            const SizedBox(height: 8),
-                            _SettingsDetailLine(
-                              label: '目录',
-                              value:
-                                  widget.session?.workspaceDir ??
-                                  widget.session?.workspaceName ??
-                                  '暂无工作区信息',
+                            Expanded(
+                              child: Slider(
+                                key: const ValueKey('reading-font-size-slider'),
+                                value: readingFontScale.clamp(
+                                  kReadingFontScaleMin,
+                                  kReadingFontScaleMax,
+                                ),
+                                min: kReadingFontScaleMin,
+                                max: kReadingFontScaleMax,
+                                divisions: 11,
+                                label: readingFontSizeLabel(readingFontScale),
+                                onChanged: previewReadingFontScale,
+                                onChangeEnd: commitReadingFontScale,
+                              ),
+                            ),
+                            Text(
+                              'A',
+                              style: textTheme.bodySmall?.copyWith(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                                color: _SettingsPalette.ink,
+                              ),
                             ),
                           ],
                         ),
-                      ),
-                      const Divider(height: 1),
-                      _SettingsActionRow(
-                        icon: LucideIcons.refreshCw,
-                        label: '重新连接',
-                        onTap: () {
-                          Navigator.pop(context);
-                          widget.onReconnect();
-                        },
-                      ),
-                      const _SettingsDivider(indent: 16),
-                      _SettingsActionRow(
-                        icon: LucideIcons.unlink,
-                        label: '退出配对',
-                        color: _SettingsPalette.danger,
-                        onTap: () => confirmLogout(context, widget.onLogout),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 8),
-                    child: Text(
-                      '偏好只保存在这台手机；模型与阅读设置会用于之后发送的消息。',
-                      style: TextStyle(
-                        color: _SettingsPalette.secondary,
-                        fontSize: 12,
-                        height: 1.45,
-                      ),
-                      textAlign: TextAlign.center,
+                      ],
                     ),
+                  ),
+                  const _SettingsDivider(),
+                  SwitchListTile(
+                    key: const ValueKey('background-notifications-toggle'),
+                    contentPadding: const EdgeInsets.fromLTRB(14, 4, 10, 4),
+                    value: notificationsEnabled,
+                    onChanged: changingNotifications
+                        ? null
+                        : changeNotifications,
+                    secondary: const _SettingsLeadingIcon(
+                      icon: LucideIcons.bell,
+                    ),
+                    title: Text('后台通知', style: rowTitleStyle),
+                    subtitle: Text('任务完成、失败或等待权限时提醒', style: rowSubtitleStyle),
                   ),
                 ],
               ),
-            ),
+              const SizedBox(height: 22),
+              const _SettingsSectionLabel('桌面主机'),
+              const SizedBox(height: 10),
+              _SettingsGroupCard(
+                children: [
+                  _SettingsPreferenceRow(
+                    icon: LucideIcons.monitor,
+                    title: widget.session?.deviceName ?? '未配对主机',
+                    subtitle:
+                        widget.session?.workspaceName ??
+                        widget.session?.workspaceDir ??
+                        '暂无工作区信息',
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(72, 0, 16, 12),
+                    child: Column(
+                      children: [
+                        _SettingsDetailLine(
+                          label: '服务',
+                          value: widget.session?.origin.toString() ?? '暂无服务信息',
+                        ),
+                        const SizedBox(height: 8),
+                        _SettingsDetailLine(
+                          label: '目录',
+                          value:
+                              widget.session?.workspaceDir ??
+                              widget.session?.workspaceName ??
+                              '暂无工作区信息',
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  _SettingsActionRow(
+                    icon: LucideIcons.refreshCw,
+                    label: '重新连接',
+                    onTap: () {
+                      Navigator.pop(context);
+                      widget.onReconnect();
+                    },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
+              _SettingsGroupCard(
+                children: [
+                  _SettingsActionRow(
+                    icon: LucideIcons.unlink,
+                    label: '退出配对',
+                    color: _SettingsPalette.danger,
+                    onTap: () => confirmLogout(context, widget.onLogout),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                child: Text(
+                  '偏好只保存在这台手机；模型与阅读设置会用于之后发送的消息。',
+                  style: TextStyle(
+                    color: _SettingsPalette.secondary,
+                    fontSize: 12,
+                    height: 1.45,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
+      ],
+    );
+    final page = showingChatBackground
+        ? ChatBackgroundSheet(
+            key: const ValueKey('settings-background-page'),
+            preference: chatBackground,
+            onChanged: changeChatBackground,
+            onPickImage: pickChatBackgroundImage,
+            onBack: () => setState(() => showingChatBackground = false),
+          )
+        : settingsPage;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    return PopScope(
+      canPop: !showingChatBackground,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && showingChatBackground) {
+          setState(() => showingChatBackground = false);
+        }
+      },
+      child: appModalSheetScaffold(
+        _SettingsModalSurface(
+          surfaceKey: const ValueKey('settings-surface'),
+          child: AnimatedSwitcher(
+            duration: reduceMotion ? Duration.zero : AppMotion.standard,
+            reverseDuration: reduceMotion ? Duration.zero : AppMotion.fast,
+            switchInCurve: AppMotion.enter,
+            switchOutCurve: AppMotion.exit,
+            layoutBuilder: (currentChild, previousChildren) => Stack(
+              fit: StackFit.expand,
+              children: [...previousChildren, ?currentChild],
+            ),
+            transitionBuilder: (child, animation) {
+              final backgroundPage =
+                  child.key == const ValueKey('settings-background-page');
+              final position = Tween<Offset>(
+                begin: Offset(backgroundPage ? 0.08 : -0.08, 0),
+                end: Offset.zero,
+              ).animate(animation);
+              // Slide + fade, but over a boundary: the page raster is cached,
+              // so each transition frame only re-composites that texture at a
+              // new offset/alpha. Without the fade the outgoing page stays
+              // ~fully visible under the incoming one and pops out at the end
+              // of its exit; without the boundary the fade saveLayers the
+              // whole sheet every frame. The snapshot freezes both pages into
+              // textures while the switch runs, so the frames composite two
+              // quads instead of re-rasterizing two near-fullscreen pages.
+              return FadeTransition(
+                opacity: animation,
+                child: SlideTransition(
+                  position: position,
+                  child: SnapshotWhileAnimating(
+                    animation: animation,
+                    child: RepaintBoundary(child: child),
+                  ),
+                ),
+              );
+            },
+            child: page,
+          ),
+        ),
+        barrierColor: _SettingsPalette.barrier,
       ),
     );
   }
@@ -6211,7 +6871,7 @@ class _PreferenceGalleryPreview extends StatelessWidget {
             decoration: BoxDecoration(
               color: _SettingsPalette.surface,
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: _SettingsPalette.line),
+              boxShadow: AppElevation.surfaceCard(),
             ),
             child: LayoutBuilder(
               builder: (context, constraints) {
@@ -6325,7 +6985,7 @@ class _PreferenceGalleryPreview extends StatelessWidget {
                                       '你好，我能帮你做些什么？',
                                       maxLines: 2,
                                       style: TextStyle(
-                                        fontSize: 11.5 * readingFontScale,
+                                        fontSize: 12 * readingFontScale,
                                         height: 1.35,
                                       ),
                                     ),
@@ -6351,7 +7011,7 @@ class _PreferenceGalleryPreview extends StatelessWidget {
                                       maxLines: 2,
                                       overflow: TextOverflow.ellipsis,
                                       style: TextStyle(
-                                        fontSize: 11.5 * readingFontScale,
+                                        fontSize: 12 * readingFontScale,
                                         height: 1.35,
                                       ),
                                     ),
@@ -6375,7 +7035,7 @@ class _PreferenceGalleryPreview extends StatelessWidget {
                                           '发送消息…',
                                           style: TextStyle(
                                             color: _SettingsPalette.tertiary,
-                                            fontSize: 10.5,
+                                            fontSize: 11,
                                           ),
                                         ),
                                       ),
@@ -6453,55 +7113,68 @@ class _SettingsPreferenceRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 76),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-            child: Row(
-              children: [
-                leading ?? _SettingsLeadingIcon(icon: icon!),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        title,
-                        style: const TextStyle(
-                          fontSize: 15.5,
-                          fontWeight: FontWeight.w700,
-                          height: 1.3,
+    return SignalPressEffect(
+      enabled: onTap != null,
+      scaleOnPress: false,
+      builder: (context, pressed, child) => SignalAnimatedSurface(
+        duration: appPressAnimationDuration(context, pressed),
+        decoration: BoxDecoration(
+          color: pressed
+              ? _SettingsPalette.iconFill.withValues(alpha: 0.72)
+              : Colors.transparent,
+        ),
+        child: child,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 76),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+              child: Row(
+                children: [
+                  leading ?? _SettingsLeadingIcon(icon: icon!),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            height: 1.3,
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 3),
-                      Text(
-                        subtitle,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: _SettingsPalette.secondary,
-                          fontSize: 12.5,
-                          height: 1.35,
+                        const SizedBox(height: 3),
+                        Text(
+                          subtitle,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: _SettingsPalette.secondary,
+                            fontSize: 12,
+                            height: 1.35,
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-                if (trailing != null) ...[
-                  const SizedBox(width: 10),
-                  IconTheme(
-                    data: const IconThemeData(
-                      color: _SettingsPalette.secondary,
+                      ],
                     ),
-                    child: trailing!,
                   ),
+                  if (trailing != null) ...[
+                    const SizedBox(width: 10),
+                    IconTheme(
+                      data: const IconThemeData(
+                        color: _SettingsPalette.secondary,
+                      ),
+                      child: trailing!,
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ),
         ),
@@ -6511,13 +7184,11 @@ class _SettingsPreferenceRow extends StatelessWidget {
 }
 
 class _SettingsDivider extends StatelessWidget {
-  const _SettingsDivider({this.indent = 70});
-
-  final double indent;
+  const _SettingsDivider();
 
   @override
   Widget build(BuildContext context) {
-    return Divider(height: 1, indent: indent, endIndent: 14);
+    return const Divider(height: 1, indent: 70, endIndent: 14);
   }
 }
 
@@ -6532,10 +7203,10 @@ class _SettingsGroupCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: _SettingsPalette.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: _SettingsPalette.line),
+        boxShadow: AppElevation.surfaceCard(),
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(15),
+        borderRadius: BorderRadius.circular(16),
         child: Column(mainAxisSize: MainAxisSize.min, children: children),
       ),
     );
@@ -6559,7 +7230,7 @@ class _SettingsDetailLine extends StatelessWidget {
             label,
             style: const TextStyle(
               color: _SettingsPalette.secondary,
-              fontSize: 11.5,
+              fontSize: 12,
               fontWeight: FontWeight.w600,
               height: 1.35,
             ),
@@ -6574,7 +7245,7 @@ class _SettingsDetailLine extends StatelessWidget {
             style: const TextStyle(
               color: _SettingsPalette.ink,
               fontFamily: 'monospace',
-              fontSize: 11.5,
+              fontSize: 12,
               height: 1.4,
             ),
           ),
@@ -6599,28 +7270,38 @@ class _SettingsActionRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(minHeight: 50),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(icon, size: 17, color: color),
-                const SizedBox(width: 8),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: color,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
+    return SignalPressEffect(
+      scaleOnPress: false,
+      builder: (context, pressed, child) => SignalAnimatedSurface(
+        duration: appPressAnimationDuration(context, pressed),
+        decoration: BoxDecoration(
+          color: pressed ? color.withValues(alpha: 0.08) : Colors.transparent,
+        ),
+        child: child,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 50),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icon, size: 17, color: color),
+                  const SizedBox(width: 8),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -6635,445 +7316,72 @@ Future<ClaudeModelPreference?> showClaudeModelPicker(
 }) {
   return showModalBottomSheet<ClaudeModelPreference>(
     context: context,
+    sheetAnimationStyle: appOverlayAnimationStyle(context),
     backgroundColor: Colors.transparent,
+    barrierColor: Colors.transparent,
     isScrollControlled: true,
-    builder: (context) => SafeArea(
-      top: false,
-      child: _ClaudeModelPickerSheet(selected: selected),
-    ),
-  );
-}
-
-class _ClaudeModelPickerSheet extends StatelessWidget {
-  const _ClaudeModelPickerSheet({required this.selected});
-
-  static const _iceInk = Color(0xFF0B3550);
-  static const _iceDeep = Color(0xFF0B3F5C);
-  static const _iceAccent = Color(0xFF0B668F);
-  static const _iceGradient = LinearGradient(
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-    colors: [
-      Color(0xFFC7E9FB),
-      Color(0xFFA6DEFA),
-      Color(0xFF80D4F9),
-      Color(0xFF5BC9F8),
-      Color(0xFF35BEF7),
-    ],
-  );
-
-  final ClaudeModelPreference selected;
-
-  @override
-  Widget build(BuildContext context) {
-    final media = MediaQuery.of(context);
-    final narrow = media.size.width <= 350;
-    final horizontalInset = narrow ? 8.0 : 14.0;
-    final railWidth = narrow ? 104.0 : 118.0;
-    final availableHeight = media.size.height - media.padding.vertical - 48;
-    final sheetHeight = min(430.0, max(360.0, availableHeight));
-
-    return Padding(
-      padding: EdgeInsets.fromLTRB(horizontalInset, 20, horizontalInset, 14),
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: Container(
-          height: sheetHeight,
-          decoration: BoxDecoration(
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(30),
-              topRight: Radius.circular(30),
-              bottomLeft: Radius.circular(22),
-              bottomRight: Radius.circular(22),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.ink.withValues(alpha: 0.22),
-                blurRadius: 42,
-                offset: const Offset(0, 18),
-              ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(30),
-              topRight: Radius.circular(30),
-              bottomLeft: Radius.circular(22),
-              bottomRight: Radius.circular(22),
-            ),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: railWidth,
-                  child: DecoratedBox(
-                    decoration: const BoxDecoration(gradient: _iceGradient),
-                    child: Column(
-                      children: [
-                        Container(
-                          height: 64,
-                          alignment: Alignment.bottomLeft,
-                          padding: EdgeInsets.fromLTRB(
-                            narrow ? 12 : 14,
-                            0,
-                            8,
-                            12,
-                          ),
-                          decoration: BoxDecoration(
-                            border: Border(
-                              bottom: BorderSide(
-                                color: _iceInk.withValues(alpha: 0.16),
-                              ),
-                            ),
-                          ),
-                          child: const Text(
-                            'MODEL\nSELECT',
-                            style: TextStyle(
-                              color: _iceInk,
-                              fontFamily: 'monospace',
-                              fontSize: 10,
-                              fontWeight: FontWeight.w700,
-                              height: 1.15,
-                              letterSpacing: 1.25,
-                            ),
-                          ),
-                        ),
-                        for (final preference in ClaudeModelPreference.values)
-                          Expanded(
-                            child: _ModelIndexOption(
-                              preference: preference,
-                              selected: preference == selected,
-                              narrow: narrow,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-                Expanded(
-                  child: ColoredBox(
-                    color: AppColors.surfaceElevated,
-                    child: Column(
-                      children: [
-                        SizedBox(
-                          height: 64,
-                          child: DecoratedBox(
-                            decoration: const BoxDecoration(
-                              border: Border(
-                                bottom: BorderSide(color: AppColors.line),
-                              ),
-                            ),
-                            child: Padding(
-                              padding: EdgeInsets.only(
-                                left: narrow ? 16 : 20,
-                                right: 6,
-                              ),
-                              child: Row(
-                                children: [
-                                  const Expanded(
-                                    child: Text(
-                                      '选择模型',
-                                      style: TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w700,
-                                        letterSpacing: -0.35,
-                                      ),
-                                    ),
-                                  ),
-                                  IconButton(
-                                    tooltip: '关闭',
-                                    onPressed: () => Navigator.pop(context),
-                                    icon: const Icon(LucideIcons.x, size: 20),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                        Expanded(
-                          child: _ModelReadout(
-                            preference: selected,
-                            narrow: narrow,
-                          ),
-                        ),
-                        Container(
-                          constraints: const BoxConstraints(minHeight: 62),
-                          padding: EdgeInsets.fromLTRB(
-                            narrow ? 16 : 20,
-                            11,
-                            narrow ? 12 : 20,
-                            12,
-                          ),
-                          decoration: const BoxDecoration(
-                            border: Border(
-                              top: BorderSide(color: AppColors.line),
-                            ),
-                          ),
-                          child: const Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Icon(
-                                LucideIcons.info,
-                                size: 17,
-                                color: _iceAccent,
-                              ),
-                              SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  '仅影响之后发送的消息；当前运行不会切换模型。',
-                                  style: TextStyle(
-                                    color: AppColors.muted,
-                                    fontSize: 12,
-                                    height: 1.45,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _ModelIndexOption extends StatelessWidget {
-  const _ModelIndexOption({
-    required this.preference,
-    required this.selected,
-    required this.narrow,
-  });
-
-  final ClaudeModelPreference preference;
-  final bool selected;
-  final bool narrow;
-
-  @override
-  Widget build(BuildContext context) {
-    final foreground = selected
-        ? AppColors.surfaceElevated
-        : _ClaudeModelPickerSheet._iceInk;
-    final content = Material(
-      color: Colors.transparent,
-      child: InkWell(
-        key: ValueKey('model-option-${preference.wireName ?? 'follow'}'),
-        onTap: () => Navigator.pop(context, preference),
+    showDragHandle: true,
+    builder: (sheetContext) {
+      // Four option rows plus the header can outgrow the space left under
+      // the drag handle on short screens; keep the sheet within bounds and
+      // scroll instead of clipping the trailing rows.
+      final media = MediaQuery.of(sheetContext);
+      final available = media.size.height - media.padding.vertical - 120;
+      return SafeArea(
         child: Padding(
-          padding: EdgeInsets.fromLTRB(narrow ? 12 : 14, 8, narrow ? 9 : 11, 8),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      preference == ClaudeModelPreference.followComputer
-                          ? '电脑配置'
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: available),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const AppOptionSheetHeader(
+                    title: '选择模型',
+                    detail: '仅影响之后发送的消息；当前运行不会切换模型。',
+                  ),
+                  const SizedBox(height: 12),
+                  for (final preference in ClaudeModelPreference.values)
+                    AppOptionRow(
+                      key: ValueKey(
+                        'model-option-${preference.wireName ?? 'follow'}',
+                      ),
+                      title: preference == ClaudeModelPreference.followComputer
+                          ? '跟随电脑配置'
                           : preference.label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: foreground,
-                        fontSize: narrow ? 13 : 14,
-                        fontWeight: FontWeight.w700,
-                        height: 1.25,
+                      description: modelPreferenceOptionDescription(preference),
+                      selected: preference == selected,
+                      boxedLeading: false,
+                      showDisclosure: false,
+                      leading: PhosphorIcon(
+                        switch (preference) {
+                          ClaudeModelPreference.followComputer =>
+                            PhosphorIconsFill.monitor,
+                          ClaudeModelPreference.opus =>
+                            PhosphorIconsFill.diamond,
+                          ClaudeModelPreference.sonnet =>
+                            PhosphorIconsFill.sparkle,
+                          ClaudeModelPreference.fable =>
+                            PhosphorIconsFill.feather,
+                        },
+                        size: AppMark.size,
+                        color: switch (preference) {
+                          ClaudeModelPreference.followComputer => AppMark.slate,
+                          ClaudeModelPreference.opus => AppMark.azure,
+                          ClaudeModelPreference.sonnet => AppMark.teal,
+                          ClaudeModelPreference.fable => AppMark.emerald,
+                        },
                       ),
+                      onTap: () => Navigator.pop(sheetContext, preference),
                     ),
-                    const SizedBox(height: 3),
-                    Text(
-                      _modelPickerMeta(preference),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: foreground.withValues(alpha: 0.72),
-                        fontFamily: 'monospace',
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                        height: 1.2,
-                        letterSpacing: 0.55,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(width: 4),
-              SizedBox(
-                width: 18,
-                child: selected
-                    ? Icon(LucideIcons.check, size: 17, color: foreground)
-                    : null,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-
-    return Semantics(
-      button: true,
-      selected: selected,
-      label:
-          '${preference.label}。${modelPreferenceOptionDescription(preference)}',
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          border: Border(
-            bottom: BorderSide(
-              color: _ClaudeModelPickerSheet._iceInk.withValues(alpha: 0.13),
-            ),
-          ),
-        ),
-        child: selected
-            ? ClipPath(
-                clipper: const _ModelIndexSelectionClipper(),
-                child: ColoredBox(
-                  color: _ClaudeModelPickerSheet._iceDeep,
-                  child: content,
-                ),
-              )
-            : content,
-      ),
-    );
-  }
-}
-
-class _ModelReadout extends StatelessWidget {
-  const _ModelReadout({required this.preference, required this.narrow});
-
-  final ClaudeModelPreference preference;
-  final bool narrow;
-
-  @override
-  Widget build(BuildContext context) {
-    final word = preference == ClaudeModelPreference.followComputer
-        ? '电脑配置'
-        : preference.label.toUpperCase();
-    final watermark = preference == ClaudeModelPreference.followComputer
-        ? 'A'
-        : preference.label.substring(0, 1).toUpperCase();
-
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Positioned(
-          right: -8,
-          bottom: -30,
-          child: IgnorePointer(
-            child: Text(
-              watermark,
-              style: TextStyle(
-                fontSize: narrow ? 148 : 176,
-                fontWeight: FontWeight.w700,
-                height: 1,
-                foreground: Paint()
-                  ..style = PaintingStyle.stroke
-                  ..strokeWidth = 1
-                  ..color = _ClaudeModelPickerSheet._iceAccent.withValues(
-                    alpha: 0.11,
-                  ),
+                ],
               ),
             ),
           ),
         ),
-        Padding(
-          padding: EdgeInsets.fromLTRB(
-            narrow ? 16 : 20,
-            24,
-            narrow ? 12 : 20,
-            12,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: double.infinity,
-                child: FittedBox(
-                  fit: BoxFit.scaleDown,
-                  alignment: Alignment.centerLeft,
-                  child: Text(
-                    word,
-                    style: TextStyle(
-                      fontSize:
-                          preference == ClaudeModelPreference.followComputer
-                          ? (narrow ? 30 : 39)
-                          : (narrow ? 39 : 52),
-                      fontWeight: FontWeight.w700,
-                      height: 0.98,
-                      letterSpacing: -1.5,
-                    ),
-                  ),
-                ),
-              ),
-              Container(
-                width: 48,
-                height: 2,
-                margin: const EdgeInsets.only(top: 20, bottom: 14),
-                color: _ClaudeModelPickerSheet._iceAccent,
-              ),
-              Text(
-                modelPreferenceOptionDescription(preference),
-                style: TextStyle(
-                  color: AppColors.muted,
-                  fontSize: narrow ? 12 : 13,
-                  height: 1.62,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _ModelIndexSelectionClipper extends CustomClipper<Path> {
-  const _ModelIndexSelectionClipper();
-
-  @override
-  Path getClip(Size size) => Path()
-    ..moveTo(0, 0)
-    ..lineTo(size.width - 13, 0)
-    ..lineTo(size.width, size.height / 2)
-    ..lineTo(size.width - 13, size.height)
-    ..lineTo(0, size.height)
-    ..close();
-
-  @override
-  bool shouldReclip(covariant CustomClipper<Path> oldClipper) => false;
-}
-
-String _modelPickerMeta(ClaudeModelPreference preference) =>
-    switch (preference) {
-      ClaudeModelPreference.followComputer => 'AUTO',
-      ClaudeModelPreference.opus => 'DEEP',
-      ClaudeModelPreference.sonnet => 'BALANCED',
-      ClaudeModelPreference.fable => 'OVERRIDE',
-    };
-
-Future<void> showChatBackgroundSheet(
-  BuildContext context, {
-  required ChatBackgroundPreference preference,
-  required Future<ChatBackgroundPreference> Function(ChatBackgroundPreference)
-  onChanged,
-  required Future<ChatBackgroundPreference?> Function(double) onPickImage,
-}) {
-  return showModalBottomSheet<void>(
-    context: context,
-    backgroundColor: Colors.transparent,
-    barrierColor: _SettingsPalette.barrier,
-    isScrollControlled: true,
-    showDragHandle: false,
-    builder: (context) => ChatBackgroundSheet(
-      preference: preference,
-      onChanged: onChanged,
-      onPickImage: onPickImage,
-    ),
+      );
+    },
   );
 }
 
@@ -7083,12 +7391,14 @@ class ChatBackgroundSheet extends StatefulWidget {
     required this.preference,
     required this.onChanged,
     required this.onPickImage,
+    required this.onBack,
   });
 
   final ChatBackgroundPreference preference;
   final Future<ChatBackgroundPreference> Function(ChatBackgroundPreference)
   onChanged;
   final Future<ChatBackgroundPreference?> Function(double) onPickImage;
+  final VoidCallback onBack;
 
   @override
   State<ChatBackgroundSheet> createState() => _ChatBackgroundSheetState();
@@ -7158,156 +7468,147 @@ class _ChatBackgroundSheetState extends State<ChatBackgroundSheet> {
       ),
       ('砂岩', const ChatBackgroundPreference.preset(ChatBackgroundPreset.rose)),
     ];
-    return _SettingsModalSurface(
-      surfaceKey: const ValueKey('settings-background-surface'),
-      child: Column(
-        children: [
-          _SettingsPageHeader(
-            title: '聊天背景',
-            onBack: () => Navigator.pop(context),
-          ),
-          Expanded(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const _SettingsSectionLabel('实时预览'),
-                  const SizedBox(height: 10),
-                  ChatBackgroundPreview(preference: preference),
-                  const SizedBox(height: 22),
-                  const _SettingsSectionLabel('内置背景'),
-                  const SizedBox(height: 10),
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      final width = (constraints.maxWidth - 10) / 2;
-                      return Wrap(
-                        spacing: 10,
-                        runSpacing: 10,
-                        children: [
-                          for (final option in options)
-                            ChatBackgroundChoice(
-                              width: width,
-                              label: option.$1,
-                              preference: option.$2,
-                              selected:
-                                  preference.kind == option.$2.kind &&
-                                  preference.preset == option.$2.preset,
-                              onPressed: changing
-                                  ? null
-                                  : () => apply(option.$2),
-                            ),
-                        ],
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 20),
-                  _SettingsGroupCard(
-                    children: [
-                      _SettingsPreferenceRow(
-                        key: const ValueKey('pick-chat-background-image'),
-                        icon: LucideIcons.image,
-                        title: '从相册选择',
-                        subtitle: '使用这台手机上的图片作为聊天背景',
-                        trailing: changing
-                            ? const SizedBox.square(
-                                dimension: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(LucideIcons.chevronRight, size: 20),
-                        onTap: changing ? null : pickImage,
-                      ),
-                      if (preference.kind == ChatBackgroundKind.localImage) ...[
-                        const _SettingsDivider(),
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-                          child: Column(
-                            children: [
-                              Row(
-                                children: [
-                                  const Expanded(
-                                    child: Text(
-                                      '图片淡化',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ),
-                                  Text(
-                                    '${(preference.overlayOpacity * 100).round()}%',
-                                    style: const TextStyle(
-                                      color: _SettingsPalette.accent,
-                                      fontWeight: FontWeight.w700,
-                                      fontFeatures: [
-                                        FontFeature.tabularFigures(),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              Slider(
-                                key: const ValueKey(
-                                  'chat-background-opacity-slider',
-                                ),
-                                value: preference.overlayOpacity,
-                                min: 0.16,
-                                max: 0.64,
-                                divisions: 12,
-                                label:
-                                    '${(preference.overlayOpacity * 100).round()}%',
-                                onChanged: changing
-                                    ? null
-                                    : (value) => setState(
-                                        () => preference = preference.copyWith(
-                                          overlayOpacity: value,
-                                        ),
-                                      ),
-                                onChangeEnd: changing
-                                    ? null
-                                    : (value) => apply(
-                                        preference.copyWith(
-                                          overlayOpacity: value,
-                                        ),
-                                      ),
-                              ),
-                            ],
+    return Column(
+      key: const ValueKey('settings-background-surface'),
+      children: [
+        _SettingsPageHeader(title: '聊天背景', onBack: widget.onBack),
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const _SettingsSectionLabel('实时预览'),
+                const SizedBox(height: 10),
+                ChatBackgroundPreview(preference: preference),
+                const SizedBox(height: 22),
+                const _SettingsSectionLabel('内置背景'),
+                const SizedBox(height: 10),
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final width = (constraints.maxWidth - 10) / 2;
+                    return Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: [
+                        for (final option in options)
+                          ChatBackgroundChoice(
+                            width: width,
+                            label: option.$1,
+                            preference: option.$2,
+                            selected:
+                                preference.kind == option.$2.kind &&
+                                preference.preset == option.$2.preset,
+                            onPressed: changing ? null : () => apply(option.$2),
                           ),
-                        ),
                       ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 20),
+                _SettingsGroupCard(
+                  children: [
+                    _SettingsPreferenceRow(
+                      key: const ValueKey('pick-chat-background-image'),
+                      icon: LucideIcons.image,
+                      title: '从相册选择',
+                      subtitle: '使用这台手机上的图片作为聊天背景',
+                      trailing: changing
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(LucideIcons.chevronRight, size: 20),
+                      onTap: changing ? null : pickImage,
+                    ),
+                    if (preference.kind == ChatBackgroundKind.localImage) ...[
+                      const _SettingsDivider(),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+                        child: Column(
+                          children: [
+                            Row(
+                              children: [
+                                const Expanded(
+                                  child: Text(
+                                    '图片淡化',
+                                    style: TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ),
+                                Text(
+                                  '${(preference.overlayOpacity * 100).round()}%',
+                                  style: const TextStyle(
+                                    color: _SettingsPalette.accent,
+                                    fontWeight: FontWeight.w700,
+                                    fontFeatures: [
+                                      FontFeature.tabularFigures(),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Slider(
+                              key: const ValueKey(
+                                'chat-background-opacity-slider',
+                              ),
+                              value: preference.overlayOpacity,
+                              min: 0.16,
+                              max: 0.64,
+                              divisions: 12,
+                              label:
+                                  '${(preference.overlayOpacity * 100).round()}%',
+                              onChanged: changing
+                                  ? null
+                                  : (value) => setState(
+                                      () => preference = preference.copyWith(
+                                        overlayOpacity: value,
+                                      ),
+                                    ),
+                              onChangeEnd: changing
+                                  ? null
+                                  : (value) => apply(
+                                      preference.copyWith(
+                                        overlayOpacity: value,
+                                      ),
+                                    ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ],
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Center(
+                  child: TextButton.icon(
+                    key: const ValueKey('reset-chat-background'),
+                    onPressed:
+                        changing ||
+                            savedPreference.kind ==
+                                ChatBackgroundKind.defaultStyle
+                        ? null
+                        : () => apply(ChatBackgroundPreference.defaultValue),
+                    icon: const Icon(LucideIcons.rotateCcw, size: 17),
+                    label: const Text('恢复默认背景'),
                   ),
-                  const SizedBox(height: 8),
-                  Center(
-                    child: TextButton.icon(
-                      key: const ValueKey('reset-chat-background'),
-                      onPressed:
-                          changing ||
-                              savedPreference.kind ==
-                                  ChatBackgroundKind.defaultStyle
-                          ? null
-                          : () => apply(ChatBackgroundPreference.defaultValue),
-                      icon: const Icon(LucideIcons.rotateCcw, size: 17),
-                      label: const Text('恢复默认背景'),
-                    ),
+                ),
+                const SizedBox(height: 2),
+                const Text(
+                  '图片只保存在这台手机，不会上传到电脑端',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: _SettingsPalette.secondary,
+                    fontSize: 12,
                   ),
-                  const SizedBox(height: 2),
-                  const Text(
-                    '图片只保存在这台手机，不会上传到电脑端',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: _SettingsPalette.secondary,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
@@ -7436,7 +7737,10 @@ class ChatBackgroundPreview extends StatelessWidget {
                 children: [
                   Align(
                     alignment: Alignment.centerRight,
-                    child: _PreviewBubble(color: Color(0xFFDCEEFF), width: 150),
+                    child: _PreviewBubble(
+                      color: AppColors.userBubble,
+                      width: 150,
+                    ),
                   ),
                   SizedBox(height: 12),
                   Align(
@@ -7470,7 +7774,7 @@ class _PreviewBubble extends StatelessWidget {
       decoration: BoxDecoration(
         color: color,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _SettingsPalette.line),
+        border: Border.all(color: AppColors.bubbleOutline),
       ),
     );
   }
@@ -7516,6 +7820,7 @@ Future<AttachmentSource?> showAttachmentSourceSheet(
 }) {
   return showModalBottomSheet<AttachmentSource>(
     context: context,
+    sheetAnimationStyle: appOverlayAnimationStyle(context),
     showDragHandle: true,
     builder: (context) => SafeArea(
       child: Padding(
@@ -7558,6 +7863,7 @@ String formatAttachmentSize(int bytes) {
 Future<void> confirmLogout(BuildContext context, VoidCallback onLogout) async {
   final shouldLogout = await showDialog<bool>(
     context: context,
+    animationStyle: appOverlayAnimationStyle(context),
     builder: (context) => AlertDialog(
       title: const Text('退出配对'),
       content: const Text('退出后这台手机需要重新扫码。'),
@@ -7682,11 +7988,15 @@ class _TranscriptViewState extends State<TranscriptView> {
   bool bottomJumpScheduled = false;
   bool didInitialBottomJump = false;
   bool followingBottom = true;
+  int observedVisibleMessageCount = 0;
+  int observedTailSignature = 0;
+  int unreadOutputCount = 0;
 
   @override
   void initState() {
     super.initState();
     scrollController.addListener(updateBottomFollowing);
+    observeTranscript(reset: true);
     scheduleJump();
   }
 
@@ -7699,6 +8009,10 @@ class _TranscriptViewState extends State<TranscriptView> {
       rowKeys.clear();
       didInitialBottomJump = false;
       followingBottom = true;
+      unreadOutputCount = 0;
+      observeTranscript(reset: true);
+    } else {
+      observeTranscript();
     }
     scheduleJump();
     scheduleBottomJump(force: !didInitialBottomJump);
@@ -7714,7 +8028,71 @@ class _TranscriptViewState extends State<TranscriptView> {
 
   void updateBottomFollowing() {
     if (!scrollController.hasClients || bottomJumpScheduled) return;
-    followingBottom = scrollController.position.extentAfter <= 72;
+    final nextFollowing = scrollController.position.extentAfter <= 72;
+    if (followingBottom == nextFollowing) return;
+    followingBottom = nextFollowing;
+    if (nextFollowing && unreadOutputCount > 0) {
+      setState(() => unreadOutputCount = 0);
+    }
+  }
+
+  void observeTranscript({bool reset = false}) {
+    final rows = visibleRows();
+    final visibleCount = rows.length;
+    final last = rows.isEmpty ? null : rows.last.message;
+    final tailSignature = last == null
+        ? 0
+        : Object.hash(
+            last.role,
+            last.text,
+            last.attachments.length,
+            last.activityId,
+            last.activityKind,
+            last.activityState,
+            last.activityTool,
+            last.activityDetail,
+          );
+    if (!reset &&
+        !followingBottom &&
+        widget.jumpRequest == null &&
+        (visibleCount != observedVisibleMessageCount ||
+            tailSignature != observedTailSignature)) {
+      final added = max(0, visibleCount - observedVisibleMessageCount);
+      unreadOutputCount += added > 0
+          ? added
+          : unreadOutputCount == 0
+          ? 1
+          : 0;
+    }
+    observedVisibleMessageCount = visibleCount;
+    observedTailSignature = tailSignature;
+  }
+
+  Future<void> scrollToLatest() async {
+    if (unreadOutputCount > 0) {
+      setState(() => unreadOutputCount = 0);
+    }
+    followingBottom = true;
+    if (!scrollController.hasClients) return;
+    bottomJumpScheduled = true;
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final target = scrollController.position.maxScrollExtent;
+    try {
+      if (reduceMotion) {
+        scrollController.jumpTo(target);
+      } else {
+        await scrollController.animateTo(
+          target,
+          duration: AppMotion.standard,
+          curve: AppMotion.enter,
+        );
+      }
+    } finally {
+      bottomJumpScheduled = false;
+    }
+    if (!mounted || !scrollController.hasClients) return;
+    followingBottom = true;
+    scheduleBottomJump(force: true);
   }
 
   void scheduleBottomJump({required bool force}) {
@@ -7959,6 +8337,7 @@ class _TranscriptViewState extends State<TranscriptView> {
     if (widget.messages.isEmpty && widget.pendingPermissions.isEmpty) {
       scheduleJump();
       if (!widget.connected) return const SizedBox.expand();
+      final workspaceName = widget.session?.workspaceName;
       return LayoutBuilder(
         builder: (context, constraints) {
           return SingleChildScrollView(
@@ -7971,18 +8350,23 @@ class _TranscriptViewState extends State<TranscriptView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.start,
                   children: [
-                    const Text(
-                      '下一件事',
-                      style: TextStyle(
-                        fontSize: 16,
+                    Text(
+                      workspaceName == null ? '下一件事' : '接着处理 $workspaceName',
+                      style: const TextStyle(
+                        fontSize: 21,
                         fontWeight: FontWeight.w700,
-                        letterSpacing: -0.2,
+                        letterSpacing: -0.4,
                       ),
                     ),
                     const SizedBox(height: 4),
-                    const Text(
-                      '从下方输入，或先点一个快捷任务',
-                      style: TextStyle(color: AppColors.muted, fontSize: 14),
+                    Text(
+                      workspaceName == null
+                          ? '从下方输入，或先点一个快捷任务'
+                          : '从下方输入指令，或先点一个快捷任务',
+                      style: const TextStyle(
+                        color: AppColors.muted,
+                        fontSize: 14,
+                      ),
                     ),
                     const SizedBox(height: 12),
                     Row(
@@ -7990,13 +8374,19 @@ class _TranscriptViewState extends State<TranscriptView> {
                         Expanded(
                           flex: 7,
                           child: PromptChip(
-                            icon: LucideIcons.arrowUpRight,
+                            icon: LucideIcons.scanSearch,
                             label: '检查项目',
-                            caption: '看看哪里需要处理',
-                            onTap: () => widget.onFillPrompt('检查这个项目'),
+                            caption: workspaceName == null
+                                ? '看看哪里需要处理'
+                                : '检查 $workspaceName',
+                            onTap: () => widget.onFillPrompt(
+                              workspaceName == null
+                                  ? '检查这个项目'
+                                  : '检查当前项目并总结需要处理的地方',
+                            ),
                           ),
                         ),
-                        const SizedBox(width: 9),
+                        const SizedBox(width: 8),
                         Expanded(
                           flex: 5,
                           child: PromptChip(
@@ -8032,82 +8422,162 @@ class _TranscriptViewState extends State<TranscriptView> {
       ...widget.pendingPermissions,
     ];
     final workspaceDir = widget.session?.workspaceDir;
-    final lastVisible = visibleMessages.isNotEmpty
-        ? visibleMessages.last.message
-        : null;
-    return ListView.builder(
-      key: const ValueKey('transcript-list'),
-      controller: scrollController,
-      // Tall bottom padding: last bubble can rest above the dock, while
-      // earlier lines still scroll *under* the floating composer.
-      padding: const EdgeInsets.fromLTRB(0, 8, 0, 188),
-      // Keep prefetch small so long markdown rows are not all built at once.
-      cacheExtent: 180,
-      addAutomaticKeepAlives: false,
-      addRepaintBoundaries: true,
-      itemCount: items.length,
-      itemBuilder: (context, index) {
-        final item = items[index];
-        Widget row;
-        int? rawIndex;
-        if (item is _VisibleTranscriptRow) {
-          rawIndex = item.rawIndex;
-          final highlighted = highlightedRawIndex == rawIndex;
-          row = MessageBlock(
-            key: ValueKey(transcriptRowKey(item.message, rawIndex)),
-            message: item.message,
-            session: widget.session,
-            activeSessionId: widget.activeSessionId,
-            runStartedAt: widget.runStartedAt,
-            searchHighlighted: highlighted,
-            streaming:
-                widget.running &&
-                item.message.role == MessageRole.assistant &&
-                identical(item.message, lastVisible),
-          );
-          if (highlighted) {
-            row = Semantics(
-              key: ValueKey('transcript-search-hit-$rawIndex'),
-              label: '搜索命中消息',
-              child: row,
-            );
-          }
-        } else if (item is _ActivityGroupRow) {
-          row = ActivityTimelineCard(
-            key: ValueKey('activity-timeline-${item.rawIndex}'),
-            activities: [for (final groupRow in item.rows) groupRow.message],
-          );
-        } else {
-          final request = item as RemotePermissionRequest;
-          row = PermissionRequestCard(
-            key: ValueKey('perm-${request.requestId}'),
-            request: request,
-            responding: widget.respondingPermissionIds.contains(
-              request.requestId,
-            ),
-            connected: widget.connected,
-            workspaceDir: workspaceDir,
-            onAllow: () => widget.onPermissionAllow(request),
-            onDeny: () => widget.onPermissionDeny(request),
-          );
-        }
-        Object gapItem(Object value) {
-          if (value is _VisibleTranscriptRow) return value.message;
-          if (value is _ActivityGroupRow) return value.message;
-          return value;
-        }
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final newOutputLabel =
+        '$unreadOutputCount 条新输出 · ${widget.running ? '仍在运行' : '已更新'}';
+    return Stack(
+      children: [
+        Positioned.fill(
+          // Scroll relayout/repaint stops here: per-frame scrolling must not
+          // re-record the composer, pill, or background display lists.
+          child: RepaintBoundary(
+            child: ListView.builder(
+              key: const ValueKey('transcript-list'),
+              controller: scrollController,
+              // Tall bottom padding: last bubble can rest above the dock, while
+              // earlier lines still scroll *under* the floating composer.
+              padding: const EdgeInsets.fromLTRB(0, 8, 0, 188),
+              // Keep prefetch small so long markdown rows are not all built at once.
+              cacheExtent: 180,
+              addAutomaticKeepAlives: false,
+              addRepaintBoundaries: true,
+              itemCount: items.length,
+              itemBuilder: (context, index) {
+                final item = items[index];
+                Widget row;
+                int? rawIndex;
+                if (item is _VisibleTranscriptRow) {
+                  rawIndex = item.rawIndex;
+                  final highlighted = highlightedRawIndex == rawIndex;
+                  row = MessageBlock(
+                    key: ValueKey(transcriptRowKey(item.message, rawIndex)),
+                    message: item.message,
+                    session: widget.session,
+                    activeSessionId: widget.activeSessionId,
+                    runStartedAt: widget.runStartedAt,
+                    searchHighlighted: highlighted,
+                  );
+                  if (highlighted) {
+                    row = Semantics(
+                      key: ValueKey('transcript-search-hit-$rawIndex'),
+                      label: '搜索命中消息',
+                      child: row,
+                    );
+                  }
+                } else if (item is _ActivityGroupRow) {
+                  row = ActivityTimelineCard(
+                    key: ValueKey('activity-timeline-${item.rawIndex}'),
+                    activities: [
+                      for (final groupRow in item.rows) groupRow.message,
+                    ],
+                  );
+                } else {
+                  final request = item as RemotePermissionRequest;
+                  row = PermissionRequestCard(
+                    key: ValueKey('perm-${request.requestId}'),
+                    request: request,
+                    responding: widget.respondingPermissionIds.contains(
+                      request.requestId,
+                    ),
+                    connected: widget.connected,
+                    workspaceDir: workspaceDir,
+                    onAllow: () => widget.onPermissionAllow(request),
+                    onDeny: () => widget.onPermissionDeny(request),
+                  );
+                }
+                Object gapItem(Object value) {
+                  if (value is _VisibleTranscriptRow) return value.message;
+                  if (value is _ActivityGroupRow) return value.message;
+                  return value;
+                }
 
-        final gap = index == items.length - 1
-            ? 0.0
-            : transcriptGapBetween(gapItem(item), gapItem(items[index + 1]));
-        // Spacing without ListView.separated (one less child per gap).
-        final paddedRow = Padding(
-          padding: EdgeInsets.only(bottom: gap),
-          child: row,
-        );
-        if (rawIndex == null) return paddedRow;
-        return SizedBox(key: rowKeys[rawIndex], child: paddedRow);
-      },
+                final gap = index == items.length - 1
+                    ? 0.0
+                    : transcriptGapBetween(
+                        gapItem(item),
+                        gapItem(items[index + 1]),
+                      );
+                // Spacing without ListView.separated (one less child per gap).
+                final paddedRow = Padding(
+                  padding: EdgeInsets.only(bottom: gap),
+                  child: row,
+                );
+                if (rawIndex == null) return paddedRow;
+                return SizedBox(key: rowKeys[rawIndex], child: paddedRow);
+              },
+            ),
+          ),
+        ),
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 196,
+          child: Center(
+            child: AnimatedSwitcher(
+              duration: reduceMotion ? Duration.zero : AppMotion.fast,
+              reverseDuration: reduceMotion ? Duration.zero : AppMotion.fast,
+              switchInCurve: AppMotion.enter,
+              switchOutCurve: AppMotion.exit,
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: ScaleTransition(
+                  scale: Tween<double>(begin: 0.96, end: 1).animate(animation),
+                  child: child,
+                ),
+              ),
+              child: unreadOutputCount == 0
+                  ? const SizedBox.shrink()
+                  : Semantics(
+                      key: const ValueKey('transcript-new-output'),
+                      liveRegion: true,
+                      button: true,
+                      label: '$newOutputLabel，返回最新输出',
+                      onTap: scrollToLatest,
+                      child: ExcludeSemantics(
+                        child: SignalPressEffect(
+                          child: Material(
+                            color: AppColors.ink,
+                            borderRadius: BorderRadius.circular(AppRadii.pill),
+                            child: InkWell(
+                              onTap: scrollToLatest,
+                              borderRadius: BorderRadius.circular(
+                                AppRadii.pill,
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 14,
+                                  vertical: 10,
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(
+                                      LucideIcons.arrowDown,
+                                      size: 16,
+                                      color: AppColors.onCta,
+                                    ),
+                                    const SizedBox(width: 7),
+                                    Text(
+                                      newOutputLabel,
+                                      style: const TextStyle(
+                                        color: AppColors.onCta,
+                                        fontSize: 12,
+                                        height: 1.25,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -8143,8 +8613,6 @@ class PermissionRequestCard extends StatelessWidget {
     return '允许 Claude 使用 $tool？';
   }
 
-  String get _scopeLabel => '仅本次请求';
-
   String get _impactLabel {
     final tool = request.toolName.toLowerCase();
     if (tool.contains('write') || tool.contains('edit')) {
@@ -8164,12 +8632,7 @@ class PermissionRequestCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final enabled = connected && !responding;
-    final tool = request.toolName.toLowerCase();
-    final riskTone = tool.contains('write') || tool.contains('edit')
-        ? AppColors.danger
-        : tool.contains('bash') || tool.contains('shell')
-        ? AppColors.terracottaDeep
-        : AppColors.terracottaDeep;
+    final riskTone = permissionRiskTone(request.toolName);
     final summary = request.detail?.trim().isNotEmpty == true
         ? request.detail!.trim()
         : (request.description?.trim().isNotEmpty == true
@@ -8310,28 +8773,21 @@ class PermissionRequestCard extends StatelessWidget {
                 ),
               ),
             ],
-            const SizedBox(height: 14),
-            _PermissionSectionLabel('授权范围'),
-            const SizedBox(height: 6),
-            Text(
-              _scopeLabel,
-              style: const TextStyle(
-                color: AppColors.ink,
-                fontSize: 13,
-                height: 1.45,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
             const SizedBox(height: 16),
             SizedBox(
               height: 52,
               child: SignalPressEffect(
                 enabled: enabled,
+                scaleOnPress: false,
                 child: FilledButton(
                   onPressed: enabled ? onAllow : null,
                   style: FilledButton.styleFrom(
-                    backgroundColor: AppColors.cta,
-                    foregroundColor: AppColors.onCta,
+                    backgroundColor: riskTone == AppColors.danger
+                        ? AppColors.warning
+                        : AppColors.cta,
+                    foregroundColor: riskTone == AppColors.danger
+                        ? AppColors.surfaceElevated
+                        : AppColors.onCta,
                     disabledBackgroundColor: AppColors.control,
                     disabledForegroundColor: AppColors.inactive,
                     minimumSize: const Size.fromHeight(52),
@@ -8345,6 +8801,7 @@ class PermissionRequestCard extends StatelessWidget {
               height: 48,
               child: SignalPressEffect(
                 enabled: enabled,
+                scaleOnPress: false,
                 child: OutlinedButton(
                   onPressed: enabled ? onDeny : null,
                   style: OutlinedButton.styleFrom(
@@ -8362,6 +8819,27 @@ class PermissionRequestCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Shared risk semantics for permission requests. Command execution and
+/// file mutation can change the desktop host, so they carry danger weight;
+/// read-only tools stay calm. Matches the card's impact copy (_impactLabel).
+Color permissionRiskTone(String toolName) {
+  final tool = toolName.toLowerCase();
+  final mutating =
+      tool.contains('write') ||
+      tool.contains('edit') ||
+      tool.contains('bash') ||
+      tool.contains('shell') ||
+      tool.contains('command');
+  if (mutating) return AppColors.danger;
+  final reading =
+      tool.contains('read') ||
+      tool.contains('glob') ||
+      tool.contains('grep') ||
+      tool.contains('search') ||
+      tool.contains('list');
+  return reading ? AppColors.warning : AppColors.accentStrong;
 }
 
 class _PermissionSectionLabel extends StatelessWidget {
@@ -8393,7 +8871,7 @@ String transcriptRowKey(TranscriptMessage message, int index) {
 }
 
 Color transcriptSearchHighlightFill(Color base) {
-  return Color.alphaBlend(AppColors.terracotta.withValues(alpha: 0.18), base);
+  return Color.alphaBlend(AppColors.accent.withValues(alpha: 0.18), base);
 }
 
 double transcriptGapBetween(Object current, Object next) {
@@ -8427,11 +8905,11 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
     letterSpacing: 0.1,
   ),
   pPadding: EdgeInsets.zero,
-  a: const TextStyle(color: AppColors.terracottaDeep),
+  a: const TextStyle(color: AppColors.accentStrong),
   code: const TextStyle(
     fontFamily: AppTypography.codeFontFamily,
     fontFamilyFallback: AppTypography.codeFontFamilyFallback,
-    fontSize: 12.5,
+    fontSize: 12,
     height: 1.5,
     color: AppColors.ink,
   ),
@@ -8443,28 +8921,28 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
     height: 1.3,
     color: AppColors.ink,
   ),
-  h1Padding: const EdgeInsets.only(top: 8, bottom: 2),
+  h1Padding: const EdgeInsets.only(top: 12, bottom: 4),
   h2: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
-    fontSize: 18.5,
+    fontSize: 18,
     fontWeight: FontWeight.w700,
     height: 1.35,
     color: AppColors.ink,
   ),
-  h2Padding: const EdgeInsets.only(top: 6, bottom: 2),
+  h2Padding: const EdgeInsets.only(top: 10, bottom: 4),
   h3: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
-    fontSize: 16.5,
+    fontSize: 16,
     fontWeight: FontWeight.w700,
     height: 1.4,
     color: AppColors.ink,
   ),
-  h3Padding: const EdgeInsets.only(top: 4),
-  blockSpacing: 5,
-  listIndent: 20,
-  listBulletPadding: const EdgeInsets.only(right: 6),
+  h3Padding: const EdgeInsets.only(top: 8, bottom: 4),
+  blockSpacing: 8,
+  listIndent: 24,
+  listBulletPadding: const EdgeInsets.only(right: 8),
   // Intrinsic widths keep every column readable (no char-per-line squeezing);
   // flutter_markdown wraps wide tables in a horizontal scroll automatically.
   // Tables are rare and row-bounded, so intrinsic measurement cost is fine
@@ -8473,7 +8951,7 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
   tableCellsPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
   blockquotePadding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
   blockquoteDecoration: const BoxDecoration(
-    border: Border(left: BorderSide(color: AppColors.terracotta, width: 1)),
+    border: Border(left: BorderSide(color: AppColors.accent, width: 1)),
   ),
   horizontalRuleDecoration: const BoxDecoration(
     border: Border(top: BorderSide(color: AppColors.line)),
@@ -8572,7 +9050,6 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
       decoration: BoxDecoration(
         color: AppColors.control,
         borderRadius: BorderRadius.circular(AppRadii.control),
-        border: Border.all(color: AppColors.line),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -8598,7 +9075,9 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
                   ),
                 ),
                 AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 150),
+                  duration: MediaQuery.disableAnimationsOf(context)
+                      ? Duration.zero
+                      : const Duration(milliseconds: 150),
                   transitionBuilder: (child, animation) =>
                       FadeTransition(opacity: animation, child: child),
                   child: copied
@@ -8607,7 +9086,7 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
                           key: ValueKey('code-copied-label'),
                           style: TextStyle(
                             fontSize: 11,
-                            color: AppColors.terracottaDeep,
+                            color: AppColors.accentStrong,
                             fontWeight: FontWeight.w600,
                           ),
                         )
@@ -8633,7 +9112,7 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
               style: const TextStyle(
                 fontFamily: AppTypography.codeFontFamily,
                 fontFamilyFallback: AppTypography.codeFontFamilyFallback,
-                fontSize: 12.5,
+                fontSize: 12,
                 height: 1.5,
                 color: AppColors.ink,
               ),
@@ -8692,6 +9171,51 @@ Future<void> openSearchSource(BuildContext context, String? href) async {
   }
 }
 
+/// Timeline furniture: a centered muted line between hairlines, so host and
+/// system notices read as events between turns rather than turn content.
+class _SystemNotice extends StatelessWidget {
+  const _SystemNotice({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      child: Row(
+        children: [
+          const Expanded(
+            child: SizedBox(
+              height: 1,
+              child: ColoredBox(color: AppColors.line),
+            ),
+          ),
+          Flexible(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: SelectableText(
+                text,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 12,
+                  height: 1.4,
+                  color: AppColors.muted,
+                ),
+              ),
+            ),
+          ),
+          const Expanded(
+            child: SizedBox(
+              height: 1,
+              child: ColoredBox(color: AppColors.line),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class MessageBlock extends StatelessWidget {
   const MessageBlock({
     super.key,
@@ -8699,7 +9223,6 @@ class MessageBlock extends StatelessWidget {
     this.session,
     this.activeSessionId,
     this.runStartedAt,
-    this.streaming = false,
     this.searchHighlighted = false,
   });
 
@@ -8707,18 +9230,12 @@ class MessageBlock extends StatelessWidget {
   final SavedSession? session;
   final String? activeSessionId;
   final DateTime? runStartedAt;
-  final bool streaming;
   final bool searchHighlighted;
 
   @override
   Widget build(BuildContext context) {
     if (message.role == MessageRole.system) {
-      return Center(
-        child: Text(
-          message.text,
-          style: const TextStyle(fontSize: 12, color: AppColors.muted),
-        ),
-      );
+      return _SystemNotice(text: message.text);
     }
 
     if (message.role == MessageRole.activity) {
@@ -8730,65 +9247,101 @@ class MessageBlock extends StatelessWidget {
       if (message.text.trim().isEmpty) {
         return const SizedBox.shrink();
       }
-      // Streaming / plain text: cheap Text. Markdown only when markers present.
+      // Plain text stays Text. Markdown (including while streaming) uses
+      // MarkdownBody so lists/headings/code don't pop in when the turn stops.
       final Widget assistantBody;
-      if (streaming || assistantTextLooksPlain(message.text)) {
+      if (assistantTextLooksPlain(message.text)) {
         assistantBody = Text(message.text, style: _kAssistantPlainStyle);
       } else {
-        assistantBody = MarkdownBody(
-          data: message.text,
-          selectable: false,
-          softLineBreak: true,
-          onTapLink: (_, href, _) => unawaited(openSearchSource(context, href)),
-          styleSheet: kAssistantMarkdownStyleSheet,
-          builders: <String, MarkdownElementBuilder>{
-            'pre': _CodeBlockBuilder(),
-          },
-        );
+        assistantBody = _CachedMarkdownBody(data: message.text);
       }
-      return AssistantBubbleFrame(
-        bubbleKey: const ValueKey('assistant-message'),
-        searchHighlighted: searchHighlighted,
-        child: assistantBody,
+      return Semantics(
+        container: true,
+        label: '助手回复',
+        child: AssistantBubbleFrame(
+          bubbleKey: const ValueKey('assistant-message'),
+          searchHighlighted: searchHighlighted,
+          child: assistantBody,
+        ),
       );
     }
 
     final maxWidth = MediaQuery.sizeOf(context).width * 0.88;
-    return Align(
-      alignment: Alignment.centerRight,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxWidth),
-        child: DecoratedBox(
-          key: const ValueKey('user-message'),
-          decoration: BoxDecoration(
-            color: searchHighlighted
-                ? transcriptSearchHighlightFill(AppColors.userBubble)
-                : AppColors.userBubble,
-            borderRadius: const BorderRadius.all(
-              Radius.circular(AppRadii.bubble),
+    return Semantics(
+      container: true,
+      label: '你',
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxWidth: maxWidth),
+          child: DecoratedBox(
+            key: const ValueKey('user-message'),
+            decoration: BoxDecoration(
+              color: searchHighlighted
+                  ? transcriptSearchHighlightFill(AppColors.userBubble)
+                  : AppColors.userBubble,
+              borderRadius: const BorderRadius.all(
+                Radius.circular(AppRadii.bubble),
+              ),
+              border: Border.all(color: AppColors.bubbleOutline),
             ),
-          ),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 7, 16, 7),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (message.attachments.isNotEmpty)
-                  AttachmentMessageGrid(
-                    attachments: message.attachments,
-                    session: session,
-                    activeSessionId: activeSessionId,
-                  ),
-                if (message.attachments.isNotEmpty && message.text.isNotEmpty)
-                  const SizedBox(height: 9),
-                if (message.text.isNotEmpty)
-                  Text(message.text, style: _kUserBubbleStyle),
-              ],
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (message.attachments.isNotEmpty)
+                    AttachmentMessageGrid(
+                      attachments: message.attachments,
+                      session: session,
+                      activeSessionId: activeSessionId,
+                    ),
+                  if (message.attachments.isNotEmpty && message.text.isNotEmpty)
+                    const SizedBox(height: 8),
+                  if (message.text.isNotEmpty)
+                    Text(message.text, style: _kUserBubbleStyle),
+                ],
+              ),
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+// Transcript rows rebuild on every stream flush and WebSocket event. Keeping
+// the MarkdownBody instance identical across builds while the text is unchanged
+// lets Flutter skip the whole markdown subtree; flutter_markdown still reparses
+// through its own didUpdateWidget when data actually changes.
+class _CachedMarkdownBody extends StatefulWidget {
+  const _CachedMarkdownBody({required this.data});
+
+  final String data;
+
+  @override
+  State<_CachedMarkdownBody> createState() => _CachedMarkdownBodyState();
+}
+
+class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
+  Widget? cached;
+
+  @override
+  void didUpdateWidget(covariant _CachedMarkdownBody oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.data != oldWidget.data) cached = null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return cached ??= MarkdownBody(
+      data: widget.data,
+      selectable: false,
+      softLineBreak: true,
+      onTapLink: (_, href, _) => unawaited(openSearchSource(context, href)),
+      styleSheet: kAssistantMarkdownStyleSheet,
+      builders: <String, MarkdownElementBuilder>{'pre': _CodeBlockBuilder()},
     );
   }
 }
@@ -8850,6 +9403,16 @@ class RemoteAttachmentTile extends StatelessWidget {
             fit: BoxFit.cover,
             cacheWidth: 720,
             semanticLabel: attachment.name,
+            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+              if (frame == null && !wasSynchronouslyLoaded) return child;
+              return DecoratedBox(
+                position: DecorationPosition.foreground,
+                decoration: BoxDecoration(
+                  border: Border.all(color: const Color(0x1A000000)),
+                ),
+                child: child,
+              );
+            },
             errorBuilder: (_, _, _) => AttachmentFileTile(
               name: attachment.name,
               size: attachment.size,
@@ -8942,8 +9505,8 @@ class AssistantBubbleFrame extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Narrower than the column: extra paper margin on each side keeps the
-    // surface card from reading as a full-bleed band.
+    // Hug short replies. Long ones wrap at the column (minus this inset) so
+    // the paper plate is not a full-bleed band.
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 6),
       child: Align(
@@ -8952,17 +9515,18 @@ class AssistantBubbleFrame extends StatelessWidget {
           key: bubbleKey,
           decoration: BoxDecoration(
             color: searchHighlighted
-                ? transcriptSearchHighlightFill(AppColors.surface)
-                : AppColors.surface,
+                ? transcriptSearchHighlightFill(AppColors.surfaceElevated)
+                : AppColors.surfaceElevated,
             borderRadius: const BorderRadius.all(
               Radius.circular(AppRadii.bubble),
             ),
+            border: Border.all(color: AppColors.bubbleOutline),
           ),
           child: Padding(
             padding: compact
                 ? const EdgeInsets.fromLTRB(14, 8, 16, 8)
                 : const EdgeInsets.fromLTRB(16, 9, 16, 9),
-            child: SizedBox(width: double.infinity, child: child),
+            child: child,
           ),
         ),
       ),
@@ -9029,7 +9593,7 @@ class ActivityBlock extends StatelessWidget {
     }
 
     final railTone = switch (message.activityState) {
-      ActivityState.running => AppColors.terracotta,
+      ActivityState.running => AppColors.accent,
       ActivityState.done => AppColors.inactive,
       ActivityState.error => AppColors.danger,
       ActivityState.stopped => AppColors.muted,
@@ -9053,7 +9617,7 @@ class ActivityBlock extends StatelessWidget {
         dimension: 16,
         child: CircularProgressIndicator(
           strokeWidth: 1.8,
-          color: AppColors.terracotta,
+          color: AppColors.accent,
         ),
       ),
       ActivityState.done => const Icon(
@@ -9242,7 +9806,7 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
                       const Icon(
                         LucideIcons.history,
                         size: 13,
-                        color: AppColors.terracottaDeep,
+                        color: AppColors.accentStrong,
                       ),
                       const SizedBox(width: 6),
                       Text(
@@ -9250,7 +9814,7 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
                         style: const TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
-                          color: AppColors.terracottaDeep,
+                          color: AppColors.accentStrong,
                         ),
                       ),
                     ],
@@ -9362,7 +9926,7 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
         dimension: 15,
         child: CircularProgressIndicator(
           strokeWidth: 1.8,
-          color: AppColors.terracotta,
+          color: AppColors.accent,
         ),
       ),
       ActivityState.done => const Icon(
@@ -9458,9 +10022,17 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
 
   @override
   Widget build(BuildContext context) {
+    // Long waits need their own stages, or a 4-minute run feels identical
+    // to 40 seconds and the user assumes it hung. The label itself carries
+    // the phase; the animation stays unchanged (and frozen under reduce
+    // motion).
     final elapsedLabel = elapsedSeconds <= 0
         ? '本轮刚开始'
-        : '本轮已运行 $elapsedSeconds 秒';
+        : elapsedSeconds < 90
+        ? '本轮已运行 $elapsedSeconds 秒'
+        : elapsedSeconds < 300
+        ? '本轮已运行 ${(elapsedSeconds / 60).toStringAsFixed(1)} 分钟'
+        : '本轮已运行 ${(elapsedSeconds / 60).round()} 分钟，仍在思考';
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -9468,16 +10040,23 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
           liveRegion: true,
           label: '正在思考',
           excludeSemantics: true,
-          child: AnimatedBuilder(
-            animation: animation,
-            builder: (context, _) {
-              final frame = (animation.value * 12).floor().clamp(0, 11).toInt();
-              return CustomPaint(
-                key: const ValueKey('thinking-icon'),
-                size: const Size.square(16),
-                painter: _ThinkingBloomPainter(frame),
-              );
-            },
+          // Boundary keeps the per-frame pulse repaint inside this 16x16
+          // icon instead of re-recording the transcript row.
+          child: RepaintBoundary(
+            child: AnimatedBuilder(
+              animation: animation,
+              builder: (context, _) {
+                final frame = (animation.value * 12)
+                    .floor()
+                    .clamp(0, 11)
+                    .toInt();
+                return CustomPaint(
+                  key: const ValueKey('thinking-icon'),
+                  size: const Size.square(16),
+                  painter: _ThinkingBloomPainter(frame),
+                );
+              },
+            ),
           ),
         ),
         const SizedBox(width: 7),
@@ -9506,12 +10085,21 @@ class _ThinkingBloomPainter extends CustomPainter {
 
   final int frame;
 
+  // The controller ticks continuously; the bloom only changes per frame step.
+  // Equality lets CustomPaint skip repaint on identical frames.
+  @override
+  bool operator ==(Object other) =>
+      other is _ThinkingBloomPainter && other.frame == frame;
+
+  @override
+  int get hashCode => frame;
+
   @override
   void paint(Canvas canvas, Size size) {
     final stage = frame <= 5 ? frame : 11 - frame;
     final center = size.center(Offset.zero);
     if (stage == 0) {
-      canvas.drawCircle(center, 1.45, Paint()..color = AppColors.terracotta);
+      canvas.drawCircle(center, 1.45, Paint()..color = AppColors.accent);
       return;
     }
 
@@ -9534,7 +10122,7 @@ class _ThinkingBloomPainter extends CustomPainter {
       _ => 0.0,
     };
     final paint = Paint()
-      ..color = AppColors.terracotta
+      ..color = AppColors.accent
       ..strokeCap = StrokeCap.round
       ..strokeWidth = stage == 5 ? 1.9 : 1.55;
 
@@ -9548,7 +10136,7 @@ class _ThinkingBloomPainter extends CustomPainter {
         paint,
       );
     }
-    canvas.drawCircle(center, 1.05, Paint()..color = AppColors.terracotta);
+    canvas.drawCircle(center, 1.05, Paint()..color = AppColors.accent);
   }
 
   @override
@@ -9634,9 +10222,7 @@ class PromptBar extends StatelessWidget {
       top: const Radius.circular(AppRadii.composerFloat),
       bottom: Radius.circular(keyboardVisible ? 0 : AppRadii.composerFloat),
     );
-    final composerShadow = keyboardVisible
-        ? const <BoxShadow>[]
-        : AppElevation.floatingComposer();
+    final composerElevated = !keyboardVisible;
     final console =
         presentation ??
         ConsolePresentation.resolve(
@@ -9650,57 +10236,57 @@ class PromptBar extends StatelessWidget {
       return Semantics(
         button: true,
         label: '重新连接电脑',
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onReconnect,
+        child: SignalLiquidGlass(
+          key: const ValueKey('composer'),
+          blurSigma: 8,
+          decoration: AppLiquidGlass.strong(
             borderRadius: composerRadius,
-            child: Ink(
-              key: const ValueKey('composer'),
-              width: double.infinity,
-              height: 64,
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              decoration: BoxDecoration(
-                color: AppColors.surfaceElevated,
-                borderRadius: composerRadius,
-                border: Border.all(
-                  color: AppColors.line.withValues(alpha: 0.40),
-                ),
-                boxShadow: composerShadow,
-              ),
-              child: Row(
-                children: [
-                  Container(
-                    width: AppSizes.iconControl,
-                    height: AppSizes.iconControl,
-                    decoration: BoxDecoration(
-                      color: AppColors.control,
-                      borderRadius: BorderRadius.circular(AppRadii.control),
-                    ),
-                    alignment: Alignment.center,
-                    child: const Icon(
-                      LucideIcons.refreshCw,
-                      size: 22,
-                      color: AppColors.ink,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Text(
-                      '重新连接',
-                      style: TextStyle(
+            elevated: composerElevated,
+            backdrop: true,
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: onReconnect,
+              borderRadius: composerRadius,
+              child: Ink(
+                width: double.infinity,
+                height: 64,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: Row(
+                  children: [
+                    Container(
+                      width: AppSizes.iconControl,
+                      height: AppSizes.iconControl,
+                      decoration: BoxDecoration(
+                        color: AppColors.glassControl,
+                        borderRadius: BorderRadius.circular(AppRadii.control),
+                      ),
+                      alignment: Alignment.center,
+                      child: const Icon(
+                        LucideIcons.refreshCw,
+                        size: 22,
                         color: AppColors.ink,
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
                       ),
                     ),
-                  ),
-                  const Icon(
-                    LucideIcons.chevronRight,
-                    size: 20,
-                    color: AppColors.muted,
-                  ),
-                ],
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        '重新连接',
+                        style: TextStyle(
+                          color: AppColors.ink,
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    const Icon(
+                      LucideIcons.chevronRight,
+                      size: 20,
+                      color: AppColors.muted,
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -9713,252 +10299,401 @@ class PromptBar extends StatelessWidget {
         // Keep composer from exploding on huge a11y scales, but honor small reading size.
         textScaler: MediaQuery.textScalerOf(
           context,
-        ).clamp(minScaleFactor: 0.85, maxScaleFactor: 1.3),
+        ).clamp(minScaleFactor: 0.85, maxScaleFactor: 2.0),
       ),
-      child: ValueListenableBuilder<TextEditingValue>(
-        valueListenable: controller,
-        builder: (context, value, _) {
-          final canSend =
-              (value.text.trim().isNotEmpty || attachments.isNotEmpty) &&
-              console.canCompose;
-          final query = commandQuery(value.text);
-          final matchingCommands = query == null
-              ? const <String>[]
-              : filterCommands(commands, query);
-          final showSuggestions = query != null && console.canCompose;
-
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (showSuggestions) ...[
-                Flexible(
-                  fit: FlexFit.loose,
-                  child: CommandSuggestions(
-                    commands: matchingCommands,
-                    loading: commands.isEmpty,
-                    maxHeight: suggestionMaxHeight,
-                    onSelected: onCommandSelected,
-                  ),
+      child: Focus(
+        canRequestFocus: false,
+        includeSemantics: false,
+        child: Builder(
+          builder: (context) {
+            final composerFocused = Focus.of(context).hasFocus;
+            final reduceMotion = MediaQuery.disableAnimationsOf(context);
+            final waiting =
+                console.phase == ConsolePhase.uploading ||
+                console.phase == ConsolePhase.stopping;
+            final stoppingAction = console.showsStop && !waiting;
+            final primaryTooltip = waiting
+                ? console.phase == ConsolePhase.uploading
+                      ? '正在上传附件'
+                      : '等待主机确认停止'
+                : stoppingAction
+                ? console.stopTooltip
+                : '发送';
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: controller,
+                  builder: (context, value, _) {
+                    final query = commandQuery(value.text);
+                    if (query == null || !console.canCompose) {
+                      return const SizedBox.shrink();
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: CommandSuggestions(
+                        commands: filterCommands(commands, query),
+                        loading: commands.isEmpty,
+                        maxHeight: suggestionMaxHeight,
+                        onSelected: onCommandSelected,
+                      ),
+                    );
+                  },
                 ),
-                const SizedBox(height: 6),
-              ],
-              Container(
-                key: const ValueKey('composer'),
-                constraints: const BoxConstraints(minHeight: AppSizes.composer),
-                padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
-                decoration: BoxDecoration(
-                  // Opaque dock: translucent blend over scrolling text tanks FPS.
-                  color: AppColors.surfaceElevated,
-                  borderRadius: composerRadius,
-                  border: Border.all(
-                    color: AppColors.line.withValues(alpha: 0.40),
+                SignalLiquidGlass(
+                  key: const ValueKey('composer'),
+                  blurSigma: 8,
+                  decoration: AppLiquidGlass.strong(
+                    borderRadius: composerRadius,
+                    focused: composerFocused,
+                    elevated: composerElevated,
+                    backdrop: true,
                   ),
-                  boxShadow: composerShadow,
-                ),
-                // Pin content to the box edges: text up top, tools on the floor.
-                alignment: Alignment.bottomCenter,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (attachments.isNotEmpty) ...[
-                      PendingAttachmentStrip(
-                        attachments: attachments,
-                        uploading: uploading,
-                        onRemove: (attachment) =>
-                            onRemoveAttachment?.call(attachment),
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                    TextField(
-                      controller: controller,
-                      enabled: console.canCompose,
-                      cursorColor: AppColors.terracotta,
-                      style: const TextStyle(
-                        color: AppColors.ink,
-                        fontSize: 15,
-                        height: 1.45,
-                        fontWeight: FontWeight.w400,
-                      ),
-                      minLines: 1,
-                      maxLines: 3,
-                      decoration: InputDecoration(
-                        filled: false,
-                        hintText: console.inputHint,
-                        hintStyle: const TextStyle(
-                          color: AppColors.inactive,
-                          fontSize: 14,
-                        ),
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        isDense: true,
-                        contentPadding: const EdgeInsets.fromLTRB(2, 0, 2, 10),
-                      ),
+                  child: Container(
+                    constraints: const BoxConstraints(
+                      minHeight: AppSizes.composer,
                     ),
-                    Row(
+                    padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
+                    // Pin content to the box edges: text up top, tools on the floor.
+                    alignment: Alignment.bottomCenter,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _ComposerIconButton(
-                          key: const ValueKey('composer-expand-button'),
-                          tooltip: '添加附件',
-                          icon: LucideIcons.plus,
-                          onPressed: console.canCompose
-                              ? onAddAttachment
-                              : null,
-                        ),
-                        _ComposerEffortButton(
-                          effort: selectedEffort,
-                          enabled:
-                              console.canCompose && onEffortSelected != null,
-                          onPressed: () => showEffortGaugeOverlay(
-                            context,
-                            selected: selectedEffort,
-                            onSelected: onEffortSelected!,
+                        if (attachments.isNotEmpty) ...[
+                          PendingAttachmentStrip(
+                            attachments: attachments,
+                            uploading: uploading,
+                            onRemove: (attachment) =>
+                                onRemoveAttachment?.call(attachment),
+                          ),
+                          const SizedBox(height: 8),
+                        ],
+                        TextField(
+                          controller: controller,
+                          enabled: console.canCompose,
+                          onTapOutside: (_) =>
+                              FocusManager.instance.primaryFocus?.unfocus(),
+                          cursorColor: AppColors.accent,
+                          style: const TextStyle(
+                            color: AppColors.ink,
+                            fontSize: 15,
+                            height: 1.45,
+                            fontWeight: FontWeight.w400,
+                          ),
+                          minLines: 1,
+                          maxLines: 3,
+                          decoration: InputDecoration(
+                            filled: false,
+                            hintText: console.inputHint,
+                            hintStyle: const TextStyle(
+                              color: AppColors.muted,
+                              fontSize: 14,
+                            ),
+                            border: InputBorder.none,
+                            enabledBorder: InputBorder.none,
+                            focusedBorder: InputBorder.none,
+                            isDense: true,
+                            contentPadding: const EdgeInsets.fromLTRB(
+                              2,
+                              0,
+                              2,
+                              10,
+                            ),
                           ),
                         ),
-                        const SizedBox(width: AppSpacing.xxs),
-                        // One flex slot: keep model + permission chips adjacent
-                        // (two sibling Flexibles split free space and look far apart).
-                        Expanded(
-                          child: Align(
-                            alignment: Alignment.centerLeft,
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: _ComposerModelButton(
-                                    engine: engine,
-                                    modelName: modelName,
-                                    selectedModel: selectedModel,
-                                    onPressed: engine == SessionEngine.claude
-                                        ? onModelPressed
-                                        : null,
-                                  ),
-                                ),
-                                const SizedBox(width: AppSpacing.xxs),
-                                if (engine == SessionEngine.codex)
-                                  _ComposerPermissionButton(
-                                    sandboxMode: codexSandboxMode,
-                                    enabled:
-                                        console.canCompose &&
-                                        onCodexSandboxModeSelected != null,
-                                    onPressed: () => showCodexSandboxModePicker(
-                                      context,
-                                      selected: codexSandboxMode,
-                                      onSelected: onCodexSandboxModeSelected!,
-                                    ),
-                                  )
-                                else
-                                  _ComposerPermissionButton(
-                                    mode: permissionMode,
-                                    enabled: console.canCompose,
-                                    onPressed: () => showPermissionModePicker(
-                                      context,
-                                      selected: permissionMode,
-                                      allowBypassPermissions:
-                                          allowBypassPermissions,
-                                      onSelected: onPermissionModeSelected,
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: DecoratedBox(
+                                  key: const ValueKey('composer-control-rail'),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.composerControlRest,
+                                    borderRadius: BorderRadius.circular(
+                                      AppRadii.pill,
                                     ),
                                   ),
-                                if (remainingContext != null) ...[
-                                  const SizedBox(width: AppSpacing.xxs),
-                                  _ComposerContextIndicator(
-                                    contextWindow: contextWindow,
-                                    remainingContext: remainingContext!,
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      _ComposerIconButton(
+                                        key: const ValueKey(
+                                          'composer-expand-button',
+                                        ),
+                                        tooltip: '添加附件',
+                                        icon: LucideIcons.plus,
+                                        onPressed: console.canCompose
+                                            ? onAddAttachment
+                                            : null,
+                                      ),
+                                      _ComposerEffortButton(
+                                        effort: selectedEffort,
+                                        enabled:
+                                            console.canCompose &&
+                                            onEffortSelected != null,
+                                        onPressed: () => showEffortGaugeOverlay(
+                                          context,
+                                          selected: selectedEffort,
+                                          onSelected: onEffortSelected!,
+                                        ),
+                                      ),
+                                      Flexible(
+                                        child: _ComposerModelButton(
+                                          engine: engine,
+                                          modelName: modelName,
+                                          selectedModel: selectedModel,
+                                          onPressed:
+                                              engine == SessionEngine.claude
+                                              ? onModelPressed
+                                              : null,
+                                        ),
+                                      ),
+                                      if (engine == SessionEngine.codex)
+                                        _ComposerPermissionButton(
+                                          sandboxMode: codexSandboxMode,
+                                          enabled:
+                                              console.canCompose &&
+                                              onCodexSandboxModeSelected !=
+                                                  null,
+                                          onPressed: () =>
+                                              showCodexSandboxModePicker(
+                                                context,
+                                                selected: codexSandboxMode,
+                                                onSelected:
+                                                    onCodexSandboxModeSelected!,
+                                              ),
+                                        )
+                                      else
+                                        _ComposerPermissionButton(
+                                          mode: permissionMode,
+                                          enabled: console.canCompose,
+                                          onPressed: () =>
+                                              showPermissionModePicker(
+                                                context,
+                                                selected: permissionMode,
+                                                allowBypassPermissions:
+                                                    allowBypassPermissions,
+                                                onSelected:
+                                                    onPermissionModeSelected,
+                                              ),
+                                        ),
+                                    ],
                                   ),
-                                ],
-                              ],
+                                ),
+                              ),
                             ),
-                          ),
+                            if (remainingContext != null) ...[
+                              const SizedBox(width: AppSpacing.xxs),
+                              _ComposerContextIndicator(
+                                contextWindow: contextWindow,
+                                remainingContext: remainingContext!,
+                              ),
+                            ],
+                            const SizedBox(width: AppSpacing.xs),
+                            ValueListenableBuilder<TextEditingValue>(
+                              valueListenable: controller,
+                              builder: (context, value, _) {
+                                final canSend =
+                                    (value.text.trim().isNotEmpty ||
+                                        attachments.isNotEmpty) &&
+                                    console.canCompose;
+                                final primaryAction = waiting
+                                    ? null
+                                    : stoppingAction
+                                    ? (console.canStop ? onStop : null)
+                                    : (canSend ? onSend : null);
+                                final primaryColor = waiting
+                                    ? AppColors.composerDisabledFill
+                                    : stoppingAction
+                                    ? (console.canStop
+                                          ? AppColors.danger
+                                          : AppColors.composerDisabledFill)
+                                    : (canSend
+                                          ? AppColors.cta
+                                          : AppColors.glassControl);
+                                final primaryIcon = waiting
+                                    ? SizedBox.square(
+                                        key: const ValueKey(
+                                          'composer-primary-waiting',
+                                        ),
+                                        dimension: 20,
+                                        child: reduceMotion
+                                            ? const Icon(
+                                                LucideIcons.loader,
+                                                size: 18,
+                                                color: AppColors.accentStrong,
+                                              )
+                                            : const CircularProgressIndicator(
+                                                strokeWidth: 2.2,
+                                                color: AppColors.accentStrong,
+                                              ),
+                                      )
+                                    : Icon(
+                                        stoppingAction
+                                            ? LucideIcons.square
+                                            : LucideIcons.arrowUp,
+                                        key: ValueKey(
+                                          stoppingAction
+                                              ? 'composer-primary-stop'
+                                              : 'composer-primary-send',
+                                        ),
+                                        size: stoppingAction ? 18 : 20,
+                                        color: stoppingAction
+                                            ? console.canStop
+                                                  ? AppColors.onCta
+                                                  : AppColors.inactive
+                                            : canSend
+                                            ? AppColors.onCta
+                                            : AppColors.inactive,
+                                      );
+                                return SignalPressEffect(
+                                  enabled: primaryAction != null,
+                                  child: SizedBox.square(
+                                    dimension: AppSizes.touchTarget,
+                                    child: IconButton(
+                                      key: const ValueKey(
+                                        'composer-primary-action',
+                                      ),
+                                      onPressed: primaryAction,
+                                      tooltip: primaryTooltip,
+                                      padding: EdgeInsets.zero,
+                                      icon: Container(
+                                        key: const ValueKey(
+                                          'composer-primary-visual',
+                                        ),
+                                        width: 40,
+                                        height: 40,
+                                        decoration: BoxDecoration(
+                                          color: primaryColor,
+                                          shape: BoxShape.circle,
+                                          boxShadow: !waiting && !stoppingAction
+                                              ? AppElevation.surfaceCard()
+                                              : null,
+                                        ),
+                                        alignment: Alignment.center,
+                                        child: AnimatedSwitcher(
+                                          key: const ValueKey(
+                                            'composer-primary-icon-switcher',
+                                          ),
+                                          duration: reduceMotion
+                                              ? Duration.zero
+                                              : AppMotion.fast,
+                                          reverseDuration: reduceMotion
+                                              ? Duration.zero
+                                              : AppMotion.fast,
+                                          switchInCurve: const Cubic(
+                                            0.2,
+                                            0,
+                                            0,
+                                            1,
+                                          ),
+                                          switchOutCurve: const Cubic(
+                                            0.2,
+                                            0,
+                                            0,
+                                            1,
+                                          ),
+                                          transitionBuilder:
+                                              (
+                                                child,
+                                                animation,
+                                              ) => AnimatedBuilder(
+                                                animation: animation,
+                                                child: child,
+                                                builder: (context, child) {
+                                                  final progress =
+                                                      animation.value;
+                                                  return Opacity(
+                                                    opacity: progress,
+                                                    child: Transform.scale(
+                                                      scale:
+                                                          0.25 +
+                                                          progress * 0.75,
+                                                      child: ImageFiltered(
+                                                        imageFilter:
+                                                            ui.ImageFilter.blur(
+                                                              sigmaX:
+                                                                  4 *
+                                                                  (1 -
+                                                                      progress),
+                                                              sigmaY:
+                                                                  4 *
+                                                                  (1 -
+                                                                      progress),
+                                                            ),
+                                                        child: child,
+                                                      ),
+                                                    ),
+                                                  );
+                                                },
+                                              ),
+                                          child: primaryIcon,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
                         ),
-                        const SizedBox(width: AppSpacing.xs),
-                        if (console.showsStop)
-                          SignalPressEffect(
-                            enabled: console.canStop,
-                            child: SizedBox.square(
-                              dimension: AppSizes.touchTarget,
-                              child: IconButton(
-                                key: const ValueKey('composer-primary-action'),
-                                onPressed: console.canStop ? onStop : null,
-                                tooltip: console.stopTooltip,
-                                padding: EdgeInsets.zero,
-                                icon: Container(
-                                  key: const ValueKey(
-                                    'composer-primary-visual',
-                                  ),
-                                  width: AppSizes.iconControl,
-                                  height: AppSizes.iconControl,
-                                  decoration: BoxDecoration(
-                                    color: console.canStop
-                                        ? AppColors.danger
-                                        : AppColors.composerControlFill,
-                                    shape: BoxShape.circle,
-                                  ),
-                                  alignment: Alignment.center,
-                                  child: Icon(
-                                    LucideIcons.square,
-                                    size: 18,
-                                    color: console.canStop
-                                        ? AppColors.onCta
-                                        : AppColors.inactive,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          )
-                        else if (console.phase == ConsolePhase.uploading)
-                          const SizedBox(
-                            width: AppSizes.touchTarget,
-                            height: AppSizes.touchTarget,
-                            child: Center(
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.2,
-                                color: AppColors.terracottaDeep,
-                              ),
-                            ),
-                          )
-                        else
-                          SignalPressEffect(
-                            enabled: canSend,
-                            child: SizedBox.square(
-                              dimension: AppSizes.touchTarget,
-                              child: IconButton(
-                                key: const ValueKey('composer-primary-action'),
-                                onPressed: canSend ? onSend : null,
-                                padding: EdgeInsets.zero,
-                                icon: Container(
-                                  key: const ValueKey(
-                                    'composer-primary-visual',
-                                  ),
-                                  width: AppSizes.iconControl,
-                                  height: AppSizes.iconControl,
-                                  decoration: BoxDecoration(
-                                    color: canSend
-                                        ? AppColors.cta
-                                        : AppColors.composerControlFill,
-                                    shape: BoxShape.circle,
-                                  ),
-                                  alignment: Alignment.center,
-                                  child: Icon(
-                                    LucideIcons.arrowUp,
-                                    size: 18,
-                                    color: canSend
-                                        ? AppColors.onCta
-                                        : AppColors.inactive,
-                                  ),
-                                ),
-                                tooltip: '发送',
-                              ),
-                            ),
-                          ),
                       ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
-            ],
-          );
-        },
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _ComposerGlassIconButton extends StatelessWidget {
+  const _ComposerGlassIconButton({
+    this.buttonKey,
+    this.visualKey,
+    required this.tooltip,
+    required this.onPressed,
+    required this.child,
+  });
+
+  final Key? buttonKey;
+  final Key? visualKey;
+  final String tooltip;
+  final VoidCallback? onPressed;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.square(
+      dimension: AppSizes.touchTarget,
+      child: SignalPressEffect(
+        enabled: onPressed != null,
+        builder: (context, pressed, child) => IconButton(
+          key: buttonKey,
+          onPressed: onPressed,
+          tooltip: tooltip,
+          padding: EdgeInsets.zero,
+          icon: SignalAnimatedSurface(
+            key: visualKey,
+            duration: appPressAnimationDuration(context, pressed),
+            decoration: BoxDecoration(
+              color: pressed
+                  ? AppColors.composerControlPressed
+                  : Colors.transparent,
+              shape: BoxShape.circle,
+            ),
+            child: SizedBox.square(
+              dimension: AppSizes.iconControl,
+              child: Center(child: child),
+            ),
+          ),
+        ),
+        child: child,
       ),
     );
   }
@@ -9979,27 +10714,14 @@ class _ComposerIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final enabled = onPressed != null;
-    return SizedBox.square(
-      dimension: AppSizes.touchTarget,
-      child: IconButton(
-        onPressed: onPressed,
-        tooltip: tooltip,
-        padding: EdgeInsets.zero,
-        icon: Container(
-          key: const ValueKey('composer-expand-visual'),
-          width: AppSizes.iconControl,
-          height: AppSizes.iconControl,
-          decoration: BoxDecoration(
-            color: enabled ? AppColors.composerControlFill : AppColors.paper,
-            shape: BoxShape.circle,
-          ),
-          alignment: Alignment.center,
-          child: Icon(
-            icon,
-            size: 20,
-            color: enabled ? AppColors.composerControlInk : AppColors.inactive,
-          ),
-        ),
+    return _ComposerGlassIconButton(
+      visualKey: const ValueKey('composer-expand-visual'),
+      tooltip: tooltip,
+      onPressed: onPressed,
+      child: Icon(
+        icon,
+        size: 20,
+        color: enabled ? AppColors.composerControlInk : AppColors.inactive,
       ),
     );
   }
@@ -10018,27 +10740,14 @@ class _ComposerEffortButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox.square(
-      dimension: AppSizes.touchTarget,
-      child: IconButton(
-        key: const ValueKey('composer-effort-button'),
-        onPressed: enabled ? onPressed : null,
-        tooltip: '思考强度：${effort.label}',
-        padding: EdgeInsets.zero,
-        icon: Container(
-          width: AppSizes.iconControl,
-          height: AppSizes.iconControl,
-          decoration: BoxDecoration(
-            color: enabled ? AppColors.composerControlFill : AppColors.paper,
-            shape: BoxShape.circle,
-          ),
-          alignment: Alignment.center,
-          child: EffortGaugeIcon(
-            key: const ValueKey('composer-effort-visual'),
-            effort: effort,
-            enabled: enabled,
-          ),
-        ),
+    return _ComposerGlassIconButton(
+      buttonKey: const ValueKey('composer-effort-button'),
+      tooltip: '思考强度：${effort.label}',
+      onPressed: enabled ? onPressed : null,
+      child: EffortGaugeIcon(
+        key: const ValueKey('composer-effort-visual'),
+        effort: effort,
+        enabled: enabled,
       ),
     );
   }
@@ -10073,24 +10782,42 @@ class _ComposerModelButton extends StatelessWidget {
         minHeight: AppSizes.touchTarget,
         maxWidth: 148,
       ),
-      child: TextButton(
-        key: const ValueKey('composer-model-button'),
-        onPressed: onPressed,
-        style: TextButton.styleFrom(
-          foregroundColor: AppColors.composerControlInk,
-          backgroundColor: AppColors.composerControlFill,
-          disabledForegroundColor: AppColors.inactive,
-          disabledBackgroundColor: AppColors.paper,
-          minimumSize: const Size(0, AppSizes.iconControl),
-          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
-          visualDensity: VisualDensity.compact,
-          textStyle: const TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            height: 1.2,
+      child: SignalPressEffect(
+        enabled: onPressed != null,
+        builder: (context, pressed, child) => TextButton(
+          key: const ValueKey('composer-model-button'),
+          onPressed: onPressed,
+          style: TextButton.styleFrom(
+            foregroundColor: AppColors.composerControlInk,
+            disabledForegroundColor: AppColors.inactive,
+            minimumSize: const Size(0, AppSizes.touchTarget),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            padding: EdgeInsets.zero,
+            visualDensity: VisualDensity.compact,
+            textStyle: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              height: 1.2,
+            ),
+            shape: const StadiumBorder(),
           ),
-          shape: const StadiumBorder(),
+          child: SignalAnimatedSurface(
+            key: const ValueKey('composer-model-visual'),
+            duration: appPressAnimationDuration(context, pressed),
+            decoration: BoxDecoration(
+              color: pressed
+                  ? AppColors.composerControlPressed
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(AppRadii.pill),
+            ),
+            child: SizedBox(
+              height: AppSizes.iconControl,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: Center(child: child),
+              ),
+            ),
+          ),
         ),
         child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
       ),
@@ -10123,27 +10850,12 @@ class _ComposerPermissionButton extends StatelessWidget {
         : danger
         ? AppColors.stop
         : AppColors.composerControlInk;
-    final fill = !enabled
-        ? AppColors.paper
-        : danger
-        ? AppColors.stop.withValues(alpha: 0.12)
-        : AppColors.composerControlFill;
-    return SizedBox.square(
-      dimension: AppSizes.touchTarget,
-      child: IconButton(
-        key: const ValueKey('permission-mode-chip'),
-        onPressed: enabled ? onPressed : null,
-        tooltip: '访问权限：$label',
-        padding: EdgeInsets.zero,
-        icon: Container(
-          key: const ValueKey('permission-mode-visual'),
-          width: AppSizes.iconControl,
-          height: AppSizes.iconControl,
-          decoration: BoxDecoration(color: fill, shape: BoxShape.circle),
-          alignment: Alignment.center,
-          child: Icon(icon, size: 18, color: ink),
-        ),
-      ),
+    return _ComposerGlassIconButton(
+      buttonKey: const ValueKey('permission-mode-chip'),
+      visualKey: const ValueKey('permission-mode-visual'),
+      tooltip: '访问权限：$label',
+      onPressed: enabled ? onPressed : null,
+      child: Icon(icon, size: 18, color: ink),
     );
   }
 }
@@ -10170,6 +10882,8 @@ class _ComposerContextIndicator extends StatelessWidget {
     final fullLabel = hasWindow
         ? '上下文剩余 ${_formatTokenCount(remainingContext)} / ${_formatTokenCount(contextWindow!)}，$shortLabel'
         : '上下文剩余 ${_formatTokenCount(remainingContext)}';
+    final lowRemaining = fraction != null && fraction <= 0.15;
+    final readoutColor = lowRemaining ? AppColors.warning : AppColors.muted;
     return Tooltip(
       message: fullLabel,
       child: Semantics(
@@ -10188,19 +10902,21 @@ class _ComposerContextIndicator extends StatelessWidget {
                     strokeWidth: 2,
                     strokeCap: StrokeCap.round,
                     backgroundColor: AppColors.line,
-                    color: AppColors.inactive,
+                    color: lowRemaining
+                        ? AppColors.warning
+                        : AppColors.inactive,
                   ),
                 ),
                 const SizedBox(width: 6),
                 Text(
                   shortLabel,
                   maxLines: 1,
-                  style: const TextStyle(
-                    color: AppColors.muted,
+                  style: TextStyle(
+                    color: readoutColor,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                     height: 1,
-                    fontFeatures: [FontFeature.tabularFigures()],
+                    fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
               ],
@@ -10368,57 +11084,60 @@ Future<void> showPermissionModePicker(
 }) async {
   final mode = await showModalBottomSheet<PermissionMode>(
     context: context,
-    showDragHandle: true,
+    sheetAnimationStyle: appOverlayAnimationStyle(context),
+    backgroundColor: Colors.transparent,
+    barrierColor: Colors.transparent,
     isScrollControlled: true,
-    builder: (sheetContext) => SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Claude Code 权限模式',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 10),
-            for (final item in PermissionMode.values)
-              ListTile(
-                key: ValueKey('permission-mode-${item.wireName}'),
-                enabled:
-                    item != PermissionMode.bypassPermissions ||
-                    allowBypassPermissions,
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(
-                  item.icon,
-                  color: item == PermissionMode.bypassPermissions
-                      ? AppColors.stop
-                      : AppColors.accent,
-                ),
-                title: Text(item.label),
-                subtitle: Text(
-                  item == PermissionMode.bypassPermissions &&
-                          !allowBypassPermissions
-                      ? '电脑端未开启 ALLOW_BYPASS_PERMISSIONS'
-                      : item.description,
-                ),
-                trailing: item == selected
-                    ? const Icon(LucideIcons.check, color: AppColors.accent)
-                    : null,
-                onTap:
-                    item == PermissionMode.bypassPermissions &&
-                        !allowBypassPermissions
-                    ? null
-                    : () => Navigator.pop(sheetContext, item),
+    showDragHandle: true,
+    builder: (sheetContext) {
+      final media = MediaQuery.of(sheetContext);
+      final available = media.size.height - media.padding.vertical - 120;
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: available),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const AppOptionSheetHeader(title: 'Claude Code 权限模式'),
+                  const SizedBox(height: 12),
+                  for (final item in PermissionMode.values)
+                    AppOptionRow(
+                      key: ValueKey('permission-mode-${item.wireName}'),
+                      title: item.label,
+                      description:
+                          item == PermissionMode.bypassPermissions &&
+                              !allowBypassPermissions
+                          ? '电脑端未开启 ALLOW_BYPASS_PERMISSIONS'
+                          : item.description,
+                      selected: item == selected,
+                      enabled:
+                          item != PermissionMode.bypassPermissions ||
+                          allowBypassPermissions,
+                      danger: item == PermissionMode.bypassPermissions,
+                      leading: Icon(item.icon),
+                      onTap:
+                          item == PermissionMode.bypassPermissions &&
+                              !allowBypassPermissions
+                          ? null
+                          : () => Navigator.pop(sheetContext, item),
+                    ),
+                ],
               ),
-          ],
+            ),
+          ),
         ),
-      ),
-    ),
+      );
+    },
   );
   if (mode == null || !context.mounted) return;
   if (mode == PermissionMode.bypassPermissions) {
     final confirmed = await showDialog<bool>(
       context: context,
+      animationStyle: appOverlayAnimationStyle(context),
       builder: (dialogContext) => AlertDialog(
         title: const Text('当前对话跳过权限检查'),
         content: const Text(
@@ -10449,55 +11168,52 @@ Future<void> showCodexSandboxModePicker(
 }) async {
   final mode = await showModalBottomSheet<CodexSandboxMode>(
     context: context,
-    showDragHandle: true,
+    sheetAnimationStyle: appOverlayAnimationStyle(context),
+    backgroundColor: Colors.transparent,
+    barrierColor: Colors.transparent,
     isScrollControlled: true,
-    builder: (sheetContext) => SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Codex 沙箱模式',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 4),
-            const Text(
-              'Codex 非交互执行不会在任务中途弹出权限审批。',
-              style: TextStyle(
-                color: AppColors.muted,
-                fontSize: 13,
-                height: 1.4,
+    showDragHandle: true,
+    builder: (sheetContext) {
+      final media = MediaQuery.of(sheetContext);
+      final available = media.size.height - media.padding.vertical - 120;
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: available),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const AppOptionSheetHeader(
+                    title: 'Codex 沙箱模式',
+                    detail: 'Codex 非交互执行不会在任务中途弹出权限审批。',
+                  ),
+                  const SizedBox(height: 12),
+                  for (final item in CodexSandboxMode.values)
+                    AppOptionRow(
+                      key: ValueKey('codex-sandbox-${item.wireName}'),
+                      title: item.label,
+                      description: item.description,
+                      selected: item == selected,
+                      danger: item == CodexSandboxMode.dangerFullAccess,
+                      leading: Icon(item.icon),
+                      onTap: () => Navigator.pop(sheetContext, item),
+                    ),
+                ],
               ),
             ),
-            const SizedBox(height: 10),
-            for (final item in CodexSandboxMode.values)
-              ListTile(
-                key: ValueKey('codex-sandbox-${item.wireName}'),
-                contentPadding: EdgeInsets.zero,
-                leading: Icon(
-                  item.icon,
-                  color: item == CodexSandboxMode.dangerFullAccess
-                      ? AppColors.stop
-                      : AppColors.accent,
-                ),
-                title: Text(item.label),
-                subtitle: Text(item.description),
-                trailing: item == selected
-                    ? const Icon(LucideIcons.check, color: AppColors.accent)
-                    : null,
-                onTap: () => Navigator.pop(sheetContext, item),
-              ),
-          ],
+          ),
         ),
-      ),
-    ),
+      );
+    },
   );
   if (mode == null || !context.mounted) return;
   if (mode == CodexSandboxMode.dangerFullAccess) {
     final confirmed = await showDialog<bool>(
       context: context,
+      animationStyle: appOverlayAnimationStyle(context),
       builder: (dialogContext) => AlertDialog(
         title: const Text('为本次任务关闭沙箱'),
         content: const Text('Codex 将能访问工作区外的文件和命令。任务发送后会恢复为只读。'),
@@ -10738,7 +11454,7 @@ class AppBackground extends StatelessWidget {
             key: const ValueKey('chat-background-layer'),
             child: _ChatBackgroundLayer(preference: chatBackground),
           ),
-          _KeyboardResizeBody(child: child),
+          _KeyboardResizeBody(child: BackdropGroup(child: child)),
         ],
       ),
     );
@@ -10754,7 +11470,16 @@ class _ChatBackgroundLayer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (preference.kind == ChatBackgroundKind.defaultStyle) {
-      return const ColoredBox(color: AppColors.paper);
+      return const DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [AppColors.bgTop, AppColors.bgMid, AppColors.bgBottom],
+            stops: [0, 0.56, 1],
+          ),
+        ),
+      );
     }
     if (preference.kind == ChatBackgroundKind.localImage &&
         preference.imagePath != null) {
@@ -10789,9 +11514,9 @@ class _ChatBackgroundLayer extends StatelessWidget {
       );
     }
     final color = switch (preference.preset) {
-      ChatBackgroundPreset.mint => const Color(0xFFF0EEE6),
-      ChatBackgroundPreset.sunrise => const Color(0xFFF3E7E0),
-      ChatBackgroundPreset.rose => const Color(0xFFE9E4DA),
+      ChatBackgroundPreset.mint => const Color(0xFFECF5F3),
+      ChatBackgroundPreset.sunrise => const Color(0xFFF1F0F7),
+      ChatBackgroundPreset.rose => const Color(0xFFF5EEF2),
       null => AppColors.paper,
     };
     return ColoredBox(color: color);
@@ -10825,35 +11550,30 @@ class _KeyboardResizeBody extends StatelessWidget {
   }
 }
 
-class WarmSheetSurface extends StatelessWidget {
-  const WarmSheetSurface({
+class AppSheetSurface extends StatelessWidget {
+  const AppSheetSurface({
     super.key,
     required this.child,
     this.padding = const EdgeInsets.all(16),
     this.radius = AppRadii.panel,
+    this.borderRadius,
   });
 
   final Widget child;
   final EdgeInsetsGeometry padding;
   final double radius;
+  final BorderRadius? borderRadius;
 
   @override
   Widget build(BuildContext context) {
+    final effectiveBorderRadius = borderRadius ?? BorderRadius.circular(radius);
     return Container(
-      decoration: BoxDecoration(
-        color: AppColors.surfaceElevated,
-        borderRadius: BorderRadius.circular(radius),
-        border: Border.all(color: AppColors.line.withValues(alpha: 0.85)),
-        boxShadow: AppElevation.softCard(),
-      ),
+      decoration: AppLiquidGlass.strong(borderRadius: effectiveBorderRadius),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(radius - 1),
-        child: ColoredBox(
-          color: AppColors.surfaceElevated,
-          child: Padding(
-            padding: padding,
-            child: SizedBox(width: double.infinity, child: child),
-          ),
+        borderRadius: effectiveBorderRadius,
+        child: Padding(
+          padding: padding,
+          child: SizedBox(width: double.infinity, child: child),
         ),
       ),
     );
@@ -10933,6 +11653,7 @@ class ActionButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return SignalPressEffect(
       enabled: onPressed != null,
+      scaleOnPress: false,
       child: FilledButton.icon(
         onPressed: onPressed,
         icon: Icon(icon),
@@ -10966,59 +11687,64 @@ class PromptChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(AppRadii.control),
-        child: Ink(
-          width: double.infinity,
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(AppRadii.control),
-            border: Border.all(color: AppColors.line),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  if (icon != null)
-                    Icon(icon, size: 20, color: AppColors.terracottaDeep),
-                  const Spacer(),
-                  const Icon(
-                    LucideIcons.arrowUpRight,
-                    size: 18,
-                    color: AppColors.inactive,
+    final borderRadius = BorderRadius.circular(AppRadii.surface);
+    return SignalPressEffect(
+      builder: (context, pressed, child) => SignalAnimatedSurface(
+        duration: appPressAnimationDuration(context, pressed),
+        decoration: AppLiquidGlass.thin(
+          borderRadius: borderRadius,
+          pressed: pressed,
+        ),
+        child: child,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: borderRadius,
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    if (icon != null)
+                      Icon(icon, size: 20, color: AppColors.accentStrong),
+                    const Spacer(),
+                    const Icon(
+                      LucideIcons.arrowUpRight,
+                      size: 18,
+                      color: AppColors.inactive,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  label,
+                  style: const TextStyle(
+                    color: AppColors.ink,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.1,
+                  ),
+                ),
+                if (caption != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    caption!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: AppColors.muted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
                   ),
                 ],
-              ),
-              const SizedBox(height: 10),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: AppColors.ink,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: -0.1,
-                ),
-              ),
-              if (caption != null) ...[
-                const SizedBox(height: 3),
-                Text(
-                  caption!,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: AppColors.muted,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -11057,6 +11783,7 @@ Future<String?> promptSessionTitle(
   final controller = TextEditingController(text: initial);
   return showDialog<String>(
     context: context,
+    animationStyle: appOverlayAnimationStyle(context),
     builder: (dialogContext) => AlertDialog(
       title: const Text('重命名会话'),
       content: TextField(
@@ -11085,6 +11812,7 @@ Future<String?> promptSessionTitle(
 Future<bool?> confirmSessionDelete(BuildContext context, String title) {
   return showDialog<bool>(
     context: context,
+    animationStyle: appOverlayAnimationStyle(context),
     builder: (dialogContext) => AlertDialog(
       title: const Text('删除会话？'),
       content: Text('将删除「$title」及其 transcript，不可恢复。'),

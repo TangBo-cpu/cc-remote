@@ -305,7 +305,13 @@ test('extracts sorted invokable commands from Claude init events', () => {
     subtype: 'init',
     slash_commands: ['help', 'compact', 'review'],
     skills: ['review', '/frontend-design', 'review'],
-  }), ['frontend-design', 'review']);
+  }), ['compact', 'frontend-design', 'help', 'review']);
+
+  assert.deepEqual(extractClaudeCommands({
+    type: 'system',
+    subtype: 'init',
+    slash_commands: ['/compact'],
+  }), ['compact']);
 
   assert.deepEqual(extractClaudeCommands({
     type: 'system',
@@ -337,6 +343,62 @@ test('extracts the active model and exact remaining context', () => {
     contextWindow: 200000,
     usedTokens: 25081,
     remainingTokens: 174919,
+  });
+});
+
+test('result usage tracks the latest request, not cumulative modelUsage', () => {
+  // modelUsage sums every API turn of the run; only the final request fits
+  // inside the context window.
+  assert.deepEqual(extractClaudeSessionInfo({
+    type: 'result',
+    model: 'claude-opus-4-8',
+    usage: {
+      input_tokens: 4,
+      cache_read_input_tokens: 24572,
+      cache_creation_input_tokens: 505,
+      output_tokens: 2100,
+    },
+    modelUsage: {
+      'claude-opus-4-8': {
+        inputTokens: 1009,
+        cacheReadInputTokens: 73716,
+        cacheCreationInputTokens: 1515,
+        outputTokens: 6300,
+        contextWindow: 200000,
+      },
+      'claude-haiku-4-5': {
+        inputTokens: 10,
+        cacheReadInputTokens: 100,
+        cacheCreationInputTokens: 0,
+        outputTokens: 50,
+        contextWindow: 200000,
+      },
+    },
+  }), {
+    model: 'claude-opus-4-8',
+    contextWindow: 200000,
+    usedTokens: 25081,
+    remainingTokens: 174919,
+  });
+});
+
+test('assistant usage streams live remaining context for the 1M window', () => {
+  assert.deepEqual(extractClaudeSessionInfo({
+    type: 'assistant',
+    message: {
+      model: 'claude-sonnet-4-5[1m]',
+      usage: {
+        input_tokens: 12000,
+        cache_read_input_tokens: 640000,
+        cache_creation_input_tokens: 2000,
+        output_tokens: 900,
+      },
+    },
+  }), {
+    model: 'claude-sonnet-4-5[1m]',
+    contextWindow: 1000000,
+    usedTokens: 654000,
+    remainingTokens: 346000,
   });
 });
 

@@ -552,14 +552,14 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "7.0.2"
-  phosphor_flutter:
+  phosphor_icons:
     dependency: "direct main"
     description:
-      name: phosphor_flutter
-      sha256: "8a14f238f28a0b54842c5a4dc20676598dd4811fcba284ed828bd5a262c11fde"
+      name: phosphor_icons
+      sha256: "0f32a6c6a7bbadb2e42cba15ec103dcd23dfa47137f17a6f5b5a078081ac55f8"
       url: "https://pub.dev"
     source: hosted
-    version: "2.1.0"
+    version: "3.0.1"
   platform:
     dependency: transitive
     description:

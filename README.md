@@ -2,7 +2,7 @@
 
 **在手机上远程控制本机 Claude Code。**
 
-扫码配对后，你就能在 Warm Console 里发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更——电脑端 daemon 继续跑 Claude Code CLI，手机只是随身控制台。
+扫码配对后，你就能在冷玻璃控制台里发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更——电脑端 daemon 继续跑 Claude Code CLI，手机只是随身控制台。
 
 [下载 Android APK · v1.3.1](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.1/cc-remote-v1.3.1-android.apk)
 ·
@@ -29,7 +29,7 @@
 | 工具要权限 | 手机弹出决策卡：看命令摘要与工作目录，拒绝或仅本次允许 |
 | 想确认改了什么 | 只读工作区 + Git diff，手机不提交、不改文件 |
 | 断线了 | transcript 与草稿保留，自动重连；回来后从权威快照继续 |
-| 字号不合适 | 设置里连续滑杆，默认约 95% |
+| 字号不合适 | 设置里连续滑杆，默认 100% |
 
 **安全边界（产品承诺）：**
 
@@ -41,7 +41,7 @@
 
 ## 界面参考
 
-以下真机截图记录的是 v1.2 Warm Console 视觉基线，尚未覆盖 v1.3.0 新增的 Codex、会话搜索、活动时间线、代码块工具栏和花形思考状态。
+以下真机截图记录的是 v1.2 Warm Console 视觉基线，尚未覆盖 v1.3.0 新增的 Codex、会话搜索、活动时间线、代码块工具栏和花形思考状态；v1.3.x 之后控制台已收敛为冷玻璃方向（见 DESIGN.md）。
 
 | 主控制台 | 项目与会话 | 更多菜单 |
 | :---: | :---: | :---: |
@@ -51,7 +51,7 @@
 | :---: | :---: | :---: |
 | <img src="docs/images/03-settings.png" width="220" alt="设置" /> | <img src="docs/images/04-workspace.png" width="220" alt="工作区" /> | <img src="docs/images/05-diff.png" width="220" alt="Diff" /> |
 
-暖白纸感背景、衬线阅读正文、更宽助手气泡、`terracotta-deep` 发送按钮；顶部只有圆形菜单 + 新建/更多胶囊，模型放在 Composer。设计规格见 [`DESIGN.md`](DESIGN.md)。
+冷白纸面与冷灰层级、克制的单一蓝色只用于主动作与选中态、更宽助手气泡、冷玻璃工具栏；顶部只有圆形菜单 + 新建/更多胶囊，模型放在 Composer。设计规格见 [`DESIGN.md`](DESIGN.md)。
 
 ---
 
@@ -125,13 +125,13 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 **对话与控制**
 
-- 流式输出（合批推送 + 手机端轻渲染）
+- 流式输出（合批推送；无标记走 Text，有 Markdown 标记时流式期间即渲染）
 - Claude Streaming Input 与 Codex App Server 常驻复用，后续轮次不重复启动 CLI
 - 助手 Markdown 中的搜索来源 / 引用链接可点击，仅允许 `http` / `https` 并交给系统浏览器打开
-- 停止任务、暖陶花形思考状态与本轮运行计时、安全化工具活动
-- Composer 暖陶思考强度仪表与六档思考强度（自动 + 低、中、高、超高、最大五手动档）
+- 停止任务、花形思考状态与本轮运行计时、安全化工具活动
+- Composer 思考强度仪表与六档思考强度（自动 + 低、中、高、超高、最大五手动档）
 - Claude Code 斜杠指令
-- 模型选择（Composer 暖色触发胶囊 + 冰川蓝渐变双栏选择器）
+- 模型选择（Composer 模型胶囊 + 共享 AppOptionRow sheet，Phosphor Fill 身份图标）
 - 六种权限模式 + 一次性工具审批
 - Codex 沙箱模式三档（read-only / workspace-write / danger-full-access），danger 发送一次后自动回落 read-only
 - 图片 / 文件附件（每轮最多 5 个，单文件 ≤ 25MB；Codex 会话仅支持图片）
@@ -144,7 +144,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 **通知与偏好**
 
 - Android 后台本地通知（完成 / 失败 / 等待权限）
-- 连续字号滑杆（约 0.85×–1.40×，默认 0.95）
+- 连续字号滑杆（约 0.85×–1.40×，默认 1.0）
 - 聊天背景等对话偏好
 
 **当前不做 / 限制**
@@ -240,4 +240,4 @@ cc-remote -DisableBypassPermissions
 当前公开版：**[v1.3.1](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.3.1)**
 APK：[`cc-remote-v1.3.1-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.1/cc-remote-v1.3.1-android.apk)
 
-`v1.3.1` 在 Warm Console 基础上加入 Apple 风格设置界面、持久化权限模式、上下文余量指示与恢复对话时自动定位到底部，并继续保留 Codex 引擎、跨项目会话搜索和任务恢复能力。
+仓库代码已是 Cool Glass 控制台（冷灰蓝玻璃、语义色、Phosphor Fill 身份图标、助手气泡 hug、流式 Markdown、默认 100% 阅读字号）。安装包仍提供 [v1.3.1 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.1/cc-remote-v1.3.1-android.apk)（测试签名）；尚未另发带新 UI 的 GitHub Release 安装包。

@@ -391,10 +391,14 @@ export function extractCodexActivities(event: unknown): EngineActivity[] {
 export function extractCodexSessionInfo(event: unknown): EngineSessionInfo | null {
   if (!isRecord(event)) return null;
   if (event.type === 'thread.tokenUsage.updated' && isRecord(event.tokenUsage)) {
-    const total = isRecord(event.tokenUsage.total) ? event.tokenUsage.total : undefined;
-    if (!total) return null;
-    const usedTokens = tokenValue(total.totalTokens)
-      || tokenValue(total.inputTokens) + tokenValue(total.outputTokens);
+    // total accumulates across the whole thread, so it races past the context
+    // window within a few turns; last is the most recent model request, which
+    // is what the context window actually holds.
+    const usage = (isRecord(event.tokenUsage.last) ? event.tokenUsage.last : undefined)
+      ?? (isRecord(event.tokenUsage.total) ? event.tokenUsage.total : undefined);
+    if (!usage) return null;
+    const usedTokens = tokenValue(usage.totalTokens)
+      || tokenValue(usage.inputTokens) + tokenValue(usage.outputTokens);
     const contextWindow = optionalTokenValue(event.tokenUsage.modelContextWindow);
     return {
       usedTokens,

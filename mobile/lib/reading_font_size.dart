@@ -1,8 +1,8 @@
 import 'package:flutter/painting.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-/// Continuous reading scale for transcript and UI text (0.95 = app default).
-const double kReadingFontScaleDefault = 0.95;
+/// Continuous reading scale for transcript and UI text (1.0 = app default).
+const double kReadingFontScaleDefault = 1.0;
 const double kReadingFontScaleMin = 0.85;
 const double kReadingFontScaleMax = 1.40;
 
@@ -66,8 +66,10 @@ String readingFontSizeLabel(double scale) {
 
 String readingFontSizeDescription(double scale) {
   final snapped = snapReadingFontScale(scale);
-  if (snapped < 0.95) return '更紧凑，适合一屏看更多';
-  if (snapped <= 1.0) return '默认阅读尺寸';
+  if ((snapped - kReadingFontScaleDefault).abs() < 0.001) {
+    return '默认阅读尺寸';
+  }
+  if (snapped < kReadingFontScaleDefault) return '更紧凑，适合一屏看更多';
   if (snapped < 1.25) return '更舒适的长文阅读';
   return '最大阅读字号';
 }

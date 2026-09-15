@@ -2,17 +2,17 @@
 
 ## 文档状态
 
-本文记录 Flutter 手机端的当前实现规格与后续验收目标。聊天控制台的视觉依据是 Penpot 的 11 张 `CCR / 01` 至 `CCR / 11` 画板和已落地的 Flutter 组件；根目录 [`DESIGN.md`](../DESIGN.md) 只作为 Chat Warm Console 的颜色、排版、圆角、间距和共享组件规范源。启动、配对、设置、恢复等系统界面可以拥有独立 surface brief；本文负责跨页面流程、状态映射和工程验收。
+本文记录 Flutter 手机端的当前实现规格与后续验收目标。聊天控制台的视觉依据是 Penpot 的 11 张 `CCR / 01` 至 `CCR / 11` 画板和已落地的 Flutter 组件；根目录 [`DESIGN.md`](../DESIGN.md) 只作为 Cool Glass Console 的颜色、排版、圆角、间距和共享组件规范源。启动、配对、设置、恢复等系统界面可以拥有独立 surface brief；本文负责跨页面流程、状态映射和工程验收。
 
-截至 2026-08-25，`mobile/lib/main.dart`、`mobile/lib/signal_console_theme.dart` 与 `mobile/lib/workspace_drawer.dart` 已完成 Chat Warm Console、Composer 和 Lucide 图标迁移，并保持原有网络、会话、附件、权限和 transcript 行为。启动页已脱离暖纸体系，采用 Generative Parametric Identity：冷白底上的蓝 / 青 / 荧光黄绿双流由真实 bootstrap phase seed 驱动，在上半屏注册为双 C 连接标记；左上显示真实绘制参数，右下显示产品名与权威启动状态，Reduce Motion 固定为稳定注册帧。设置页也已脱离暖纸体系，采用 Apple 风格的 Preference Gallery：约 94% 高独立界面、顶部实时偏好预览、冷白 / 银灰 / 石墨层级和系统蓝交互色；聊天背景页共享设置视觉框架，模型选择器保留原有冰川蓝双栏设计，暖色只出现在聊天预览内部。后续已落地：`terracotta-deep` CTA、手机系统默认字体、四角统一 22px 的无描边消息气泡、连续字号滑杆（默认 0.95）、权限卡工作目录、聚焦描边对比，以及叠在 transcript 上的**不透明**悬浮 Composer（暖陶仪表思考强度、权限与模型常驻工具行、`+` 仅附件；键盘打开时与 IME 连续衔接；滚动列表去气泡阴影 / 明文跳过 Markdown / 活动轨避免 `IntrinsicHeight`）。点击思考仪表后页面整体柔焦，悬浮大仪表支持五档圆弧滑动吸附，中心切回自动，并提供屏读增减动作与键盘方向键。助手 Markdown 中的搜索来源 / 引用链接现可通过系统浏览器打开，并限制为绝对 `http` / `https` URL；思考状态使用固定中心的暖陶花形帧动画，明确显示本轮运行时长，并将动态秒数移出屏读 live region。异常与终态现由共享 `RecoveryStatePanel` 统一呈现：连接中、断线、失败、停止中、停止未确认和已停止共用事实说明、保留内容和单一主动作；断线时使用 WebSocket 权威快照显示自动重连次数、预计重试时间与安全化错误摘要，“立即重连”会取消退避等待。会话面板支持跨项目全文搜索、结果片段高亮和命中消息精确跳转。IME 动画期间仅外层按真实 inset 避让，聊天子树只消费键盘可见性，避免 transcript、Markdown 和 Composer 随每个高度帧重复重建。当前公开版本为 `v1.3.1`；逐屏视觉验收与明确的重试耗尽策略仍待补齐。
+截至 2026-09-15，`mobile/lib/main.dart`、`mobile/lib/signal_console_theme.dart` 与 `mobile/lib/workspace_drawer.dart` 已完成 Cool Glass Console、Composer、Lucide chrome 与 Phosphor Fill 身份图标，并保持原有网络、会话、附件、权限和 transcript 行为。启动页已脱离暖纸体系，采用 Generative Parametric Identity：冷白底上的蓝 / 青 / 荧光黄绿双流由真实 bootstrap phase seed 驱动，在上半屏注册为双 C 连接标记；左上显示真实绘制参数，右下显示产品名与权威启动状态，Reduce Motion 固定为稳定注册帧。设置页也已脱离暖纸体系，采用 Apple 风格的 Preference Gallery：约 94% 高独立界面、顶部实时偏好预览、冷白 / 银灰 / 石墨层级和系统蓝交互色；聊天背景页共享设置视觉框架，模型选择器使用共享 `AppOptionRow` sheet，暖色只出现在聊天预览内部。后续已落地：`accent` CTA、手机系统默认字体、四角统一 22px 的 elevated paper 助手气泡（短文本 hug、细描边）、连续字号滑杆（默认 1.0）、权限卡工作目录、聚焦描边对比，以及叠在 transcript 上的 bounded 玻璃 Composer（思考强度仪表、权限与模型常驻工具行、`+` 仅附件；键盘打开时与 IME 连续衔接；滚动列表去气泡阴影 / 无标记跳过 Markdown / 有标记时流式期间即渲染 / 活动轨避免 `IntrinsicHeight`）。点击思考仪表后页面整体柔焦，悬浮大仪表支持五档圆弧滑动吸附，中心切回自动，并提供屏读增减动作与键盘方向键。助手 Markdown 中的搜索来源 / 引用链接现可通过系统浏览器打开，并限制为绝对 `http` / `https` URL；思考状态使用固定中心的花形帧动画，明确显示本轮运行时长，并将动态秒数移出屏读 live region。异常与终态现由共享 `RecoveryStatePanel` 统一呈现：连接中、断线、失败、停止中、停止未确认和已停止共用事实说明、保留内容和单一主动作；断线时使用 WebSocket 权威快照显示自动重连次数、预计重试时间与安全化错误摘要，“立即重连”会取消退避等待。会话导航页支持跨项目全文搜索、结果片段高亮和命中消息精确跳转。IME 动画期间仅外层按真实 inset 避让，聊天子树只消费键盘可见性，避免 transcript、Markdown 和 Composer 随每个高度帧重复重建。当前公开版本为 `v1.3.1`；逐屏视觉验收与明确的重试耗尽策略仍待补齐。
 
-实现文件补充：`mobile/lib/effort_gauge.dart` 负责 Composer 暖陶思考强度仪表与系统级模态层。
+实现文件补充：`mobile/lib/effort_gauge.dart` 负责 Composer 思考强度仪表与系统级模态层。
 
 ## 目标与非目标
 
 目标：
 
-- 将聊天、transcript、活动轨与输入台收敛为“暖纸控制台 / Warm Console”，其他系统界面按任务建立独立视觉世界。
+- 将聊天、transcript、活动轨与输入台收敛为「冷玻璃控制台 / Cool Glass Console」，其他系统界面按任务建立独立视觉世界。
 - 补齐配对、会话选择、运行控制、权限处理、Diff 查看与恢复状态的统一体验。
 - 让连接、运行、停止、失败和断线在短暂扫视中可判断。
 - 保留现有协议与安全边界，优先通过 UI 重组完成改造。
@@ -26,19 +26,19 @@
 
 ## 视觉基线
 
-- 本节中的暖白、陶土、气泡和 Composer 规则只约束聊天控制台；启动、配对、设置、恢复等界面不自动继承这些 token。
+- 本节中的冷近白、蓝色 accent、气泡和 Composer 规则只约束聊天控制台；启动、配对、设置、恢复等界面不自动继承这些 token。
 - 基准画板为 390×844，页面水平安全边距 20px，主要内容宽度 350px。
-- 页面背景、消息区、活动区和输入台保持同一暖白色温。
-- 浅陶土（`terracotta`）只用于品牌大面积与执行节点；实心 CTA / 发送 /「仅本次允许」使用 `terracotta-deep` + elevated 字色。
+- 页面背景、消息区、活动区和输入台保持同一冷近白色温。
+- 陶土色叙事已废弃：品牌不再使用 terracotta；实心 CTA / 发送 /「仅本次允许」统一使用单一克制蓝 accent + elevated 字色（见 DESIGN.md）。
 - 在线与完成不使用绿色；状态由图标、文案和色调共同表达。
 - Flutter 不打包自定义字体；UI 与助手正文使用手机系统默认字体，助手正文约 15.5px / 1.6，用户消息约 15px / 1.6。
-- 设置「对话偏好 → 字体大小」提供连续滑杆（约 0.85×–1.40×，步进 0.05，默认 0.95）；缩放与系统文字缩放相乘，夹在 0.85–1.6。
-- 设置页使用独立的冷白 / 银灰 / 石墨视觉世界和系统蓝交互色；暖纸与陶土只在设置中的聊天预览内容内出现。
-- 默认无玻璃、无渐变、无普通卡片阴影、无彩色偏移阴影；系统级思考强度模态层为受控例外，使用 sigma 4 背景柔焦、低透明暖色径向光场，以及大仪表的弧线柔影、浅灰金属环、指针阴影和轴心高光。
+- 设置「对话偏好 → 字体大小」提供连续滑杆（约 0.85×–1.40×，步进 0.05，默认 1.0）；缩放与系统文字缩放相乘，夹在 0.85–1.6。
+- 设置页使用独立的冷白 / 银灰 / 石墨视觉世界和系统蓝交互色；聊天预览可以展示用户选择的聊天背景（含可选「暖纸」预设）。
+- 玻璃只用于 header / composer 等 bounded chrome；transcript 与文字密集 overlay 保持标准冷近白材质，不把滚动行做成实时模糊。无普通卡片阴影、无彩色偏移阴影。系统级思考强度模态层为受控例外：sigma 4 背景柔焦、低透明径向光场，以及大仪表的弧线柔影、浅灰金属环、指针阴影和轴心高光。
 - 关键状态与按钮辅助文字最低 12px；正文约 15–15.5px；Diff 代码 12–13px。
 - 视觉图标按钮可为 36×36，实际命中区至少 44×44。
-- 图标统一为 20/24px 线性风格，不能混用 Unicode、Material 实心图标和自绘字符。
-- 输入聚焦描边使用 `terracotta-deep`（约 1.4px）。
+- 图标：chrome 用 Lucide 线性 20/24px；会话 / 项目 / 模型身份标记用 Phosphor Fill。不混用 Unicode 或 Material 实心图标。
+- 输入聚焦描边使用 accent（约 1.4px）。
 
 完整设计 token 见 [`DESIGN.md`](../DESIGN.md)。
 
@@ -48,7 +48,7 @@
 - 首页先显示「当前偏好」实时预览，将模型、聊天背景与阅读字号合成在一块可扫视画面中；偏好变化立即反映在预览。
 - 模型、背景、字号与通知位于同一扁平分组；桌面主机使用另一块紧凑分组，服务和目录降为次级事实，不使用绿色在线点。
 - 聊天背景页复用设置页的近全屏容器、返回标题栏、系统蓝选择态、16px 内容圆角和至少 44×44 命中区。
-- 模型选择器保留原有冰川蓝渐变双栏索引设计；背景页保留大预览、两列背景样本、相册导入、图片淡化与恢复默认。
+- 模型选择器使用共享 `AppOptionRow` sheet 与 Phosphor Fill 身份图标；背景页保留大预览、两列背景样本、相册导入、图片淡化与恢复默认。
 
 ## 页面与画板映射
 
@@ -56,7 +56,7 @@
 
 用户目标：确认 App 正在恢复真实的手机—桌面控制路径，而不是观看与业务无关的品牌动画。
 
-- 使用 Generative Parametric Identity；批准稿与实现清单见 [`.impeccable/surfaces/mobile-lib-main-dart.md`](../.impeccable/surfaces/mobile-lib-main-dart.md)。
+- 使用 Generative Parametric Identity；批准稿是视觉验收基准，不作为 APK 运行时图片打包。
 - 冷白启动背景为 `#F5F6F7`，Android 原生 launch window 与 Flutter 首帧必须同色。
 - 左侧蓝 / 青流和右侧荧光黄绿 / 青流各约 20 条细路径，从屏幕两侧进入，在上半屏形成对向双 C 注册环，再交叉离场。
 - 左上 `SEED` 数字必须是实际绘制参数；bootstrap phase 变化时 seed、几何与状态文字同步变化。
@@ -78,10 +78,10 @@
 
 用户目标：恢复最近任务或选择其他会话。
 
-- 面板使用约 92% 高度的 bottom sheet，保留顶部拖拽柄并适配底部安全区。
+- 会话导航使用独立页面、系统返回与顶部紧凑新建操作；页面进入和退出遵循 Android predictive back，reduced motion 时路由时长归零。Bottom sheet / dialog 统一使用 220ms 进入 / 160ms 退出，系统减少动态效果时不播放空间转场。
 - 默认视图展示当前项目会话，并保留「所有项目」入口和少量项目快捷项；完整项目列表在子视图中选择后返回会话视图。
-- 项目与会话使用连续暖纸背景上的扁平列表，层级由字号、分组标题、缩进和留白表达，不堆叠卡片。
-- 每项至少显示会话名、引擎、状态与摘要；项目子视图保留完整路径以区分同名目录。
+- 项目与会话使用纯白画布上的扁平列表，层级由字号、分组标题、缩进和留白表达，不堆叠卡片。
+- 每项显示会话名、引擎和当前 / 运行状态；完整摘要保留在 transcript 与搜索结果中，不挤压高频会话列表。项目子视图保留完整路径以区分同名目录。
 - 切换或创建会话在任务运行、附件上传或停止中禁用。
 - 固定说明“切换会话不会中断桌面端正在运行的任务”仅在协议事实成立时显示。
 - 搜索按需进入独立子视图：空态显示提示，输入后通过 300ms 防抖查询 daemon 的权威 transcript，并提供清除、重试和返回当前上下文入口。
@@ -95,11 +95,11 @@
 
 1. 分离式浮动会话控制。
 2. 全高 transcript（含活动与证据）；列表底部留白让末条可读。
-3. 不透明悬浮 Composer（叠在 transcript 底边之上；列表可滚入 dock 背后，dock 本身不做半透明叠字）。
+3. bounded 玻璃 Composer（叠在 transcript 底边之上；列表可滚入 dock 背后）。
 
 顶部参考 Claude 手机端：左侧仅保留圆形菜单，右侧是新建与更多组成的短胶囊，中间不显示产品名、会话名、连接状态或设备名。非「已连接」相位时，会话头下方显示紧凑 `ConsoleStatusStrip`。模型、权限图标与上下文余量留在 Composer 工具行，路径和设备信息进入设置或 sheet。
 
-用户消息使用无描边暖陶灰气泡（约 0.88 屏宽，垂直 padding 7px）；Claude 连续回复靠左使用更宽的无描边 `surface` 阅读气泡（贴合更窄的页面左右边距、四角统一为 22px、无 per-bubble 阴影、两侧各 6px 额外纸面边距、垂直 padding 8/9px）+ 手机系统默认字体；用纸面色阶而不是外框区分。间距采用两档节奏：新一轮用户消息前 14px 呼吸留白，同一回合内紧凑衔接（用户→活动 9px、活动↔回复 12/4px、回复之间 6px）。Markdown 段落与列表项共用 5px `blockSpacing` 主节奏（分点排版紧凑），标题上方留白更大；代码块由自定义 `pre` builder 渲染为带语言标签和复制按钮的独立卡片（RikkaHub 式工具栏），表格使用 Intrinsic 列宽保证可读；搜索来源 / 引用链接点击后交给系统浏览器，仅允许绝对 `http` / `https` URL。无 Markdown 标记的纯文本走廉价 `Text` 路径。空 transcript：已连接给快捷下一步；离线给重连卡；连接中给独立状态卡。连续工具活动合并进竖向时间线卡（`ActivityTimelineCard`：连接线 + 状态图标，默认只显示最近 2 步，可展开全部，单步可展开 detail），当前活动保持可见，运行中必须始终能看到停止入口。
+用户消息使用无描边冷灰蓝气泡（约 0.88 屏宽，垂直 padding 7px）；Claude 连续回复靠左使用更宽的 `surfaceElevated` 细描边阅读气泡（短文本 hug 内容、长文本在列宽内换行、四角统一为 22px、无 per-bubble 阴影、两侧各 6px 额外纸面边距、垂直 padding 8/9px）+ 手机系统默认字体。间距采用两档节奏：新一轮用户消息前 14px 呼吸留白，同一回合内紧凑衔接（用户→活动 9px、活动↔回复 12/4px、回复之间 6px）。Markdown 段落与列表项共用 8px `blockSpacing` 主节奏，标题上方留白更大；有 Markdown 标记时流式期间即渲染，无标记走廉价 `Text` 路径。代码块由自定义 `pre` builder 渲染为带语言标签和复制按钮的独立卡片（`AppColors.control` 底、无内描边），表格使用 Intrinsic 列宽保证可读；搜索来源 / 引用链接点击后交给系统浏览器，仅允许绝对 `http` / `https` URL。空 transcript：已连接给快捷下一步；离线给重连卡；连接中给独立状态卡。连续工具活动合并进竖向时间线卡（`ActivityTimelineCard`：连接线 + 状态图标，默认只显示最近 2 步，可展开全部，单步可展开 detail），当前活动保持可见，运行中必须始终能看到停止入口。
 
 Composer 默认保持 28px 全圆角、轻阴影并避开手势区；键盘打开后取消底部间隙与阴影，底部两角变为直角并贴合 IME。键盘 inset 仍传递给输入区用于状态判断，Transcript 只缩短可见高度，不重建已有消息。
 
@@ -207,18 +207,18 @@ Composer 默认保持 28px 全圆角、轻阴影并避开手势区；键盘打�
 
 - 复用现有 `ActivityKind` 与 `ActivityState`。
 - 当前 running 事件为完整卡；done/stopped 事件默认折叠；error 事件保留错误摘要。
-- thinking running 使用固定中心的暖陶花形帧动画：圆点生长为四瓣 / 六瓣 / 八瓣星芒后收回，文字位置不移动；显示「本轮已运行 N 秒」。关闭系统动画时固定为完整花形，屏读只在进入状态时播报一次「正在思考」。其他活动 running 使用 `CircularProgressIndicator`。
+- thinking running 使用固定中心的花形帧动画：圆点生长为四瓣 / 六瓣 / 八瓣星芒后收回，文字位置不移动；显示「本轮已运行 N 秒」。关闭系统动画时固定为完整花形，屏读只在进入状态时播报一次「正在思考」。其他活动 running 使用 `CircularProgressIndicator`。
 - 任务轨只在活动局部出现，不贯穿整屏。
 
 ### Composer
 
 - 悬浮叠在 transcript 底边：`ChatScreen` 用 `Stack` 全高铺对话，`PromptBar` 底对齐；列表/空状态底部 padding 约 188，避免末条被挡住。
-- 标准最小高度约 110；圆角 `composerFloat`（28）；表面不透明 `surfaceElevated` + `floatingComposer` 单层轻阴影。
+- 标准最小高度约 110；圆角 `composerFloat`（28）；表面为 bounded `AppLiquidGlass.strong`。
 - `SafeArea(bottom: false)`，底边用 `MediaQuery.viewPadding.bottom`（无手势条时回退 8）抬离系统指示条。
-- 上方是可增长文本区；下方工具行贴底：圆形附件 `+`、暖陶小仪表，随后模型胶囊、权限图标与上下文余量紧贴一组（组内约 4px，共用一个 flex 槽），再接陶土色圆形发送或停止；窄屏时优先收缩模型文案。点击小仪表打开系统级思考强度模态层：大仪表提供自动加低、中、高、超高、最大五个手动档位。
+- 上方是可增长文本区；下方工具行贴底：圆形附件 `+`、小仪表，随后模型胶囊、权限图标与上下文余量紧贴一组（组内约 4px，共用一个 flex 槽），再接蓝色圆形发送或停止；窄屏时优先收缩模型文案。点击小仪表打开系统级思考强度模态层：大仪表提供自动加低、中、高、超高、最大五个手动档位。
 - `+` 只打开附件；权限模式常驻为图标入口，点开既有权限 sheet（含 bypass 二次确认），并保留完整模式 tooltip / 屏读语义和 44px 命中区。
 - 点击小仪表后使用系统模态层柔焦背景，不出现底部面板；大仪表沿圆弧滑动并吸附五档，点击中心切回自动，松手提交偏好，点击空白关闭。
-- 模型选择使用紧凑暖色触发胶囊；打开后切换到冰川蓝渐变的双栏索引选择器，当前行以深蓝楔形指示，内容区展示所选模型摘要。
+- 模型选择使用紧凑模型胶囊；打开后是共享 `AppOptionRow` sheet，身份图标为 Phosphor Fill。
 - 权限图标旁以无底色浅灰细环和剩余百分比显示上下文，深灰短弧表示已消耗比例；完整 token 数保留在 tooltip / 屏读语义中，上下文数据不改变指令建议区高度。
 - 视觉控制为 36px，命中区为 44px。
 - 附件预览显示在输入台内部的可滚动短条，不改变核心控制顺序。
@@ -257,15 +257,15 @@ UI 直接把这些事实映射为当前视图，不引入新的全局状态机�
 
 ## 图标规范
 
-当前实现默认使用 `lucide_icons_flutter` 3.1.15。Project and Session Navigator 是受控例外，使用 `phosphor_flutter` 2.1.0 的 Regular/Fill：Regular 用于普通导航、文件夹、搜索和会话，Fill 只用于当前选中状态；其他页面仍使用 Lucide。本轮未引入 `flutter_svg` 或额外图标资产。
+chrome 使用 `lucide_icons_flutter`；会话、项目与模型身份标记使用 `phosphor_icons` Fill。项目行与标题共享同一项目身份图标。不引入 `flutter_svg` 或额外图标资产。
 
-思考态不复用 Lucide 图标，而由 `CustomPainter` 绘制固定中心的暖陶花形帧动画，避免 Unicode 字形差异和水平位移；普通活动 running 继续使用 Flutter 原生 `CircularProgressIndicator`。不使用 `flutter_animate`；入场动效被移除，保留花形思考动画、`SignalPressEffect` 和其他已有原生反馈。
+思考态不复用 Lucide 图标，而由 `CustomPainter` 绘制固定中心的花形帧动画，避免 Unicode 字形差异和水平位移；普通活动 running 继续使用 Flutter 原生 `CircularProgressIndicator`。不使用 `flutter_animate`；入场动效被移除，保留花形思考动画、`SignalPressEffect` 和其他已有原生反馈。
 
 必须统一的首批图标：menu、more-horizontal、plus、chevron-left/right/down、arrow-up、stop-square、rotate-cw、monitor、monitor-off、terminal、file-diff、check、alert-circle。
 
 ## 实现进度与后续顺序
 
-截至 2026-08-24，Phase 1 的主题、会话头、活动展示、Composer、设置/菜单与默认 Lucide 图标迁移已落地；Project and Session Navigator 的约 92% 高三视图 bottom sheet、扁平项目/会话列表、按需项目与搜索子视图，以及 Phosphor 受控图标例外已合入开发代码并装真机。a11y/UX 补强（`terracotta-deep` CTA、系统默认字体、助手气泡、权限工作目录、连接中状态条/空状态、聚焦描边）与悬浮 Composer（transcript 垫底、权限芯片常驻、`+` 仅附件、更宽气泡）已合入开发代码。模型选择器已切换为冰川蓝渐变双栏索引布局，思考强度仪表已完成圆弧吸附、自动档中心点击和屏读调节。Phase 3 已用共享 `ConsolePresentation` 和 `RemoteConnectionSnapshot` 统一恢复语义；后续工作主要是重试耗尽策略与完整逐屏真机视觉清单。
+截至 2026-09-15，Cool Glass 主题、会话头、活动展示、Composer、设置/菜单、Lucide chrome 与 Phosphor Fill 身份图标已落地；Project and Session Navigator 仍是独立页面，保留按需项目与搜索子视图、平台路由动画和支持减少动态效果的页内过渡。项目层级使用横向 shared-axis，搜索框在 AppBar 内展开并延迟获取焦点。页面路由、bottom sheet、dialog、drawer 与思考强度 overlay 共享进入慢于退出的统一节奏。助手气泡 hug / 细描边、流式 Markdown、代码块无内描边、默认 100% 阅读字号与共享 `AppOptionRow` 模型 sheet 已合入开发代码。思考强度仪表已完成圆弧吸附、自动档中心点击和屏读调节。Phase 3 已用共享 `ConsolePresentation` 和 `RemoteConnectionSnapshot` 统一恢复语义；后续工作主要是重试耗尽策略与完整逐屏真机视觉清单。
 
 ### Phase 1：设计基础与主控制台
 
@@ -277,7 +277,7 @@ UI 直接把这些事实映射为当前视图，不引入新的全局状态机�
 ### Phase 2：主流程页面
 
 - 重构 `PairScreen` 与 `PairReviewSheet`。
-- 将 `SessionNavigatorSheet` 重做为约 92% 高度的三视图 bottom sheet：默认会话视图、项目子视图和搜索子视图；项目与会话使用扁平列表，Phosphor 仅作为受控导航图标例外。
+- 将 `SessionNavigatorPage` 重做为独立三视图页面：默认会话视图、项目子视图和搜索子视图；项目与会话使用扁平列表和 Phosphor Fill 身份图标。项目切换使用可降级的 shared-axis，搜索使用 AppBar 展开与轻微缩放淡化。
 - 将 `PermissionRequestCard` 升级为 04 权限决策体验。
 - 重构 `WorkspaceDrawer` 的文件列表和 Diff 视图。
 
@@ -310,7 +310,7 @@ flutter test
 - Composer 交互控制视觉 36px、语义命中区至少 44px，键盘出现不遮挡；权限图标可直接打开模式选择，上下文余量具有完整屏读语义。
 - 键盘从关闭进入打开状态时允许一次状态切换；后续连续 inset 帧不得重复重建已渲染消息与 Composer，指令建议必须在剩余高度内自适应且无溢出。
 - “···”菜单不显示上下文 token，保留模型名时具有“当前模型”屏读语义。
-- 思考态使用固定中心的暖陶花形帧动画，关闭系统动画时固定为完整花形；其他活动 running 仍使用原生进度指示器，测试结束无 pending Timer。
+- 思考态使用固定中心的花形帧动画，关闭系统动画时固定为完整花形；其他活动 running 仍使用原生进度指示器，测试结束无 pending Timer。
 - 权限页仅允许一次或拒绝，处理中禁用重复点击；有路径时展示工作目录，缺失时展示 fallback 文案。
 - 离线保留 transcript、草稿与附件，面板显示真实自动重连次数、预计等待和安全错误摘要；连接中空状态不复用离线卡，不恢复常驻状态条。
 - stopping、stopped 和 stop-timeout 三态互不混淆。
@@ -321,7 +321,7 @@ flutter test
 Penpot 对齐验收：
 
 - 390×844 参考尺寸下，页面左右边距、会话头、活动卡和 Composer 与画板节奏一致。
-- 单屏没有绿色状态、大黑色 Dock、玻璃、渐变或彩色偏移阴影。
+- 单屏没有绿色状态、大黑色 Dock 或彩色偏移阴影；玻璃只出现在 header / composer 等 bounded chrome。
 - 运行控制首屏能看到连接事实（状态条或空状态）、当前动作、停止入口与输入上下文。
 
-`1.3.1+5` debug APK 已于 2026-08-24 在 Android 真机完成保留数据的覆盖安装（使用 `adb install -r -t`）；Flutter 测试中的 Ahem 字体只能验证几何，真机字体观感以手机系统默认字体为准。95 项 widget tests 已通过，并覆盖项目/会话三视图、项目与搜索子视图、运行中禁用、模型选择器 320px 窄屏和思考强度仪表交互。
+`1.3.1+5` 已在 Android 真机用 `adb install -r -t` 覆盖安装（含 2026-09-15 Cool Glass 构建）；Flutter 测试中的 Ahem 字体只能验证几何，真机字体观感以手机系统默认字体为准。widget tests 覆盖项目/会话三视图、项目与搜索子视图、运行中禁用、模型选择器、助手气泡 hug、代码块与思考强度仪表交互；实际总数以 `flutter test` 为准。

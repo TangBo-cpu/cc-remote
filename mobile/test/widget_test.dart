@@ -4,11 +4,13 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
+import 'package:phosphor_icons/phosphor_icons.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:cc_remote/main.dart';
+import 'package:cc_remote/app_icon.dart';
 import 'package:cc_remote/attachments.dart';
 import 'package:cc_remote/camera_permission.dart';
 import 'package:cc_remote/chat_background.dart';
@@ -40,12 +42,118 @@ Future<void> openWorkspaceFromHeader(WidgetTester tester) async {
 }
 
 void main() {
-  test('Warm Console theme uses platform fonts for UI and assistant', () {
+  test('console theme uses platform fonts and the restrained blue accent', () {
     expect(AppTypography.fontFamily, isNull);
     expect(AppTypography.assistantFontFamily, isNull);
     final theme = buildSignalConsoleTheme();
     expect(theme.textTheme.bodyLarge?.fontFamily, isNot('NotoSerifSC'));
     expect(theme.textTheme.labelLarge?.fontFamily, isNot('NotoSerifSC'));
+    expect(theme.colorScheme.primary, AppColors.accentStrong);
+  });
+
+  testWidgets('compact press feedback targets 0.96 and can stay static', (
+    tester,
+  ) async {
+    Future<void> pumpEffect({required bool scaleOnPress}) {
+      return tester.pumpWidget(
+        MaterialApp(
+          home: Center(
+            child: SignalPressEffect(
+              scaleOnPress: scaleOnPress,
+              builder: (context, pressed, child) => DecoratedBox(
+                key: const ValueKey('press-surface'),
+                decoration: AppLiquidGlass.thin(pressed: pressed),
+                child: child,
+              ),
+              child: const SizedBox.square(
+                key: ValueKey('press-target'),
+                dimension: 44,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    await pumpEffect(scaleOnPress: true);
+    final press = await tester.startGesture(
+      tester.getCenter(find.byKey(const ValueKey('press-target'))),
+    );
+    await tester.pump();
+    expect(
+      tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale,
+      0.96,
+    );
+    expect(
+      (tester
+                  .widget<DecoratedBox>(
+                    find.byKey(const ValueKey('press-surface')),
+                  )
+                  .decoration
+              as BoxDecoration)
+          .gradient,
+      AppLiquidGlass.thinPressedGradient,
+    );
+    await press.up();
+    await tester.pump();
+    expect(tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale, 1);
+    expect(
+      (tester
+                  .widget<DecoratedBox>(
+                    find.byKey(const ValueKey('press-surface')),
+                  )
+                  .decoration
+              as BoxDecoration)
+          .gradient,
+      AppLiquidGlass.thinGradient,
+    );
+
+    await pumpEffect(scaleOnPress: false);
+    final staticPress = await tester.startGesture(
+      tester.getCenter(find.byKey(const ValueKey('press-target'))),
+    );
+    await tester.pump();
+    expect(tester.widget<AnimatedScale>(find.byType(AnimatedScale)).scale, 1);
+    await staticPress.up();
+  });
+
+  testWidgets('custom app glyphs render on the product icon grid', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: Directionality(
+            textDirection: TextDirection.rtl,
+            child: IconTheme(
+              data: const IconThemeData(color: AppColors.ink),
+              child: Wrap(
+                children: [
+                  for (final glyph in AppGlyph.values)
+                    for (final size in const [16.0, 20.0, 24.0])
+                      AppIcon(glyph, size: size),
+                  const AppIcon(
+                    AppGlyph.back,
+                    key: ValueKey('semantic-app-icon'),
+                    size: 16,
+                    semanticLabel: '返回',
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(AppIcon), findsNWidgets(AppGlyph.values.length * 3 + 1));
+    expect(
+      tester.getSize(find.byKey(const ValueKey('semantic-app-icon'))),
+      const Size.square(16),
+    );
+    expect(find.bySemanticsLabel('返回'), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   setUp(() {
@@ -367,72 +475,107 @@ void main() {
     SessionEngine? createdEngine;
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: SessionNavigatorSheet(
-            projects: const [
-              RemoteProjectSummary(
-                id: 'project-1',
-                name: 'first',
-                path: r'E:\first',
-                sessionCount: 1,
-                running: false,
-              ),
-              RemoteProjectSummary(
-                id: 'project-2',
-                name: 'second',
-                path: r'E:\second',
-                sessionCount: 1,
-                running: false,
-              ),
-            ],
-            sessions: const [
-              RemoteSessionSummary(
-                id: 'session-1',
-                projectId: 'project-1',
-                title: 'first task',
-                engine: SessionEngine.claude,
-                updatedAt: 1,
-                running: false,
-                messageCount: 2,
-              ),
-              RemoteSessionSummary(
-                id: 'session-2',
-                projectId: 'project-2',
-                title: 'second task',
-                engine: SessionEngine.codex,
-                updatedAt: 2,
-                running: false,
-                messageCount: 3,
-              ),
-            ],
-            activeProjectId: 'project-1',
-            activeSessionId: 'session-1',
-            running: false,
-            onSelect: (_) {},
-            onSearchResult: (_) {},
-            onCreate: (projectId, engine) {
-              createdProjectId = projectId;
-              createdEngine = engine;
-            },
-            onRename: (_, _) async {},
-            onArchive: (_) async {},
-            onDelete: (_) async {},
-            onSearch: (_) async => const [],
-          ),
+        home: SessionNavigatorPage(
+          projects: const [
+            RemoteProjectSummary(
+              id: 'project-1',
+              name: 'first',
+              path: r'E:\first',
+              sessionCount: 1,
+              running: false,
+            ),
+            RemoteProjectSummary(
+              id: 'project-2',
+              name: 'second',
+              path: r'E:\second',
+              sessionCount: 1,
+              running: false,
+            ),
+          ],
+          sessions: const [
+            RemoteSessionSummary(
+              id: 'session-1',
+              projectId: 'project-1',
+              title: 'first task',
+              engine: SessionEngine.claude,
+              updatedAt: 1,
+              running: false,
+              messageCount: 2,
+            ),
+            RemoteSessionSummary(
+              id: 'session-2',
+              projectId: 'project-2',
+              title: 'second task',
+              engine: SessionEngine.codex,
+              updatedAt: 2,
+              running: false,
+              messageCount: 3,
+            ),
+          ],
+          activeProjectId: 'project-1',
+          activeSessionId: 'session-1',
+          running: false,
+          onSelect: (_) {},
+          onSearchResult: (_) {},
+          onCreate: (projectId, engine) {
+            createdProjectId = projectId;
+            createdEngine = engine;
+          },
+          onRename: (_, _) async {},
+          onArchive: (_) async {},
+          onDelete: (_) async {},
+          onSearch: (_) async => const [],
         ),
       ),
     );
 
     expect(find.text('first task'), findsOneWidget);
-    expect(find.textContaining('CC'), findsOneWidget);
+    expect(find.text('当前 · CC · 2 条消息'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('session-context-icon-home')),
+      findsOneWidget,
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey('project-icon-project-1'))),
+      const Size.square(16),
+    );
+    expect(
+      tester
+          .widget<PhosphorIcon>(
+            find.byKey(const ValueKey('project-icon-project-1')),
+          )
+          .icon,
+      PhosphorIconsFill.cube,
+    );
+    expect(
+      tester.getSize(find.byKey(const ValueKey('create-session'))),
+      const Size.square(48),
+    );
+    expect(
+      tester.getSize(
+        find.descendant(
+          of: find.byKey(const ValueKey('create-session')),
+          matching: find.byType(Icon),
+        ),
+      ),
+      const Size.square(18),
+    );
     await tester.tap(find.byKey(const ValueKey('open-project-browser')));
     await tester.pump();
+    expect(find.text('选择项目'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('session-context-icon-projects')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('session-project-view')), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('session-home-view')), findsNothing);
     expect(find.text(r'E:\first'), findsOneWidget);
     expect(find.text(r'E:\second'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('project-project-2')));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(find.text('second task'), findsOneWidget);
-    expect(find.textContaining('Codex'), findsOneWidget);
+    expect(find.text('Codex · 3 条消息'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('create-session')));
     await tester.pumpAndSettle();
     expect(
@@ -459,73 +602,80 @@ void main() {
     await tester.pumpWidget(
       MaterialApp(
         theme: buildSignalConsoleTheme(),
-        home: Scaffold(
-          body: SessionNavigatorSheet(
-            projects: const [
-              RemoteProjectSummary(
-                id: 'project-1',
-                name: 'cc-remote',
-                path: r'E:\cc-remote',
-                sessionCount: 2,
-                running: false,
-              ),
-            ],
-            sessions: const [
-              RemoteSessionSummary(
-                id: 'session-1',
-                projectId: 'project-1',
-                title: '当前会话',
-                updatedAt: 1,
-                running: false,
-                messageCount: 2,
-              ),
-              RemoteSessionSummary(
-                id: 'session-2',
+        home: SessionNavigatorPage(
+          projects: const [
+            RemoteProjectSummary(
+              id: 'project-1',
+              name: 'cc-remote',
+              path: r'E:\cc-remote',
+              sessionCount: 2,
+              running: false,
+            ),
+          ],
+          sessions: const [
+            RemoteSessionSummary(
+              id: 'session-1',
+              projectId: 'project-1',
+              title: '当前会话',
+              updatedAt: 1,
+              running: false,
+              messageCount: 2,
+            ),
+            RemoteSessionSummary(
+              id: 'session-2',
+              projectId: 'project-1',
+              title: '恢复连接',
+              updatedAt: 2,
+              running: false,
+              messageCount: 4,
+            ),
+          ],
+          activeProjectId: 'project-1',
+          activeSessionId: 'session-1',
+          running: false,
+          onSelect: (sessionId) => selectedSessionId = sessionId,
+          onSearchResult: (result) {
+            selectedSearchResult = result;
+            selectedSessionId = result.sessionId;
+          },
+          onCreate: (_, _) {},
+          onRename: (_, _) async {},
+          onArchive: (_) async {},
+          onDelete: (_) async {},
+          onSearch: (query) async {
+            queries.add(query);
+            if (query != 'reconnect') return const [];
+            return const [
+              RemoteSessionSearchResult(
+                sessionId: 'session-2',
                 projectId: 'project-1',
                 title: '恢复连接',
                 updatedAt: 2,
-                running: false,
-                messageCount: 4,
+                archived: false,
+                role: RemoteSessionSearchRole.assistant,
+                messageIndex: 3,
+                snippet: 'The reconnect panel is ready.',
+                matchStart: 4,
+                matchEnd: 13,
+                matchCount: 2,
               ),
-            ],
-            activeProjectId: 'project-1',
-            activeSessionId: 'session-1',
-            running: false,
-            onSelect: (sessionId) => selectedSessionId = sessionId,
-            onSearchResult: (result) {
-              selectedSearchResult = result;
-              selectedSessionId = result.sessionId;
-            },
-            onCreate: (_, _) {},
-            onRename: (_, _) async {},
-            onArchive: (_) async {},
-            onDelete: (_) async {},
-            onSearch: (query) async {
-              queries.add(query);
-              if (query != 'reconnect') return const [];
-              return const [
-                RemoteSessionSearchResult(
-                  sessionId: 'session-2',
-                  projectId: 'project-1',
-                  title: '恢复连接',
-                  updatedAt: 2,
-                  archived: false,
-                  role: RemoteSessionSearchRole.assistant,
-                  messageIndex: 3,
-                  snippet: 'The reconnect panel is ready.',
-                  matchStart: 4,
-                  matchEnd: 13,
-                  matchCount: 2,
-                ),
-              ];
-            },
-          ),
+            ];
+          },
         ),
       ),
     );
 
     await tester.tap(find.byKey(const ValueKey('open-session-search')));
     await tester.pump();
+    final searchField = tester.widget<TextField>(
+      find.byKey(const ValueKey('session-search-field')),
+    );
+    expect(searchField.focusNode?.hasFocus, isFalse);
+    await tester.pump(AppMotion.standard - const Duration(milliseconds: 1));
+    expect(searchField.focusNode?.hasFocus, isFalse);
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(searchField.focusNode?.hasFocus, isTrue);
+    await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const ValueKey('session-search-field')),
       'reconnect',
@@ -565,48 +715,46 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: Scaffold(
-          body: SessionNavigatorSheet(
-            projects: const [
-              RemoteProjectSummary(
-                id: 'project-1',
-                name: 'first',
-                path: r'E:\first',
-                sessionCount: 2,
-                running: true,
-              ),
-            ],
-            sessions: const [
-              RemoteSessionSummary(
-                id: 'session-1',
-                projectId: 'project-1',
-                title: 'active',
-                engine: SessionEngine.claude,
-                updatedAt: 2,
-                running: true,
-                messageCount: 1,
-              ),
-              RemoteSessionSummary(
-                id: 'session-2',
-                projectId: 'project-1',
-                title: 'other',
-                engine: SessionEngine.claude,
-                updatedAt: 1,
-                running: false,
-                messageCount: 1,
-              ),
-            ],
-            activeProjectId: 'project-1',
-            activeSessionId: 'session-1',
-            running: true,
-            onSelect: (_) => selected = true,
-            onSearchResult: (_) {},
-            onCreate: (_, _) => created = true,
-            onRename: (_, _) async {},
-            onArchive: (_) async {},
-            onDelete: (_) async {},
-            onSearch: (_) async => const [],
-          ),
+        home: SessionNavigatorPage(
+          projects: const [
+            RemoteProjectSummary(
+              id: 'project-1',
+              name: 'first',
+              path: r'E:\first',
+              sessionCount: 2,
+              running: true,
+            ),
+          ],
+          sessions: const [
+            RemoteSessionSummary(
+              id: 'session-1',
+              projectId: 'project-1',
+              title: 'active',
+              engine: SessionEngine.claude,
+              updatedAt: 2,
+              running: true,
+              messageCount: 1,
+            ),
+            RemoteSessionSummary(
+              id: 'session-2',
+              projectId: 'project-1',
+              title: 'other',
+              engine: SessionEngine.claude,
+              updatedAt: 1,
+              running: false,
+              messageCount: 1,
+            ),
+          ],
+          activeProjectId: 'project-1',
+          activeSessionId: 'session-1',
+          running: true,
+          onSelect: (_) => selected = true,
+          onSearchResult: (_) {},
+          onCreate: (_, _) => created = true,
+          onRename: (_, _) async {},
+          onArchive: (_) async {},
+          onDelete: (_) async {},
+          onSearch: (_) async => const [],
         ),
       ),
     );
@@ -626,6 +774,106 @@ void main() {
     expect(find.byKey(const ValueKey('session-menu-session-2')), findsNothing);
     expect(selected, isFalse);
     expect(created, isFalse);
+  });
+
+  testWidgets('session navigator fits a small phone with large text', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(320, 568));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: const TextScaler.linear(2),
+            disableAnimations: true,
+          ),
+          child: child!,
+        ),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showSessionNavigator(
+                context,
+                projects: const [
+                  RemoteProjectSummary(
+                    id: 'project-1',
+                    name: 'cc-remote',
+                    path: r'E:\cc-remote',
+                    sessionCount: 1,
+                    running: false,
+                  ),
+                ],
+                sessions: const [
+                  RemoteSessionSummary(
+                    id: 'session-1',
+                    projectId: 'project-1',
+                    title: '当前会话',
+                    engine: SessionEngine.claude,
+                    updatedAt: 1,
+                    running: false,
+                    messageCount: 2,
+                  ),
+                ],
+                activeProjectId: 'project-1',
+                activeSessionId: 'session-1',
+                running: false,
+                onSelect: (_) {},
+                onSearchResult: (_) {},
+                onCreate: (_, _) {},
+                onRename: (_, _) async {},
+                onArchive: (_) async {},
+                onDelete: (_) async {},
+                onSearch: (_) async => const [],
+              ),
+              child: const Text('打开'),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('打开'));
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('session-navigator-page')),
+      findsOneWidget,
+    );
+    expect(tester.hasRunningAnimations, isFalse);
+    expect(find.byType(BottomSheet), findsNothing);
+    final switcher = tester.widget<AnimatedSwitcher>(
+      find.byKey(const ValueKey('session-view-switcher')),
+    );
+    expect(switcher.duration, Duration.zero);
+    expect(switcher.reverseDuration, Duration.zero);
+    expect(tester.takeException(), isNull);
+
+    await tester.tap(find.byKey(const ValueKey('open-session-search')));
+    await tester.pump();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const ValueKey('session-search-field')))
+          .focusNode
+          ?.hasFocus,
+      isTrue,
+    );
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byKey(const ValueKey('session-back-search')));
+    await tester.pump();
+
+    await tester.tap(find.byKey(const ValueKey('open-project-browser')));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('session-project-view')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byKey(const ValueKey('session-back-projects')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('session-page-back')));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('session-navigator-page')), findsNothing);
+    expect(find.text('打开'), findsOneWidget);
   });
 
   test('remote transcript snapshot restores messages and session context', () {
@@ -870,6 +1118,35 @@ void main() {
     expect(find.byKey(const ValueKey('bootstrap-signal')), findsOneWidget);
   });
 
+  testWidgets('modal surfaces honor reduced motion', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: MediaQuery(
+          data: const MediaQueryData(disableAnimations: true),
+          child: Builder(
+            builder: (context) => Scaffold(
+              body: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () =>
+                    showAttachmentSourceSheet(context, imagesOnly: true),
+                child: const Text('打开附件来源'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('打开附件来源'));
+    await tester.pump();
+
+    expect(find.text('拍照'), findsOneWidget);
+    expect(find.text('选择图片'), findsOneWidget);
+    expect(tester.hasRunningAnimations, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('startup composition survives a small phone with large text', (
     tester,
   ) async {
@@ -906,10 +1183,13 @@ void main() {
 
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
-    expect(find.text('下一件事'), findsOneWidget);
-    expect(find.text('从下方输入，或先点一个快捷任务'), findsOneWidget);
+    expect(find.text('接着处理 cc-remote'), findsOneWidget);
+    expect(find.text('从下方输入指令，或先点一个快捷任务'), findsOneWidget);
     expect(find.byTooltip('更多'), findsOneWidget);
     expect(find.byTooltip('新对话'), findsOneWidget);
+
+    await tester.showKeyboard(find.byType(TextField).last);
+    expect(tester.testTextInput.isVisible, isTrue);
 
     await TranscriptStore().save(
       TranscriptSnapshot(
@@ -923,17 +1203,40 @@ void main() {
     expect(find.textContaining('上下文'), findsNothing);
     await tester.tap(find.text('设置').last);
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('settings-surface')), findsOneWidget);
+    final settingsSurface = find.byKey(const ValueKey('settings-surface'));
+    expect(settingsSurface, findsOneWidget);
+    expect(
+      tester
+          .widget<BottomSheet>(find.byType(BottomSheet))
+          .animationController
+          ?.duration,
+      AppMotion.standard,
+    );
+    final settingsDecoration =
+        tester.widget<Container>(settingsSurface).decoration! as BoxDecoration;
+    expect(settingsDecoration.gradient, AppLiquidGlass.strongGradient);
+    expect(
+      find.descendant(
+        of: settingsSurface,
+        matching: find.byType(BackdropFilter),
+      ),
+      findsNothing,
+    );
+    expect(tester.testTextInput.isVisible, isFalse);
     expect(
       find.byKey(const ValueKey('settings-preference-preview')),
       findsOneWidget,
     );
-    expect(find.text('退出配对'), findsOneWidget);
-    expect(find.text('重新连接'), findsOneWidget);
     expect(find.text('后台通知'), findsOneWidget);
     expect(find.text('开启新对话'), findsNothing);
     expect(find.text('扫描电脑终端里的二维码'), findsNothing);
     expect(find.text('字体大小'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pumpAndSettle();
+    expect(tester.testTextInput.isVisible, isFalse);
+
+    await openSettingsFromHeader(tester);
 
     await tester.ensureVisible(
       find.byKey(const ValueKey('background-notifications-toggle')),
@@ -945,7 +1248,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(await NotificationPreferenceStore().load(), isFalse);
 
-    await tester.ensureVisible(find.text('退出配对'));
+    await tester.scrollUntilVisible(
+      find.text('退出配对'),
+      300,
+      scrollable: find.descendant(
+        of: settingsSurface,
+        matching: find.byType(Scrollable),
+      ),
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('退出配对'));
     await tester.pumpAndSettle();
@@ -1014,6 +1324,19 @@ void main() {
     expect(find.byKey(const ValueKey('model-option-follow')), findsOneWidget);
     expect(find.byKey(const ValueKey('model-option-fable')), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('demo connect can open the session list', (tester) async {
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('项目与会话'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('session-home-view')), findsOneWidget);
+    expect(find.byKey(const ValueKey('project-icon-demo-cc-remote')), findsOneWidget);
   });
 
   testWidgets('the first prompt waits for the stored model preference', (
@@ -1210,11 +1533,18 @@ void main() {
       find.byKey(const ValueKey('chat-background-setting')),
     );
     await tester.tap(find.byKey(const ValueKey('chat-background-setting')));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('settings-page')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('settings-background-page')),
+      findsOneWidget,
+    );
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('settings-background-surface')),
       findsOneWidget,
     );
+    expect(find.byType(BottomSheet), findsOneWidget);
 
     await tester.tap(find.text('亚麻'));
     await tester.pumpAndSettle();
@@ -1261,6 +1591,11 @@ void main() {
       tester.widget<AppBackground>(find.byType(AppBackground)).chatBackground,
       ChatBackgroundPreference.defaultValue,
     );
+
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('settings-surface')), findsOneWidget);
+    expect(find.byType(BottomSheet), findsOneWidget);
   });
 
   testWidgets('saved chat background is only applied to the chat route', (
@@ -1386,7 +1721,26 @@ void main() {
       find.byKey(const ValueKey('settings-preference-preview')),
       findsOneWidget,
     );
-    await tester.ensureVisible(find.text('退出配对'));
+    final settingsSurface = find.byKey(const ValueKey('settings-surface'));
+    expect(
+      find.descendant(of: settingsSurface, matching: find.byType(ListView)),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: settingsSurface,
+        matching: find.byType(SingleChildScrollView),
+      ),
+      findsNothing,
+    );
+    await tester.scrollUntilVisible(
+      find.text('退出配对'),
+      300,
+      scrollable: find.descendant(
+        of: settingsSurface,
+        matching: find.byType(Scrollable),
+      ),
+    );
     await tester.pumpAndSettle();
     expect(find.text('退出配对').hitTestable(), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -1421,7 +1775,15 @@ void main() {
     final toggle = find.byKey(
       const ValueKey('background-notifications-toggle'),
     );
-    await tester.ensureVisible(toggle);
+    await tester.scrollUntilVisible(
+      toggle,
+      240,
+      scrollable: find.descendant(
+        of: find.byKey(const ValueKey('settings-surface')),
+        matching: find.byType(Scrollable),
+      ),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(toggle);
     await tester.pumpAndSettle();
 
@@ -1464,17 +1826,20 @@ void main() {
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
 
-    final shellBefore = tester.widget<AnimatedSwitcher>(
-      find.byType(AnimatedSwitcher),
-    );
+    final shell = find.byKey(const ValueKey('shell-route-switcher'));
+    final shellBefore = tester.widget<AnimatedSwitcher>(shell);
+    await tester.tap(find.byType(TextField));
+    await tester.pumpAndSettle();
+    final composer = find.byKey(const ValueKey('composer'));
+    final composerBefore = tester.widget<SignalLiquidGlass>(composer);
 
-    await tester.enterText(find.byType(TextField), 'ping');
-    await tester.pump();
+    for (final text in const ['p', 'pi', 'ping']) {
+      await tester.enterText(find.byType(TextField), text);
+      await tester.pump();
+      expect(tester.widget<SignalLiquidGlass>(composer), same(composerBefore));
+    }
 
-    expect(
-      tester.widget<AnimatedSwitcher>(find.byType(AnimatedSwitcher)),
-      same(shellBefore),
-    );
+    expect(tester.widget<AnimatedSwitcher>(shell), same(shellBefore));
     expect(find.byTooltip('发送').hitTestable(), findsOneWidget);
   });
 
@@ -1516,10 +1881,10 @@ void main() {
       tester.widget<PromptBar>(find.byType(PromptBar)),
       same(promptDuringKeyboardAnimation),
     );
-    final composer = tester.widget<Container>(
+    final composer = tester.widget<SignalLiquidGlass>(
       find.byKey(const ValueKey('composer')),
     );
-    final composerDecoration = composer.decoration as BoxDecoration;
+    final composerDecoration = composer.decoration;
     expect(
       composerDecoration.borderRadius,
       const BorderRadius.vertical(top: Radius.circular(AppRadii.composerFloat)),
@@ -1528,7 +1893,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('keyboard resize keeps the warm paper background stationary', (
+  testWidgets('keyboard resize keeps the static glass background stationary', (
     tester,
   ) async {
     Widget buildScreen(double keyboardInset) {
@@ -1547,10 +1912,10 @@ void main() {
     }
 
     await tester.pumpWidget(buildScreen(0));
-    final backgroundBefore = tester.widget<ColoredBox>(
+    final backgroundBefore = tester.widget<DecoratedBox>(
       find.descendant(
         of: find.byKey(const ValueKey('chat-background-layer')),
-        matching: find.byType(ColoredBox),
+        matching: find.byType(DecoratedBox),
       ),
     );
     final contentHeightBefore = tester
@@ -1559,37 +1924,120 @@ void main() {
 
     await tester.pumpWidget(buildScreen(300));
 
-    expect(backgroundBefore.color, AppColors.paper);
-    expect(
-      tester
-          .widget<ColoredBox>(
-            find.descendant(
-              of: find.byKey(const ValueKey('chat-background-layer')),
-              matching: find.byType(ColoredBox),
-            ),
-          )
-          .color,
-      AppColors.paper,
+    final beforeDecoration = backgroundBefore.decoration as BoxDecoration;
+    final backgroundAfter = tester.widget<DecoratedBox>(
+      find.descendant(
+        of: find.byKey(const ValueKey('chat-background-layer')),
+        matching: find.byType(DecoratedBox),
+      ),
     );
+    final afterDecoration = backgroundAfter.decoration as BoxDecoration;
+    expect(beforeDecoration.gradient, afterDecoration.gradient);
+    expect((afterDecoration.gradient! as LinearGradient).colors, const [
+      AppColors.bgTop,
+      AppColors.bgMid,
+      AppColors.bgBottom,
+    ]);
     expect(
       tester.getSize(find.byKey(const ValueKey('keyboard-content'))).height,
       contentHeightBefore - 300,
     );
   });
 
-  testWidgets('warm sheet surfaces use soft paper lift', (tester) async {
+  testWidgets('app sheet surfaces use thick glass material', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
-        home: Scaffold(body: WarmSheetSurface(child: Text('content'))),
+        home: Scaffold(body: AppSheetSurface(child: Text('content'))),
       ),
     );
 
     expect(find.byType(BackdropFilter), findsNothing);
     final surface = tester.widget<Container>(find.byType(Container).first);
     final decoration = surface.decoration! as BoxDecoration;
-    expect(decoration.color, AppColors.surfaceElevated);
+    expect(decoration.gradient, AppLiquidGlass.strongGradient);
+    expect(decoration.border, isNull);
     expect(decoration.boxShadow, isNotNull);
     expect(decoration.boxShadow, isNotEmpty);
+  });
+
+  testWidgets('chat routes do not restore the composer keyboard', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Builder(
+          builder: (context) => AppBackground(
+            child: ChatScreen(
+              session: SavedSession(
+                origin: Uri.parse('https://cc-remote.example.com'),
+                token: 'demo',
+                deviceName: 'My PC',
+                workspaceDir: 'cc-remote',
+              ),
+              running: false,
+              connected: true,
+              offline: false,
+              modelName: 'claude-opus-4-8',
+              contextWindow: 200000,
+              remainingContext: 174919,
+              messages: const [],
+              commands: const [],
+              permissionMode: PermissionMode.manual,
+              allowBypassPermissions: false,
+              pendingPermissions: const [],
+              respondingPermissionIds: const {},
+              promptController: controller,
+              onFillPrompt: (_) {},
+              onReconnect: () {},
+              onOpenSettings: () {},
+              onOpenModelPicker: () {},
+              onNewConversation: () =>
+                  unawaited(showSessionEnginePicker(context)),
+              onOpenSessions: () => unawaited(
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (pageContext) => Scaffold(
+                      body: Center(
+                        child: TextButton(
+                          key: const ValueKey('test-session-back'),
+                          onPressed: () => Navigator.pop(pageContext),
+                          child: const Text('返回'),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              onOpenWorkspace: () {},
+              onPermissionModeSelected: (_) {},
+              onPermissionAllow: (_) {},
+              onPermissionDeny: (_) {},
+              onSend: () {},
+              onStop: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.showKeyboard(find.byType(TextField));
+    await tester.tap(find.byTooltip('项目与会话'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('test-session-back')));
+    await tester.pumpAndSettle();
+    expect(tester.testTextInput.isVisible, isFalse);
+
+    await tester.showKeyboard(find.byType(TextField));
+    await tester.tap(find.byTooltip('新对话'));
+    await tester.pumpAndSettle();
+    expect(find.text('选择会话引擎'), findsOneWidget);
+    await tester.tapAt(const Offset(8, 8));
+    await tester.pumpAndSettle();
+    expect(tester.testTextInput.isVisible, isFalse);
   });
 
   testWidgets('new conversation clears the current transcript', (tester) async {
@@ -1628,15 +2076,32 @@ void main() {
 
     await openWorkspaceFromHeader(tester);
 
+    expect(
+      find.byKey(const ValueKey('workspace-browser-page')),
+      findsOneWidget,
+    );
     expect(find.byKey(const ValueKey('workspace-files')), findsOneWidget);
     expect(find.textContaining('codex/workspace-sidebar'), findsOneWidget);
 
     await tester.tap(find.text('修改 2'));
     await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<AnimatedAlign>(
+            find.byKey(const ValueKey('workspace-tab-indicator')),
+          )
+          .alignment,
+      Alignment.centerRight,
+    );
     expect(find.byKey(const ValueKey('workspace-changes')), findsOneWidget);
 
     await tester.tap(find.text('daemon.ts'));
     await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('workspace-document-page')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('workspace-browser-page')), findsNothing);
     expect(find.byKey(const ValueKey('workspace-diff')), findsOneWidget);
     expect(find.textContaining("workspace_drawer.dart"), findsOneWidget);
   });
@@ -1809,6 +2274,64 @@ void main() {
     await tester.tap(find.text('对当前对话开启'));
     await tester.pumpAndSettle();
     expect(selected, PermissionMode.bypassPermissions);
+  });
+
+  testWidgets('context ring warns only when remaining context is low', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+
+    Widget buildBar(int remaining) => MaterialApp(
+      home: Scaffold(
+        body: Align(
+          alignment: Alignment.bottomCenter,
+          child: SizedBox(
+            width: 320,
+            child: PromptBar(
+              controller: controller,
+              commands: const [],
+              running: false,
+              connected: true,
+              offline: false,
+              permissionMode: PermissionMode.manual,
+              allowBypassPermissions: false,
+              contextWindow: 200000,
+              remainingContext: remaining,
+              onPermissionModeSelected: (_) {},
+              onCommandSelected: (_) {},
+              onReconnect: () {},
+              onSend: () {},
+              onStop: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(buildBar(29900));
+    await tester.pump();
+    expect(find.bySemanticsLabel('上下文剩余 30K / 200K，15%'), findsOneWidget);
+    expect(find.text('15%'), findsOneWidget);
+    final warningRing = tester.widget<CircularProgressIndicator>(
+      find.descendant(
+        of: find.byKey(const ValueKey('composer-context-indicator')),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+    );
+    expect(warningRing.color, AppColors.warning);
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(buildBar(30001));
+    await tester.pump();
+    final quietRing = tester.widget<CircularProgressIndicator>(
+      find.descendant(
+        of: find.byKey(const ValueKey('composer-context-indicator')),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+    );
+    expect(quietRing.color, AppColors.inactive);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('composer effort gauge supports drag, auto, and semantics', (
@@ -2099,7 +2622,7 @@ void main() {
     expect(find.text('允许 Claude 运行命令？'), findsOneWidget);
     expect(find.text('npm test'), findsOneWidget);
     expect(find.text(r'E:\client\production'), findsOneWidget);
-    expect(find.text('仅本次请求'), findsOneWidget);
+    expect(find.text('仅本次请求'), findsNothing);
     await tester.tap(find.text('仅本次允许'));
     expect(allowed, isTrue);
   });
@@ -2516,6 +3039,14 @@ void main() {
     );
     expect(newConversation.onPressed, isNull);
     expect(find.byType(LinearProgressIndicator), findsNothing);
+    expect(find.byType(BackdropGroup), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byType(BackdropGroup),
+        matching: find.byType(BackdropFilter),
+      ),
+      findsNWidgets(3),
+    );
   });
 
   testWidgets('minimal header omits redundant identity and status copy', (
@@ -2591,9 +3122,127 @@ void main() {
       find.byKey(const ValueKey('composer-primary-action')),
     );
     expect(stopButton.onPressed, isNull);
+    final stopVisual = tester.widget<Container>(
+      find.byKey(const ValueKey('composer-primary-visual')),
+    );
+    expect(
+      (stopVisual.decoration! as BoxDecoration).color,
+      AppColors.composerDisabledFill,
+    );
+    expect(AppColors.composerDisabledFill.a, 0);
 
     await tester.tap(find.byKey(const ValueKey('composer-primary-action')));
     expect(stopCount, 0);
+  });
+
+  testWidgets('composer primary action morphs without replacing its button', (
+    tester,
+  ) async {
+    final controller = TextEditingController(text: '继续');
+    addTearDown(controller.dispose);
+    var running = false;
+    var stopping = false;
+    late StateSetter rebuild;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return PromptBar(
+                controller: controller,
+                commands: const [],
+                running: running,
+                stopping: stopping,
+                connected: true,
+                offline: false,
+                permissionMode: PermissionMode.manual,
+                allowBypassPermissions: false,
+                onPermissionModeSelected: (_) {},
+                onCommandSelected: (_) {},
+                onReconnect: () {},
+                onSend: () {},
+                onStop: () {},
+              );
+            },
+          ),
+        ),
+      ),
+    );
+
+    final action = find.byKey(const ValueKey('composer-primary-action'));
+    final actionElement = tester.element(action);
+    expect(find.byKey(const ValueKey('composer-primary-send')), findsOneWidget);
+
+    rebuild(() => running = true);
+    await tester.pump(AppMotion.fast);
+    expect(identical(actionElement, tester.element(action)), isTrue);
+    expect(find.byKey(const ValueKey('composer-primary-stop')), findsOneWidget);
+
+    rebuild(() => stopping = true);
+    await tester.pump(AppMotion.fast);
+    expect(identical(actionElement, tester.element(action)), isTrue);
+    expect(
+      find.byKey(const ValueKey('composer-primary-waiting')),
+      findsOneWidget,
+    );
+    expect(tester.widget<IconButton>(action).onPressed, isNull);
+
+    rebuild(() {
+      running = false;
+      stopping = false;
+    });
+    await tester.pump(AppMotion.fast);
+    expect(find.byKey(const ValueKey('composer-primary-send')), findsOneWidget);
+  });
+
+  testWidgets('composer waiting cue is static with reduced motion', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: MediaQuery(
+            data: const MediaQueryData(disableAnimations: true),
+            child: PromptBar(
+              controller: controller,
+              commands: const [],
+              running: true,
+              stopping: true,
+              connected: true,
+              offline: false,
+              permissionMode: PermissionMode.manual,
+              allowBypassPermissions: false,
+              onPermissionModeSelected: (_) {},
+              onCommandSelected: (_) {},
+              onReconnect: () {},
+              onSend: () {},
+              onStop: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final switcher = tester.widget<AnimatedSwitcher>(
+      find.byKey(const ValueKey('composer-primary-icon-switcher')),
+    );
+    expect(switcher.duration, Duration.zero);
+    expect(switcher.reverseDuration, Duration.zero);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('composer-primary-waiting')),
+        matching: find.byIcon(LucideIcons.loader),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
   testWidgets('route motion turns off when reduced motion is requested', (
@@ -2828,7 +3477,7 @@ void main() {
     expect(createdConversation, isFalse);
   });
 
-  testWidgets('conversation bubbles use light rounded paper surfaces', (
+  testWidgets('conversation bubbles stay distinct on light backgrounds', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -2867,17 +3516,18 @@ void main() {
     expect(markdown.styleSheet!.p!.fontFamily, isNot('NotoSerifSC'));
     expect(markdown.styleSheet!.p!.fontSize, AppTypography.assistantBodySize);
     expect(markdown.styleSheet!.h1!.fontFamily, isNot('NotoSerifSC'));
-    expect(markdown.styleSheet!.blockSpacing, 5);
+    expect(markdown.styleSheet!.blockSpacing, 8);
+    expect(markdown.styleSheet!.listIndent, 24);
     expect(
       markdown.styleSheet!.h1Padding,
-      const EdgeInsets.only(top: 8, bottom: 2),
+      const EdgeInsets.only(top: 12, bottom: 4),
     );
     expect(markdown.builders.containsKey('pre'), isTrue);
     final bubble = tester.widget<DecoratedBox>(assistant.first);
     final decoration = bubble.decoration as BoxDecoration;
-    expect(decoration.color, AppColors.surface);
+    expect(decoration.color, AppColors.surfaceElevated);
     expect(decoration.borderRadius, BorderRadius.circular(AppRadii.bubble));
-    expect(decoration.border, isNull);
+    expect(decoration.border, Border.all(color: AppColors.bubbleOutline));
     expect(
       decoration.boxShadow == null || decoration.boxShadow!.isEmpty,
       isTrue,
@@ -2888,8 +3538,47 @@ void main() {
     );
     final userDecoration = user.decoration as BoxDecoration;
     expect(userDecoration.color, AppColors.userBubble);
-    expect(userDecoration.border, isNull);
+    expect(userDecoration.border, Border.all(color: AppColors.bubbleOutline));
     expect(userDecoration.borderRadius, BorderRadius.circular(AppRadii.bubble));
+  });
+
+  testWidgets('short assistant replies hug instead of stretching full width', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 390,
+            child: Column(
+              children: [
+                MessageBlock(
+                  message: TranscriptMessage(MessageRole.assistant, '好'),
+                ),
+                MessageBlock(
+                  message: TranscriptMessage(
+                    MessageRole.assistant,
+                    '这是一条需要换行的长回复，用来确认上限仍是列宽而不是被强制拉满。',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final bubbles = find.byKey(const ValueKey('assistant-message'));
+    final shortWidth = tester.getSize(bubbles.at(0)).width;
+    final longWidth = tester.getSize(bubbles.at(1)).width;
+    expect(shortWidth, lessThan(120));
+    expect(shortWidth, lessThan(longWidth));
+    expect(longWidth, lessThan(390));
   });
 
   test('search source links accept only absolute web URLs', () {
@@ -2942,7 +3631,7 @@ void main() {
     expect(arguments['useWebView'], isFalse);
   });
 
-  testWidgets('composer controls use 44 point targets and 36 point visuals', (
+  testWidgets('composer controls keep 48 point targets and emphasize send', (
     tester,
   ) async {
     final controller = TextEditingController(text: '继续');
@@ -2984,17 +3673,100 @@ void main() {
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('composer-primary-visual'))),
-      const Size.square(AppSizes.iconControl),
+      const Size.square(40),
     );
-    final composer = tester.widget<Container>(
+    final sendVisual = tester.widget<Container>(
+      find.byKey(const ValueKey('composer-primary-visual')),
+    );
+    final sendDecoration = sendVisual.decoration! as BoxDecoration;
+    expect(sendDecoration.color, AppColors.cta);
+    expect(sendDecoration.boxShadow, isNotEmpty);
+    final sendIcon = tester.widget<Icon>(
+      find.descendant(
+        of: find.byKey(const ValueKey('composer-primary-visual')),
+        matching: find.byType(Icon),
+      ),
+    );
+    expect(sendIcon.size, 20);
+
+    controller.clear();
+    await tester.pump();
+    expect(
+      (tester
+                  .widget<Container>(
+                    find.byKey(const ValueKey('composer-primary-visual')),
+                  )
+                  .decoration!
+              as BoxDecoration)
+          .color,
+      AppColors.glassControl,
+    );
+    controller.text = '继续';
+    await tester.pump();
+    final rail = tester.widget<DecoratedBox>(
+      find.byKey(const ValueKey('composer-control-rail')),
+    );
+    final railDecoration = rail.decoration as BoxDecoration;
+    expect(railDecoration.color, AppColors.composerControlRest);
+    expect(railDecoration.boxShadow, isNull);
+
+    final expandSurface = tester.widget<SignalAnimatedSurface>(
+      find.byKey(const ValueKey('composer-expand-visual')),
+    );
+    final expandDecoration = expandSurface.decoration as BoxDecoration;
+    expect(expandDecoration.color, Colors.transparent);
+    expect(expandDecoration.boxShadow, isNull);
+
+    final modelSurface = tester.widget<SignalAnimatedSurface>(
+      find.byKey(const ValueKey('composer-model-visual')),
+    );
+    final modelDecoration = modelSurface.decoration as BoxDecoration;
+    expect(modelDecoration.color, Colors.transparent);
+    expect(modelDecoration.boxShadow, isNull);
+
+    final press = await tester.startGesture(
+      tester.getCenter(find.byKey(const ValueKey('permission-mode-chip'))),
+    );
+    await tester.pump();
+    expect(
+      (tester
+                  .widget<SignalAnimatedSurface>(
+                    find.byKey(const ValueKey('permission-mode-visual')),
+                  )
+                  .decoration
+              as BoxDecoration)
+          .color,
+      AppColors.composerControlPressed,
+    );
+    await press.up();
+    await tester.pump();
+    final composer = tester.widget<SignalLiquidGlass>(
       find.byKey(const ValueKey('composer')),
     );
-    final decoration = composer.decoration as BoxDecoration;
+    final decoration = composer.decoration;
+    expect(decoration.gradient, AppLiquidGlass.strongBackdropGradient);
+    expect(decoration.border, isNull);
     expect(
       decoration.borderRadius,
       BorderRadius.circular(AppRadii.composerFloat),
     );
     expect(decoration.boxShadow, isNotEmpty);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('composer')),
+        matching: find.byType(BackdropFilter),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.showKeyboard(find.byType(TextField));
+    await tester.pump();
+    final focusedDecoration = tester
+        .widget<SignalLiquidGlass>(find.byKey(const ValueKey('composer')))
+        .decoration;
+    final focusedBorder = focusedDecoration.border! as Border;
+    expect(focusedBorder.top.color, AppColors.liquidFocus);
+    expect(focusedBorder.top.width, 2);
   });
 
   test('transcript spacing groups supporting rows within each turn', () {
@@ -3203,6 +3975,12 @@ void main() {
 
     expect(find.byKey(const ValueKey('code-block-card')), findsOneWidget);
     expect(find.text('dart'), findsOneWidget);
+    final card = tester.widget<Container>(
+      find.byKey(const ValueKey('code-block-card')),
+    );
+    final cardDecoration = card.decoration as BoxDecoration;
+    expect(cardDecoration.border, isNull);
+    expect(cardDecoration.color, AppColors.control);
 
     await tester.tap(find.byKey(const ValueKey('code-copy-button')));
     await tester.pump();
@@ -3359,6 +4137,71 @@ void main() {
     expect(find.text('restored message 79'), findsOneWidget);
   });
 
+  testWidgets('new output stays visible while reading and returns to latest', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(393, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final messages = <TranscriptMessage>[
+      for (var index = 0; index < 80; index++)
+        TranscriptMessage.user('message $index'),
+    ];
+    late StateSetter rebuild;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return TranscriptView(
+                messages: messages,
+                activeSessionId: 'session-1',
+                running: true,
+                connected: true,
+                offline: false,
+                pendingPermissions: const [],
+                respondingPermissionIds: const {},
+                onFillPrompt: (_) {},
+                onReconnect: () {},
+                onPermissionAllow: (_) {},
+                onPermissionDeny: (_) {},
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    final controller = tester
+        .widget<ListView>(find.byKey(const ValueKey('transcript-list')))
+        .controller!;
+    controller.jumpTo(0);
+    await tester.pump();
+
+    rebuild(() => messages.add(TranscriptMessage.assistant('新的输出')));
+    await tester.pump();
+    expect(find.byKey(const ValueKey('transcript-new-output')), findsOneWidget);
+    expect(find.text('1 条新输出 · 仍在运行'), findsOneWidget);
+
+    rebuild(
+      () => messages[messages.length - 1] = TranscriptMessage.assistant(
+        '新的输出，继续流式追加',
+      ),
+    );
+    await tester.pump();
+    expect(find.text('1 条新输出 · 仍在运行'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('transcript-new-output')));
+    await tester.pumpAndSettle();
+    expect(controller.position.extentAfter, lessThan(1));
+    expect(find.byKey(const ValueKey('transcript-new-output')), findsNothing);
+  });
+
   testWidgets('tool activity expands to show its target', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
@@ -3418,10 +4261,14 @@ void main() {
 
     expect(find.text('正在自动重连'), findsOneWidget);
     expect(find.textContaining('自动重连第 3 次'), findsOneWidget);
+    expect(find.textContaining('约 30 秒后再次尝试'), findsOneWidget);
     expect(find.textContaining('电脑端拒绝连接'), findsOneWidget);
     expect(find.text('对话记录已保留，当前输入仍在编辑框中'), findsOneWidget);
     expect(find.text('立即重连'), findsOneWidget);
     expect(tester.takeException(), isNull);
+
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.textContaining('约 29 秒后再次尝试'), findsOneWidget);
 
     await tester.tap(find.text('立即重连'));
     expect(reconnectCount, 1);
@@ -3450,6 +4297,73 @@ void main() {
     );
     expect(find.text('正在连接电脑端'), findsOneWidget);
     expect(find.text('立即重连'), findsNothing);
+  });
+
+  testWidgets('recovery states morph in place and briefly confirm completion', (
+    tester,
+  ) async {
+    var presentation = const ConsolePresentation(ConsolePhase.connecting);
+    var reconnectSnapshot = const RemoteConnectionSnapshot.idle();
+    late StateSetter rebuild;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              rebuild = setState;
+              return RecoveryStatePanel(
+                presentation: presentation,
+                reconnectSnapshot: reconnectSnapshot,
+                onReconnect: () {},
+                onStop: () {},
+                onOpenWorkspace: () {},
+              );
+            },
+          ),
+        ),
+      ),
+    );
+
+    final panel = find.byKey(const ValueKey('recovery-state-panel'));
+    final panelElement = tester.element(panel);
+    rebuild(() {
+      presentation = const ConsolePresentation(ConsolePhase.offline);
+      reconnectSnapshot = RemoteConnectionSnapshot(
+        phase: RemoteConnectionPhase.retrying,
+        attempt: 1,
+        nextRetryAt: DateTime.now().add(const Duration(seconds: 5)),
+      );
+    });
+    await tester.pump(AppMotion.fast);
+    expect(identical(panelElement, tester.element(panel)), isTrue);
+    expect(
+      find.byKey(const ValueKey('recovery-state-offline')),
+      findsOneWidget,
+    );
+
+    rebuild(() {
+      presentation = const ConsolePresentation(ConsolePhase.running);
+      reconnectSnapshot = const RemoteConnectionSnapshot.idle();
+    });
+    await tester.pump(AppMotion.standard);
+    rebuild(
+      () => presentation = const ConsolePresentation(ConsolePhase.connected),
+    );
+    await tester.pump();
+    expect(
+      find.byKey(const ValueKey('recovery-state-completed')),
+      findsOneWidget,
+    );
+    expect(find.text('任务已完成'), findsOneWidget);
+
+    await tester.pump(AppMotion.signal);
+    await tester.pump(AppMotion.standard);
+    expect(
+      find.byKey(const ValueKey('recovery-state-completed')),
+      findsNothing,
+    );
   });
 
   testWidgets('connecting ChatScreen shows one shared state panel', (
@@ -3588,8 +4502,8 @@ void main() {
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
 
-    expect(find.text('下一件事'), findsOneWidget);
-    expect(find.text('从下方输入，或先点一个快捷任务'), findsOneWidget);
+    expect(find.text('接着处理 cc-remote'), findsOneWidget);
+    expect(find.text('从下方输入指令，或先点一个快捷任务'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

@@ -35,16 +35,18 @@ CC Remote 将手机作为桌面 Claude Code 主机的原生远程控制面。成
 
 ## Brand Commitments
 
-- 产品名为 CC Remote；“暖纸控制台 / Warm Console”只用于聊天、transcript、活动轨与输入台，不再作为全 App 的统一配色。
-- 启动、配对、设置、恢复和其他系统界面可以建立独立的视觉世界，不必继承暖纸色或陶土色；跨界面一致性来自状态语言、排版纪律、交互反馈与原生平台行为。
-- 设计感、艺术感与辨识度是非聊天界面的首要目标，但不能牺牲连接、任务、权限、输入与停止动作的清晰度。
-- 不使用通用玻璃拟态、灰白卡片堆叠、普通聊天 App 套壳，或以终端图标、蓝紫渐变和发光 HUD 代替真实视觉概念。
+- 产品名为 CC Remote；聊天控制台采用淡蓝、冷灰与中性静态玻璃，服务于远程监督而不是装饰性科技感。
+- 玻璃只用于 controls/navigation；transcript、代码、活动证据等 content layer 保持标准冷灰蓝材质，文字密集 overlay 使用更厚的中性材质。
+- 蓝色保持克制，仅承担主要动作和选中态；danger/warning 保持独立语义色，状态仍由图标、文字与色调共同表达。
+- 设计感来自 Apple 风格的材质层级、版式纪律、交互反馈与原生 Flutter 行为；不使用蓝紫渐变、发光 HUD、终端套壳或卡片墙。
+- 真实 BackdropFilter 仅限设置模态和既有 effort gauge；聊天滚动内容不扩展实时模糊，以守住性能边界。
+- 暗色模式、无设备截图验收和真机性能数据仍属于后续未决，不对外虚构完成度或指标。
 
 ## Evidence on Hand
 
 - `docs/mobile-ui-app-design.md`：现有手机端信息架构、状态、交互和验收标准。
 - `mobile/lib/main.dart`：主控制台、运行状态、权限、附件与停止流程的真实实现。
-- `mobile/lib/signal_console_theme.dart`：当前暖纸色、状态色、排版和任务轨实现。
+- `mobile/lib/signal_console_theme.dart`：当前 Cool Glass 色、状态色、排版和任务轨实现。
 - 当前没有可对外宣称的用户数据、客户案例或性能指标；后续设计不得虚构。
 
 ## Product Principles

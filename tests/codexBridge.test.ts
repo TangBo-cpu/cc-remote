@@ -3,7 +3,32 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { CodexBridge } from '../src/codexBridge.js';
+import { CodexBridge, extractCodexSessionInfo } from '../src/codexBridge.js';
+
+test('codex token usage prefers the latest request over the thread total', () => {
+  // tokenUsage.total accumulates across every turn; last is the most recent
+  // model request, which is what fills the context window.
+  assert.deepEqual(extractCodexSessionInfo({
+    type: 'thread.tokenUsage.updated',
+    tokenUsage: {
+      total: { totalTokens: 210000 },
+      last: { totalTokens: 62000 },
+      modelContextWindow: 272000,
+    },
+  }), {
+    usedTokens: 62000,
+    contextWindow: 272000,
+    remainingTokens: 210000,
+  });
+
+  // Older app servers without `last` keep the total-based estimate.
+  assert.deepEqual(extractCodexSessionInfo({
+    type: 'thread.tokenUsage.updated',
+    tokenUsage: {
+      total: { inputTokens: 1500, outputTokens: 500 },
+    },
+  }), { usedTokens: 2000 });
+});
 
 test('CodexBridge reports a missing CLI as a run result instead of throwing', async () => {
   const bridge = new CodexBridge({

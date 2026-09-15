@@ -24,22 +24,34 @@ Future<void> showWorkspaceDrawer(
     context: context,
     barrierDismissible: true,
     barrierLabel: '关闭工作区',
-    barrierColor: const Color(0xFF0D1D22).withValues(alpha: 0.34),
+    // Transparent: the fading framework barrier marks the whole overlay dirty
+    // every frame and re-renders the chat (blurs included). SheetScrim below
+    // fades inside its own repaint boundary instead.
+    barrierColor: Colors.transparent,
     transitionDuration: reduceMotion ? Duration.zero : AppMotion.standard,
-    pageBuilder: (context, animation, secondaryAnimation) => Align(
-      alignment: Alignment.centerLeft,
-      child: SafeArea(
-        child: SizedBox(
-          width: math.min(MediaQuery.sizeOf(context).width * 0.92, 520),
-          height: double.infinity,
-          child: WorkspaceDrawer(
-            origin: origin,
-            token: token,
-            workspaceName: workspaceName,
-            demoMode: demoMode,
+    pageBuilder: (context, animation, secondaryAnimation) => Stack(
+      children: [
+        const SheetScrim(),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: SafeArea(
+            child: SizedBox(
+              width: math.min(MediaQuery.sizeOf(context).width * 0.92, 520),
+              height: double.infinity,
+              // The slide-in transition then shifts this cached layer instead
+              // of re-rasterizing the drawer per frame.
+              child: RepaintBoundary(
+                child: WorkspaceDrawer(
+                  origin: origin,
+                  token: token,
+                  workspaceName: workspaceName,
+                  demoMode: demoMode,
+                ),
+              ),
+            ),
           ),
         ),
-      ),
+      ],
     ),
     transitionBuilder: (context, animation, secondaryAnimation, child) {
       if (reduceMotion) return child;
@@ -158,21 +170,55 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
 
   @override
   Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final page = document == null
+        ? KeyedSubtree(
+            key: const ValueKey('workspace-browser-page'),
+            child: _browser(),
+          )
+        : KeyedSubtree(
+            key: const ValueKey('workspace-document-page'),
+            child: _document(),
+          );
     return Material(
       color: Colors.transparent,
       child: Container(
         margin: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: AppColors.surfaceElevated,
+          color: AppColors.glassStrong,
           borderRadius: BorderRadius.circular(AppRadii.surface),
-          border: Border.all(color: AppColors.line),
+          boxShadow: AppElevation.floatingOverlay(),
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
           children: [
             _header(),
             const Divider(height: 1, color: _line),
-            Expanded(child: document == null ? _browser() : _document()),
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: reduceMotion ? Duration.zero : AppMotion.standard,
+                reverseDuration: reduceMotion ? Duration.zero : AppMotion.fast,
+                switchInCurve: AppMotion.enter,
+                switchOutCurve: AppMotion.exit,
+                layoutBuilder: (currentChild, previousChildren) => Stack(
+                  fit: StackFit.expand,
+                  children: [...previousChildren, ?currentChild],
+                ),
+                transitionBuilder: (child, animation) {
+                  final documentPage =
+                      child.key == const ValueKey('workspace-document-page');
+                  final position = Tween<Offset>(
+                    begin: Offset(documentPage ? 0.08 : -0.08, 0),
+                    end: Offset.zero,
+                  ).animate(animation);
+                  return FadeTransition(
+                    opacity: animation,
+                    child: SlideTransition(position: position, child: child),
+                  );
+                },
+                child: page,
+              ),
+            ),
           ],
         ),
       ),
@@ -188,46 +234,87 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
             onPressed: document == null
                 ? () => Navigator.pop(context)
                 : () => setState(() => document = null),
-            icon: Icon(
-              document == null ? LucideIcons.x : LucideIcons.arrowLeft,
+            icon: AnimatedSwitcher(
+              duration: MediaQuery.disableAnimationsOf(context)
+                  ? Duration.zero
+                  : AppMotion.fast,
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: ScaleTransition(
+                  scale: Tween<double>(begin: 0.25, end: 1).animate(animation),
+                  child: child,
+                ),
+              ),
+              child: Icon(
+                document == null ? LucideIcons.x : LucideIcons.arrowLeft,
+                key: ValueKey(document == null ? 'close' : 'back'),
+              ),
             ),
             tooltip: document == null ? '关闭' : '返回文件列表',
           ),
           const SizedBox(width: 2),
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  document?.path.split('/').last ?? widget.workspaceName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: _ink,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                  ),
+            child: AnimatedSwitcher(
+              duration: MediaQuery.disableAnimationsOf(context)
+                  ? Duration.zero
+                  : AppMotion.standard,
+              switchInCurve: AppMotion.enter,
+              switchOutCurve: AppMotion.exit,
+              transitionBuilder: (child, animation) => FadeTransition(
+                opacity: animation,
+                child: SlideTransition(
+                  position: Tween<Offset>(
+                    begin: const Offset(0.04, 0),
+                    end: Offset.zero,
+                  ).animate(animation),
+                  child: child,
                 ),
-                Text(
-                  document?.path ?? _workspaceSubtitle(),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: _muted,
-                    fontSize: 12,
-                    fontFamily: AppTypography.codeFontFamily,
-                    fontFamilyFallback: AppTypography.codeFontFamilyFallback,
+              ),
+              child: Column(
+                key: ValueKey(document?.path ?? 'workspace-root'),
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    document?.path.split('/').last ?? widget.workspaceName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: _ink,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
-                ),
-              ],
+                  Text(
+                    document?.path ?? _workspaceSubtitle(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: _muted,
+                      fontSize: 12,
+                      fontFamily: AppTypography.codeFontFamily,
+                      fontFamilyFallback: AppTypography.codeFontFamilyFallback,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-          if (document == null)
-            IconButton(
-              onPressed: loading ? null : refresh,
-              icon: const Icon(LucideIcons.refreshCw),
-              tooltip: '刷新工作区',
-            ),
+          AnimatedSwitcher(
+            duration: MediaQuery.disableAnimationsOf(context)
+                ? Duration.zero
+                : AppMotion.fast,
+            child: document == null
+                ? IconButton(
+                    key: const ValueKey('workspace-refresh'),
+                    onPressed: loading ? null : refresh,
+                    icon: const Icon(LucideIcons.refreshCw),
+                    tooltip: '刷新工作区',
+                  )
+                : const SizedBox.square(
+                    key: ValueKey('workspace-refresh-spacer'),
+                    dimension: 48,
+                  ),
+          ),
         ],
       ),
     );
@@ -249,23 +336,62 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
           child: Container(
             padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
-              color: AppColors.control,
+              color: AppColors.glass,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppColors.line),
             ),
-            child: Row(
+            child: Stack(
               children: [
-                _tabButton(0, LucideIcons.folder, '文件'),
-                _tabButton(
-                  1,
-                  LucideIcons.gitCompare,
-                  '修改${snapshot == null ? '' : ' ${snapshot!.changes.length}'}',
+                Positioned.fill(
+                  child: AnimatedAlign(
+                    key: const ValueKey('workspace-tab-indicator'),
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : AppMotion.fast,
+                    curve: AppMotion.enter,
+                    alignment: tab == 0
+                        ? Alignment.centerLeft
+                        : Alignment.centerRight,
+                    child: FractionallySizedBox(
+                      widthFactor: 0.5,
+                      heightFactor: 1,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: AppColors.glassControl,
+                          borderRadius: BorderRadius.circular(9),
+                          boxShadow: AppElevation.surfaceCard(),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                Row(
+                  children: [
+                    _tabButton(0, LucideIcons.folder, '文件'),
+                    _tabButton(
+                      1,
+                      LucideIcons.gitCompare,
+                      '修改${snapshot == null ? '' : ' ${snapshot!.changes.length}'}',
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
         ),
-        Expanded(child: _browserBody()),
+        Expanded(
+          child: AnimatedSwitcher(
+            duration: MediaQuery.disableAnimationsOf(context)
+                ? Duration.zero
+                : AppMotion.fast,
+            switchInCurve: AppMotion.enter,
+            switchOutCurve: AppMotion.exit,
+            layoutBuilder: (currentChild, previousChildren) => Stack(
+              fit: StackFit.expand,
+              children: [...previousChildren, ?currentChild],
+            ),
+            child: _browserBody(),
+          ),
+        ),
       ],
     );
   }
@@ -274,29 +400,34 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
     final selected = tab == value;
     return Expanded(
       child: InkWell(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(9),
         onTap: () => setState(() => tab = value),
-        child: AnimatedContainer(
-          duration: MediaQuery.disableAnimationsOf(context)
-              ? Duration.zero
-              : AppMotion.fast,
-          padding: const EdgeInsets.symmetric(vertical: 9),
-          decoration: BoxDecoration(
-            color: selected ? AppColors.surfaceElevated : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
-            border: selected ? Border.all(color: AppColors.line) : null,
-          ),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 48),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 17, color: selected ? _accent : _muted),
+              TweenAnimationBuilder<Color?>(
+                duration: MediaQuery.disableAnimationsOf(context)
+                    ? Duration.zero
+                    : AppMotion.fast,
+                tween: ColorTween(
+                  begin: selected ? _accent : _muted,
+                  end: selected ? _accent : _muted,
+                ),
+                builder: (context, color, _) =>
+                    Icon(icon, size: 17, color: color),
+              ),
               const SizedBox(width: 6),
-              Text(
-                label,
+              AnimatedDefaultTextStyle(
+                duration: MediaQuery.disableAnimationsOf(context)
+                    ? Duration.zero
+                    : AppMotion.fast,
                 style: TextStyle(
                   color: selected ? _ink : _muted,
                   fontWeight: FontWeight.w600,
                 ),
+                child: Text(label),
               ),
             ],
           ),
@@ -334,7 +465,7 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
         detail: '忽略项和构建产物不会显示',
       );
     }
-    final root = WorkspaceTreeNode.fromPaths(data.files);
+    final root = _filesRootFor(data);
     return ListView(
       key: const ValueKey('workspace-files'),
       padding: const EdgeInsets.fromLTRB(10, 2, 10, 24),
@@ -342,6 +473,19 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
           .map((node) => _TreeNodeTile(node: node, onFile: openFile))
           .toList(),
     );
+  }
+
+  // Building the tree walks every path; reuse it across drawer setStates
+  // (tab switches, document opens) until a new snapshot arrives.
+  WorkspaceSnapshot? _filesRootSnapshot;
+  WorkspaceTreeNode? _filesRoot;
+
+  WorkspaceTreeNode _filesRootFor(WorkspaceSnapshot data) {
+    if (_filesRoot != null && identical(data, _filesRootSnapshot)) {
+      return _filesRoot!;
+    }
+    _filesRootSnapshot = data;
+    return _filesRoot = WorkspaceTreeNode.fromPaths(data.files);
   }
 
   Widget _changes(WorkspaceSnapshot data) {
@@ -367,52 +511,63 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
           const Divider(height: 1, indent: 42, color: _line),
       itemBuilder: (context, index) {
         final change = data.changes[index];
-        return ListTile(
-          dense: true,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 6,
-            vertical: 3,
-          ),
-          leading: _ChangeBadge(change: change),
-          title: Text(
-            change.path.split('/').last,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-          ),
-          subtitle: Text(
-            change.previousPath == null
-                ? _parentPath(change.path)
-                : '${change.previousPath} →',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 12,
-              color: _muted,
-              fontFamily: AppTypography.codeFontFamily,
-              fontFamilyFallback: AppTypography.codeFontFamilyFallback,
+        return SignalPressEffect(
+          scaleOnPress: false,
+          builder: (context, pressed, child) => SignalAnimatedSurface(
+            duration: appPressAnimationDuration(context, pressed),
+            decoration: BoxDecoration(
+              color: pressed ? AppColors.control : Colors.transparent,
+              borderRadius: BorderRadius.circular(10),
             ),
+            child: child,
           ),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (change.staged != null)
-                _DiffScopeChip(
-                  label: '暂存 ${change.staged}',
-                  onTap: () => openDiff(change, staged: true),
-                ),
-              if (change.unstaged != null) ...[
-                if (change.staged != null) const SizedBox(width: 4),
-                _DiffScopeChip(
-                  label: change.unstaged == '?'
-                      ? '未跟踪'
-                      : '未暂存 ${change.unstaged}',
-                  onTap: () => openDiff(change, staged: false),
-                ),
+          child: ListTile(
+            dense: true,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 6,
+              vertical: 3,
+            ),
+            leading: _ChangeBadge(change: change),
+            title: Text(
+              change.path.split('/').last,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+            subtitle: Text(
+              change.previousPath == null
+                  ? _parentPath(change.path)
+                  : '${change.previousPath} →',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontSize: 12,
+                color: _muted,
+                fontFamily: AppTypography.codeFontFamily,
+                fontFamilyFallback: AppTypography.codeFontFamilyFallback,
+              ),
+            ),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (change.staged != null)
+                  _DiffScopeChip(
+                    label: '暂存 ${change.staged}',
+                    onTap: () => openDiff(change, staged: true),
+                  ),
+                if (change.unstaged != null) ...[
+                  if (change.staged != null) const SizedBox(width: 4),
+                  _DiffScopeChip(
+                    label: change.unstaged == '?'
+                        ? '未跟踪'
+                        : '未暂存 ${change.unstaged}',
+                    onTap: () => openDiff(change, staged: false),
+                  ),
+                ],
               ],
-            ],
+            ),
+            onTap: () => openChange(change),
           ),
-          onTap: () => openChange(change),
         );
       },
     );
@@ -420,19 +575,42 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
 
   Widget _document() {
     final current = document!;
+    final Widget child;
     if (current.loading) {
-      return const Center(child: CircularProgressIndicator(strokeWidth: 2.2));
-    }
-    if (current.failed) {
-      return const _EmptyState(
+      child = const Center(
+        key: ValueKey('workspace-document-loading'),
+        child: CircularProgressIndicator(strokeWidth: 2.2),
+      );
+    } else if (current.failed) {
+      child = const _EmptyState(
+        key: ValueKey('workspace-document-failed'),
         icon: LucideIcons.fileText,
         title: '无法显示这个文件',
         detail: '文件可能过大、是二进制内容或已经被删除',
       );
+    } else {
+      child = current.isDiff
+          ? _DiffView(
+              key: const ValueKey('workspace-document-diff'),
+              diff: current.content,
+            )
+          : _FileView(
+              key: const ValueKey('workspace-document-file'),
+              document: current,
+            );
     }
-    return current.isDiff
-        ? _DiffView(diff: current.content)
-        : _FileView(document: current);
+    return AnimatedSwitcher(
+      duration: MediaQuery.disableAnimationsOf(context)
+          ? Duration.zero
+          : AppMotion.fast,
+      switchInCurve: AppMotion.enter,
+      switchOutCurve: AppMotion.exit,
+      layoutBuilder: (currentChild, previousChildren) => Stack(
+        fit: StackFit.expand,
+        children: [...previousChildren, ?currentChild],
+      ),
+      child: child,
+    );
   }
 }
 
@@ -661,20 +839,31 @@ class _TreeNodeTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (!node.directory) {
-      return ListTile(
-        dense: true,
-        minTileHeight: 38,
-        contentPadding: const EdgeInsets.only(left: 12, right: 8),
-        leading: Icon(
-          _fileIcon(node.name),
-          size: 18,
-          color: _fileColor(node.name),
+      return SignalPressEffect(
+        scaleOnPress: false,
+        builder: (context, pressed, child) => SignalAnimatedSurface(
+          duration: appPressAnimationDuration(context, pressed),
+          decoration: BoxDecoration(
+            color: pressed ? AppColors.control : Colors.transparent,
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: child,
         ),
-        title: Text(
-          node.name,
-          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+        child: ListTile(
+          dense: true,
+          minTileHeight: 48,
+          contentPadding: const EdgeInsets.only(left: 12, right: 8),
+          leading: Icon(
+            _fileIcon(node.name),
+            size: 18,
+            color: _fileColor(node.name),
+          ),
+          title: Text(
+            node.name,
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+          ),
+          onTap: () => onFile(node.path!),
         ),
-        onTap: () => onFile(node.path!),
       );
     }
     return ExpansionTile(
@@ -700,7 +889,7 @@ class _TreeNodeTile extends StatelessWidget {
 }
 
 class _FileView extends StatelessWidget {
-  const _FileView({required this.document});
+  const _FileView({super.key, required this.document});
 
   final WorkspaceDocument document;
 
@@ -727,53 +916,57 @@ class _FileView extends StatelessWidget {
             ),
           ),
         Expanded(
-          child: ListView.builder(
-            key: const ValueKey('workspace-file-lines'),
-            padding: const EdgeInsets.fromLTRB(14, 14, 20, 36),
-            itemCount: lines.length,
-            itemBuilder: (context, index) {
-              final line = lines[index];
-              final displayLine = line.length > maxLineCharacters
-                  ? '${line.substring(0, maxLineCharacters)} … [本行过长，已截断]'
-                  : line;
-              return Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  SizedBox(
-                    width: (width * 8.0) + 18,
-                    child: Text(
-                      (index + 1).toString().padLeft(width),
-                      textAlign: TextAlign.right,
-                      style: const TextStyle(
-                        color: AppColors.inactive,
-                        fontFamily: AppTypography.codeFontFamily,
-                        fontFamilyFallback:
-                            AppTypography.codeFontFamilyFallback,
-                        fontSize: 12.5,
-                        height: 1.55,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: SelectableText(
-                        displayLine.isEmpty ? ' ' : displayLine,
+          // One SelectionArea for the whole file: per-line SelectableText
+          // carries full EditableText machinery and made scrolling files jank.
+          child: SelectionArea(
+            child: ListView.builder(
+              key: const ValueKey('workspace-file-lines'),
+              padding: const EdgeInsets.fromLTRB(14, 14, 20, 36),
+              itemCount: lines.length,
+              itemBuilder: (context, index) {
+                final line = lines[index];
+                final displayLine = line.length > maxLineCharacters
+                    ? '${line.substring(0, maxLineCharacters)} … [本行过长，已截断]'
+                    : line;
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: (width * 8.0) + 18,
+                      child: Text(
+                        (index + 1).toString().padLeft(width),
+                        textAlign: TextAlign.right,
                         style: const TextStyle(
-                          color: AppColors.ink,
+                          color: AppColors.inactive,
                           fontFamily: AppTypography.codeFontFamily,
                           fontFamilyFallback:
                               AppTypography.codeFontFamilyFallback,
-                          fontSize: 12.5,
+                          fontSize: 12,
                           height: 1.55,
                         ),
                       ),
                     ),
-                  ),
-                ],
-              );
-            },
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Text(
+                          displayLine.isEmpty ? ' ' : displayLine,
+                          style: const TextStyle(
+                            color: AppColors.ink,
+                            fontFamily: AppTypography.codeFontFamily,
+                            fontFamilyFallback:
+                                AppTypography.codeFontFamilyFallback,
+                            fontSize: 12,
+                            height: 1.55,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
           ),
         ),
       ],
@@ -782,72 +975,74 @@ class _FileView extends StatelessWidget {
 }
 
 class _DiffView extends StatelessWidget {
-  const _DiffView({required this.diff});
+  const _DiffView({super.key, required this.diff});
 
   final String diff;
 
   @override
   Widget build(BuildContext context) {
     final lines = diff.split('\n');
-    return ListView.builder(
-      key: const ValueKey('workspace-diff'),
-      padding: const EdgeInsets.only(top: 8, bottom: 32),
-      itemCount: lines.length,
-      itemBuilder: (context, index) {
-        final line = lines[index];
-        final added = line.startsWith('+') && !line.startsWith('+++');
-        final removed = line.startsWith('-') && !line.startsWith('---');
-        final hunk = line.startsWith('@@');
-        return Container(
-          color: added
-              ? AppColors.control
-              : removed
-              ? AppColors.danger.withValues(alpha: 0.07)
-              : hunk
-              ? AppColors.terracotta.withValues(alpha: 0.06)
-              : Colors.transparent,
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: 3,
-                height: 23,
-                child: ColoredBox(
-                  color: added
-                      ? AppColors.inactive
-                      : removed
-                      ? AppColors.danger
-                      : hunk
-                      ? AppColors.terracotta
-                      : Colors.transparent,
-                ),
-              ),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 11,
-                    vertical: 2.5,
+    return SelectionArea(
+      child: ListView.builder(
+        key: const ValueKey('workspace-diff'),
+        padding: const EdgeInsets.only(top: 8, bottom: 32),
+        itemCount: lines.length,
+        itemBuilder: (context, index) {
+          final line = lines[index];
+          final added = line.startsWith('+') && !line.startsWith('+++');
+          final removed = line.startsWith('-') && !line.startsWith('---');
+          final hunk = line.startsWith('@@');
+          return Container(
+            color: added
+                ? AppColors.control
+                : removed
+                ? AppColors.danger.withValues(alpha: 0.07)
+                : hunk
+                ? AppColors.accent.withValues(alpha: 0.06)
+                : Colors.transparent,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SizedBox(
+                  width: 3,
+                  height: 23,
+                  child: ColoredBox(
+                    color: added
+                        ? AppColors.inactive
+                        : removed
+                        ? AppColors.danger
+                        : hunk
+                        ? AppColors.accent
+                        : Colors.transparent,
                   ),
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: SelectableText(
-                      line.isEmpty ? ' ' : line,
-                      style: TextStyle(
-                        color: hunk ? _accent : _ink,
-                        fontFamily: AppTypography.codeFontFamily,
-                        fontFamilyFallback:
-                            AppTypography.codeFontFamilyFallback,
-                        fontSize: 12,
-                        height: 1.45,
+                ),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 11,
+                      vertical: 2.5,
+                    ),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Text(
+                        line.isEmpty ? ' ' : line,
+                        style: TextStyle(
+                          color: hunk ? _accent : _ink,
+                          fontFamily: AppTypography.codeFontFamily,
+                          fontFamilyFallback:
+                              AppTypography.codeFontFamilyFallback,
+                          fontSize: 12,
+                          height: 1.45,
+                        ),
                       ),
                     ),
                   ),
                 ),
-              ),
-            ],
-          ),
-        );
-      },
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 }
@@ -895,22 +1090,28 @@ class _DiffScopeChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(AppRadii.compact),
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-        decoration: BoxDecoration(
-          color: AppColors.control,
-          borderRadius: BorderRadius.circular(AppRadii.compact),
-          border: Border.all(color: AppColors.line),
-        ),
-        child: Text(
-          label,
-          style: const TextStyle(
-            color: AppColors.muted,
-            fontSize: 12,
-            fontWeight: FontWeight.w700,
+    return SignalPressEffect(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(AppRadii.compact),
+        onTap: onTap,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 48),
+          child: Container(
+            alignment: Alignment.center,
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            decoration: BoxDecoration(
+              color: AppColors.control,
+              borderRadius: BorderRadius.circular(AppRadii.compact),
+              border: Border.all(color: AppColors.line),
+            ),
+            child: Text(
+              label,
+              style: const TextStyle(
+                color: AppColors.muted,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
         ),
       ),
@@ -920,6 +1121,7 @@ class _DiffScopeChip extends StatelessWidget {
 
 class _EmptyState extends StatelessWidget {
   const _EmptyState({
+    super.key,
     required this.icon,
     required this.title,
     required this.detail,
@@ -950,7 +1152,7 @@ class _EmptyState extends StatelessWidget {
             Text(
               detail,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: _muted, fontSize: 12.5),
+              style: const TextStyle(color: _muted, fontSize: 12),
             ),
             if (action != null) ...[
               const SizedBox(height: 14),

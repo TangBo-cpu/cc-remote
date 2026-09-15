@@ -1,6 +1,6 @@
 # TODO
 
-本文同步到当前开发版本。手机端主链路、工作区冷启动对齐、流式性能合批和可靠性自动化已经完成；Warm Console 主界面、a11y/UX 补强与共享恢复面板已进入开发代码，并完成真机覆盖安装；逐屏视觉清单已覆盖思考强度仪表与冰川蓝模型选择器，断线重连终态策略仍待收尾。
+本文同步到当前开发版本。手机端主链路、工作区冷启动对齐、流式性能合批和可靠性自动化已经完成。当前视觉是 Cool Glass Console（语义色、Phosphor Fill 身份图标、共享 option sheet）；Warm Console / 冰川蓝选择器是历史里程碑。助手短回复 hug 内容、流式期间即可 Markdown、代码块不再套第二层描边；默认阅读字号 100%。真机已覆盖安装；逐屏视觉清单与断线重连终态策略仍待收尾。
 
 ## 已完成
 
@@ -36,35 +36,35 @@
 - [x] Claude Code 斜杠指令搜索与滚动选择
 - [x] Composer 调整 Claude Code `effort`，覆盖自动、低、中、高、超高、最大并传递到 daemon
 - [x] 思考计时、安全化工具活动（含具体 Skill 名称）和 Markdown 输出
-- [x] 流式期间轻量文本渲染，结束后再 Markdown
+- [x] 无标记纯文本走 `Text`；有 Markdown 标记时流式期间即用 `MarkdownBody`
 - [x] 流式 `setState` 合批与本地 transcript 落盘节流
 - [x] 权限模式选择和一次性工具审批
 - [x] 新建会话时选择引擎（Claude / Codex）；Codex 会话沙箱模式选择与图片附件限制
-- [x] 项目与会话面板、新会话和 transcript 恢复
-- [x] 项目完整路径显示（会话面板与设置页）
+- [x] 项目与会话导航页、新会话和 transcript 恢复
+- [x] 项目完整路径显示（会话导航页与设置页）
 - [x] 工作区文件与 Git diff 抽屉
 - [x] 拍照、图片和文件附件
 - [x] Android 后台本地通知与通知开关
-- [x] 浅色活力主题、紧凑双栏连接舱和 Command Dock（历史里程碑；现已被 Warm Console 取代）
+- [x] 浅色活力主题、紧凑双栏连接舱和 Command Dock（历史里程碑；后经 Warm Console，现为 Cool Glass）
 - [x] 小屏、横屏、键盘、大字体和缩放溢出回归测试
-- [x] Claude 普通回复使用无描边 `surface` 阅读气泡、统一 22px 圆角和系统默认正文
+- [x] Claude 普通回复使用 `surfaceElevated` + 细描边阅读气泡、短文本 hug、统一 22px 圆角和系统默认正文
 - [x] 最新调试/release 版真机安装和主界面检查
 
-### Warm Console 实现
+### Warm Console 实现（历史）
 
 - [x] 建立根目录 `DESIGN.md` 与 Impeccable 设计 sidecar
 - [x] Penpot 补齐配对、会话选择、运行控制、权限、Diff 与恢复终态
-- [x] UI 实现文档同步到最新 Warm Console
-- [x] 迁移主题 tokens；主界面与工作区默认使用 Lucide，Project and Session Navigator 受控使用 Phosphor Regular/Fill
+- [x] UI 实现文档当时同步到 Warm Console；现已改记 Cool Glass
+- [x] 迁移主题 tokens；chrome 使用 Lucide，会话 / 项目 / 模型身份标记使用 Phosphor Fill
 - [x] 重构紧凑会话头、transcript 活动展示和贴底 Composer
-- [x] 完成 Composer 圆形附件/暖陶仪表思考强度/发送/停止、暖色模型胶囊、权限图标和紧凑上下文余量
+- [x] 完成 Composer 圆形附件 / 思考强度仪表 / 发送 / 停止、模型胶囊、权限图标和紧凑上下文余量
 - [x] 按 Warm Console 整理设置与“···”菜单，菜单底栏最多保留模型名
-- [x] 思考态改为固定中心的暖陶花形动画，活动 running 保留原生进度指示器
-- [x] 移除 `flutter_animate`；保留 `lucide_icons_flutter`，并仅在 Project and Session Navigator 受控引入 `phosphor_flutter` 2.1.0
-- [x] `terracotta-deep` CTA、系统默认 UI 字体、无描边助手阅读气泡与 Markdown/代码块层级
+- [x] 思考态改为固定中心的花形动画，活动 running 保留原生进度指示器
+- [x] 移除 `flutter_animate`；chrome 保留 `lucide_icons_flutter`，身份标记使用 `phosphor_icons` Fill
+- [x] `accent` CTA、系统默认 UI 字体、助手 elevated 气泡与 Markdown / 代码块层级
 - [x] 权限决策展示 `workspaceDir`（缺失时 fallback 文案）
 - [x] `ConsoleStatusStrip` 覆盖连接中等非已连接相位；连接中空状态独立于离线卡
-- [x] 输入聚焦描边使用 `terracotta-deep`
+- [x] 输入聚焦描边使用 `accent`
 - [ ] 继续逐屏验收配对、会话选择、权限决策与 Diff
 - [x] 用共享 `ConsolePresentation` 统一 Header / Composer / 状态条的离线、失败、停止中、已停止和停止超时语义
 - [x] 补齐共享恢复/终态面板，统一连接中、断线、失败、停止中、停止未确认与已停止的事实、保留内容和单一主动作
@@ -72,13 +72,21 @@
 - [x] 优化 IME 弹出性能：键盘动画高度只作用于外层避让，聊天子树仅感知打开/关闭；移除逐帧重建聊天页的外层 `LayoutBuilder`，指令建议使用 `Flexible` 自适应并隔离 Composer 绘制
 - [ ] 若后续定义重试耗尽策略，再增加独立的重连失败终态；当前保持持续自动恢复
 - [x] 更新组件测试，覆盖 Composer 尺寸、模型语义、菜单去 token、活动状态、连接中状态条/空状态与权限工作目录
-- [ ] 完成 Android 真机 Warm Console 逐屏视觉验收清单（本轮已完成思考强度仪表与冰川蓝模型选择器局部验收）
+- [ ] 完成 Android 真机 Cool Glass 逐屏视觉验收清单（思考强度仪表与共享模型 sheet 已局部验收）
+
+### Cool Glass 实现
+
+- [x] `DESIGN.md` 切到 Cool Glass tokens；聊天控制台用冷近白纸面 + bounded glass chrome
+- [x] 会话 / 项目 / 模型身份标记改用 Phosphor Fill；chrome 仍用 Lucide
+- [x] 模型 / 引擎 / 权限 / 沙箱共用 `AppOptionRow` sheet，去掉冰川蓝双栏
+- [x] 助手短回复 hug 内容；流式期间即可 Markdown；代码块去掉内描边
+- [x] 默认阅读字号 `1.0` / 100%
 
 ### 文档
 
 - [x] 根 README 与当前启动、安装和协议一致
 - [x] 移动端 README 与当前 UI 和调试流程一致
-- [x] UI 设计文档更新为当前 Warm Console 实现与验收规格（含 2026-08-21 恢复面板、全文搜索、键盘性能与 effort 补强）
+- [x] UI 设计文档更新为当前 Cool Glass 实现与验收规格（含语义色、Phosphor Fill、助手气泡 hug / 流式 Markdown、默认 100% 字号）
 - [x] 系统架构与 Flutter 实现文档去掉初版假设
 
 ## 待专项验证

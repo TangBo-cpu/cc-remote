@@ -35,7 +35,7 @@ cc-remote/
   mobile/lib/
     main.dart                 App shell、网络状态和主要页面
     signal_console_theme.dart 主题令牌与视觉部件
-    effort_gauge.dart          Composer 暖陶思考强度仪表与模态层
+    effort_gauge.dart          Composer 思考强度仪表与模态层
     workspace_drawer.dart     只读工作区和 Git diff
     attachments.dart          选择、上传和附件模型
     notification_service.dart Android 本地通知
@@ -100,7 +100,7 @@ App 区分已配对、正在连接、已连接、运行中、停止中、上传�
 
 多项目和多会话由 catalog 驱动。会话消息带 `projectId` 与 `sessionId`，App 忽略不属于当前会话的运行消息。通知点击后在安全状态下切换到对应会话。「项目与会话」面板和设置页展示完整项目路径，方便区分同名目录；搜索模式跨项目请求 daemon，并携带权威 transcript 的原始 `messageIndex`。App 切换到目标会话并收到快照后，将原始索引映射到过滤后的可见行；若本地提示导致索引漂移，则以角色和规范化片段寻找最近匹配，再滚动并短暂高亮命中气泡。
 
-流式回复时，App 会短时合并 `text` 增量再刷新 UI，运行中用轻量文本渲染，任务结束后再切回 Markdown；本地 transcript 落盘在流式期间节流，终态强制写入。Markdown 中的来源 / 引用沿用助手文本本身的链接，不扩展 daemon 协议；Flutter 只允许绝对 `http` / `https` URL，并通过系统外部浏览器打开，非法或相对 URL 不触发跳转。
+流式回复时，App 会短时合并 `text` 增量再刷新 UI；无 Markdown 标记走廉价 `Text`，有标记时流式期间即用 `MarkdownBody`，避免回合结束时排版跳变。本地 transcript 落盘在流式期间节流，终态强制写入。Markdown 中的来源 / 引用沿用助手文本本身的链接，不扩展 daemon 协议；Flutter 只允许绝对 `http` / `https` URL，并通过系统外部浏览器打开，非法或相对 URL 不触发跳转。
 
 恢复历史 Claude session 时，桥接层会在初始化失败时保留子进程退出码与 stderr，避免 CLI 的真实错误被通用初始化错误覆盖。若 daemon 识别到 session 已不存在，只清除旧 Claude session ID，并在同一轮请求中无 `--resume` 重试一次；其他初始化错误不会触发自动重试。桥接层和 daemon WebSocket 端到端测试均覆盖这一行为。
 

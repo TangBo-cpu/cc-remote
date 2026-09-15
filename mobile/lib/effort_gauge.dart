@@ -27,16 +27,17 @@ Future<void> showEffortGaugeOverlay(
   required ValueChanged<ClaudeEffortPreference> onSelected,
 }) {
   FocusManager.instance.primaryFocus?.unfocus();
+  final reduceMotion = MediaQuery.disableAnimationsOf(context);
   return showGeneralDialog<void>(
     context: context,
     barrierDismissible: true,
     barrierLabel: '关闭思考强度',
     barrierColor: Colors.transparent,
-    transitionDuration: AppMotion.fast,
+    transitionDuration: reduceMotion ? Duration.zero : AppMotion.fast,
     pageBuilder: (dialogContext, _, _) =>
         _EffortGaugeOverlay(selected: selected, onSelected: onSelected),
     transitionBuilder: (context, animation, _, child) {
-      if (MediaQuery.disableAnimationsOf(context)) return child;
+      if (reduceMotion) return child;
       return FadeTransition(
         opacity: CurvedAnimation(parent: animation, curve: AppMotion.enter),
         child: child,
@@ -238,7 +239,7 @@ class _EffortGaugeOverlayState extends State<_EffortGaugeOverlay> {
                             borderRadius: BorderRadius.circular(24),
                             border: showFocusHighlight
                                 ? Border.all(
-                                    color: AppColors.terracottaDeep,
+                                    color: AppColors.accentStrong,
                                     width: 2,
                                   )
                                 : null,
@@ -355,7 +356,7 @@ class _EffortGaugePainter extends CustomPainter {
               : Color.lerp(AppColors.inactiveLight, AppColors.inactive, 0.22)!
         : AppColors.line;
     final activeColor = enabled
-        ? AppColors.terracottaDeep
+        ? AppColors.accentStrong
         : AppColors.inactiveLight;
     final inkColor = enabled ? AppColors.ink : AppColors.inactive;
     final strokeWidth = compact ? 2.8 : 7.0;
@@ -427,12 +428,12 @@ class _EffortGaugePainter extends CustomPainter {
       canvas.drawArc(rect, startAngle, sweepAngle * normalized, false, active);
     }
 
-    for (var index = 0; index < _manualEfforts.length; index += 1) {
-      final fraction = index / (_manualEfforts.length - 1);
-      final angle = startAngle + sweepAngle * fraction;
-      final point = hub + Offset(math.cos(angle), math.sin(angle)) * radius;
-      final active = !automatic && index <= level.round();
-      if (!compact) {
+    if (!compact) {
+      for (var index = 0; index < _manualEfforts.length; index += 1) {
+        final fraction = index / (_manualEfforts.length - 1);
+        final angle = startAngle + sweepAngle * fraction;
+        final point = hub + Offset(math.cos(angle), math.sin(angle)) * radius;
+        final active = !automatic && index <= level.round();
         canvas.drawCircle(
           point + const Offset(0, 1.2),
           dotRadius + 1.8,
@@ -440,23 +441,17 @@ class _EffortGaugePainter extends CustomPainter {
             ..color = AppColors.ink.withValues(alpha: 0.13)
             ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5),
         );
+        canvas.drawCircle(
+          point,
+          dotRadius + 1.5,
+          Paint()..color = active ? AppColors.surfaceElevated : trackColor,
+        );
+        canvas.drawCircle(
+          point,
+          active ? dotRadius : dotRadius - 1.5,
+          Paint()..color = active ? activeColor : AppColors.surfaceElevated,
+        );
       }
-      canvas.drawCircle(
-        point,
-        dotRadius + (compact ? 0.5 : 1.5),
-        Paint()
-          ..color = active || compact ? AppColors.surfaceElevated : trackColor,
-      );
-      canvas.drawCircle(
-        point,
-        active || compact ? dotRadius : dotRadius - 1.5,
-        Paint()
-          ..color = active
-              ? activeColor
-              : compact
-              ? trackColor
-              : AppColors.surfaceElevated,
-      );
     }
 
     final needleAngle =
