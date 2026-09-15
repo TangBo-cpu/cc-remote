@@ -13,10 +13,10 @@
 ```
 
 <p align="center">
-  <img src="docs/images/warm-console-home.png" alt="Warm Console 主界面" width="280" />
+  <img src="docs/images/cool-glass-chat.jpg" alt="Cool Glass 对话" width="280" />
 </p>
 
-<p align="center"><sub>Warm Console · v1.2 视觉基线；v1.3 新增能力见下方功能清单</sub></p>
+<p align="center"><sub>Cool Glass Console · 当前界面</sub></p>
 
 ---
 
@@ -41,17 +41,15 @@
 
 ## 界面参考
 
-以下真机截图记录的是 v1.2 Warm Console 视觉基线，尚未覆盖 v1.3.0 新增的 Codex、会话搜索、活动时间线、代码块工具栏和花形思考状态；v1.3.x 之后控制台已收敛为冷玻璃方向（见 DESIGN.md）。
-
-| 主控制台 | 项目与会话 | 更多菜单 |
+| 对话 | 项目与会话 | 选择模型 |
 | :---: | :---: | :---: |
-| <img src="docs/images/warm-console-home.png" width="220" alt="主控制台" /> | <img src="docs/images/06-sessions.png" width="220" alt="项目与会话" /> | <img src="docs/images/02-more-menu.png" width="220" alt="更多菜单" /> |
+| <img src="docs/images/cool-glass-chat.jpg" width="220" alt="对话" /> | <img src="docs/images/cool-glass-sessions.png" width="220" alt="项目与会话" /> | <img src="docs/images/cool-glass-models.png" width="220" alt="选择模型" /> |
 
-| 设置（字号滑杆） | 工作区文件 | Git 修改 |
+| 主控制台 | 工作区 | 启动 |
 | :---: | :---: | :---: |
-| <img src="docs/images/03-settings.png" width="220" alt="设置" /> | <img src="docs/images/04-workspace.png" width="220" alt="工作区" /> | <img src="docs/images/05-diff.png" width="220" alt="Diff" /> |
+| <img src="docs/images/cool-glass-home.png" width="220" alt="主控制台" /> | <img src="docs/images/cool-glass-workspace.jpg" width="220" alt="工作区" /> | <img src="docs/images/cool-glass-startup.jpg" width="220" alt="启动" /> |
 
-冷白纸面与冷灰层级、克制的单一蓝色只用于主动作与选中态、更宽助手气泡、冷玻璃工具栏；顶部只有圆形菜单 + 新建/更多胶囊，模型放在 Composer。设计规格见 [`DESIGN.md`](DESIGN.md)。
+冷白纸面与冷灰层级、克制的单一蓝色只用于主动作与选中态、短回复 hug 的助手气泡、冷玻璃 Composer；顶部只有圆形菜单 + 新建/更多胶囊，模型放在输入台。设计规格见 [`DESIGN.md`](DESIGN.md)。
 
 ---
 
