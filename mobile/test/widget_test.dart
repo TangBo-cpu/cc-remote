@@ -1321,9 +1321,19 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('选择模型'), findsOneWidget);
+    expect(find.byType(AppSheetSurface), findsOneWidget);
+    expect(find.byType(SheetScrim), findsOneWidget);
+    expect(
+      tester.widget<SheetScrim>(find.byType(SheetScrim)).color,
+      AppColors.scrim,
+    );
     expect(find.byKey(const ValueKey('model-option-follow')), findsOneWidget);
     expect(find.byKey(const ValueKey('model-option-fable')), findsOneWidget);
     expect(tester.takeException(), isNull);
+
+    await tester.tapAt(const Offset(8, 8));
+    await tester.pumpAndSettle();
+    expect(find.text('选择模型'), findsNothing);
   });
 
   testWidgets('demo connect can open the session list', (tester) async {
@@ -1336,7 +1346,10 @@ void main() {
     await tester.tap(find.byTooltip('项目与会话'));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('session-home-view')), findsOneWidget);
-    expect(find.byKey(const ValueKey('project-icon-demo-cc-remote')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('project-icon-demo-cc-remote')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('the first prompt waits for the stored model preference', (
@@ -2037,6 +2050,7 @@ void main() {
     expect(find.text('选择会话引擎'), findsOneWidget);
     await tester.tapAt(const Offset(8, 8));
     await tester.pumpAndSettle();
+    expect(find.text('选择会话引擎'), findsNothing);
     expect(tester.testTextInput.isVisible, isFalse);
   });
 
@@ -2262,6 +2276,12 @@ void main() {
     );
     await tester.tap(find.byKey(const ValueKey('permission-mode-chip')));
     await tester.pumpAndSettle();
+    expect(find.byType(AppSheetSurface), findsOneWidget);
+    expect(find.byType(SheetScrim), findsOneWidget);
+    expect(
+      tester.widget<SheetScrim>(find.byType(SheetScrim)).color,
+      AppColors.scrim,
+    );
     await tester.ensureVisible(
       find.byKey(const ValueKey('permission-mode-bypassPermissions')),
     );
@@ -3515,6 +3535,26 @@ void main() {
     );
     expect(markdown.styleSheet!.p!.fontFamily, isNot('NotoSerifSC'));
     expect(markdown.styleSheet!.p!.fontSize, AppTypography.assistantBodySize);
+    expect(
+      markdown.styleSheet!.code!.fontSize,
+      AppTypography.assistantBodySize,
+    );
+    expect(
+      markdown.styleSheet!.blockquote!.fontSize,
+      AppTypography.assistantBodySize,
+    );
+    expect(
+      markdown.styleSheet!.listBullet!.fontSize,
+      AppTypography.assistantBodySize,
+    );
+    expect(
+      markdown.styleSheet!.tableBody!.fontSize,
+      AppTypography.assistantBodySize,
+    );
+    expect(
+      markdown.styleSheet!.checkbox!.fontSize,
+      AppTypography.assistantBodySize,
+    );
     expect(markdown.styleSheet!.h1!.fontFamily, isNot('NotoSerifSC'));
     expect(markdown.styleSheet!.blockSpacing, 8);
     expect(markdown.styleSheet!.listIndent, 24);

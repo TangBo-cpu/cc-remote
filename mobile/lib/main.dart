@@ -4910,62 +4910,41 @@ Future<SessionEngine?> showSessionEnginePicker(
   SessionEngine selected = SessionEngine.claude,
 }) async {
   FocusManager.instance.primaryFocus?.unfocus();
-  final engine = await showModalBottomSheet<SessionEngine>(
-    context: context,
-    sheetAnimationStyle: appOverlayAnimationStyle(context),
+  final engine = await showAppOptionPicker<SessionEngine>(
+    context,
     requestFocus: false,
-    backgroundColor: Colors.transparent,
-    barrierColor: Colors.transparent,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (sheetContext) {
-      final media = MediaQuery.of(sheetContext);
-      final available = media.size.height - media.padding.vertical - 120;
-      return SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: available),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const AppOptionSheetHeader(
-                    title: '选择会话引擎',
-                    detail: '每个会话独立保存引擎，创建后不可更改。',
-                  ),
-                  const SizedBox(height: 12),
-                  for (final engine in SessionEngine.values)
-                    AppOptionRow(
-                      key: ValueKey('session-engine-${engine.wireName}'),
-                      title: engine == SessionEngine.claude
-                          ? 'Claude Code'
-                          : 'Codex',
-                      description: engine == SessionEngine.claude
-                          ? '使用 Claude Code'
-                          : '使用 Codex CLI',
-                      selected: engine == selected,
-                      leading: Padding(
-                        key: ValueKey('session-engine-icon-${engine.wireName}'),
-                        padding: const EdgeInsets.all(8),
-                        child: Image.asset(
-                          engine == SessionEngine.claude
-                              ? 'assets/brands/claude-mark.png'
-                              : 'assets/brands/openai-mark.png',
-                          excludeFromSemantics: true,
-                          filterQuality: FilterQuality.high,
-                        ),
-                      ),
-                      onTap: () => Navigator.pop(sheetContext, engine),
-                    ),
-                ],
+    builder: (sheetContext) => Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const AppOptionSheetHeader(
+          title: '选择会话引擎',
+          detail: '每个会话独立保存引擎，创建后不可更改。',
+        ),
+        const SizedBox(height: 12),
+        for (final engine in SessionEngine.values)
+          AppOptionRow(
+            key: ValueKey('session-engine-${engine.wireName}'),
+            title: engine == SessionEngine.claude ? 'Claude Code' : 'Codex',
+            description: engine == SessionEngine.claude
+                ? '使用 Claude Code'
+                : '使用 Codex CLI',
+            selected: engine == selected,
+            leading: Padding(
+              key: ValueKey('session-engine-icon-${engine.wireName}'),
+              padding: const EdgeInsets.all(8),
+              child: Image.asset(
+                engine == SessionEngine.claude
+                    ? 'assets/brands/claude-mark.png'
+                    : 'assets/brands/openai-mark.png',
+                excludeFromSemantics: true,
+                filterQuality: FilterQuality.high,
               ),
             ),
+            onTap: () => Navigator.pop(sheetContext, engine),
           ),
-        ),
-      );
-    },
+      ],
+    ),
   );
   FocusManager.instance.primaryFocus?.unfocus();
   return engine;
@@ -5475,8 +5454,9 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
 
   Widget buildSessionStatus(RemoteSessionSummary item, {int? index}) {
     final iconData = inferSessionIcon(item.title, item.archived);
-    final color =
-        item.archived ? AppColors.inactive : AppMark.of(item.id, index);
+    final color = item.archived
+        ? AppColors.inactive
+        : AppMark.of(item.id, index);
 
     if (item.running) {
       return SizedBox.square(
@@ -5484,11 +5464,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            PhosphorIcon(
-              iconData,
-              size: AppMark.size,
-              color: color,
-            ),
+            PhosphorIcon(iconData, size: AppMark.size, color: color),
             Positioned(
               right: 1,
               top: 1,
@@ -5505,11 +5481,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
         ),
       );
     }
-    return PhosphorIcon(
-      iconData,
-      size: AppMark.size,
-      color: color,
-    );
+    return PhosphorIcon(iconData, size: AppMark.size, color: color);
   }
 
   Future<void> handleSessionAction(
@@ -5635,8 +5607,11 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
     );
   }
 
-  Widget buildProjectRow(RemoteProjectSummary project,
-      {bool compact = false, int? index}) {
+  Widget buildProjectRow(
+    RemoteProjectSummary project, {
+    bool compact = false,
+    int? index,
+  }) {
     final active = project.id == selectedProjectId;
     final subtitle = compact
         ? active
@@ -5819,11 +5794,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(
-            LucideIcons.search,
-            size: 28,
-            color: AppColors.inactive,
-          ),
+          const Icon(LucideIcons.search, size: 28, color: AppColors.inactive),
           const SizedBox(height: 12),
           Text(
             '搜索所有会话',
@@ -7314,74 +7285,47 @@ Future<ClaudeModelPreference?> showClaudeModelPicker(
   BuildContext context, {
   required ClaudeModelPreference selected,
 }) {
-  return showModalBottomSheet<ClaudeModelPreference>(
-    context: context,
-    sheetAnimationStyle: appOverlayAnimationStyle(context),
-    backgroundColor: Colors.transparent,
-    barrierColor: Colors.transparent,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (sheetContext) {
-      // Four option rows plus the header can outgrow the space left under
-      // the drag handle on short screens; keep the sheet within bounds and
-      // scroll instead of clipping the trailing rows.
-      final media = MediaQuery.of(sheetContext);
-      final available = media.size.height - media.padding.vertical - 120;
-      return SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: available),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const AppOptionSheetHeader(
-                    title: '选择模型',
-                    detail: '仅影响之后发送的消息；当前运行不会切换模型。',
-                  ),
-                  const SizedBox(height: 12),
-                  for (final preference in ClaudeModelPreference.values)
-                    AppOptionRow(
-                      key: ValueKey(
-                        'model-option-${preference.wireName ?? 'follow'}',
-                      ),
-                      title: preference == ClaudeModelPreference.followComputer
-                          ? '跟随电脑配置'
-                          : preference.label,
-                      description: modelPreferenceOptionDescription(preference),
-                      selected: preference == selected,
-                      boxedLeading: false,
-                      showDisclosure: false,
-                      leading: PhosphorIcon(
-                        switch (preference) {
-                          ClaudeModelPreference.followComputer =>
-                            PhosphorIconsFill.monitor,
-                          ClaudeModelPreference.opus =>
-                            PhosphorIconsFill.diamond,
-                          ClaudeModelPreference.sonnet =>
-                            PhosphorIconsFill.sparkle,
-                          ClaudeModelPreference.fable =>
-                            PhosphorIconsFill.feather,
-                        },
-                        size: AppMark.size,
-                        color: switch (preference) {
-                          ClaudeModelPreference.followComputer => AppMark.slate,
-                          ClaudeModelPreference.opus => AppMark.azure,
-                          ClaudeModelPreference.sonnet => AppMark.teal,
-                          ClaudeModelPreference.fable => AppMark.emerald,
-                        },
-                      ),
-                      onTap: () => Navigator.pop(sheetContext, preference),
-                    ),
-                ],
-              ),
-            ),
-          ),
+  return showAppOptionPicker<ClaudeModelPreference>(
+    context,
+    builder: (sheetContext) => Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const AppOptionSheetHeader(
+          title: '选择模型',
+          detail: '仅影响之后发送的消息；当前运行不会切换模型。',
         ),
-      );
-    },
+        const SizedBox(height: 12),
+        for (final preference in ClaudeModelPreference.values)
+          AppOptionRow(
+            key: ValueKey('model-option-${preference.wireName ?? 'follow'}'),
+            title: preference == ClaudeModelPreference.followComputer
+                ? '跟随电脑配置'
+                : preference.label,
+            description: modelPreferenceOptionDescription(preference),
+            selected: preference == selected,
+            boxedLeading: false,
+            showDisclosure: false,
+            leading: PhosphorIcon(
+              switch (preference) {
+                ClaudeModelPreference.followComputer =>
+                  PhosphorIconsFill.monitor,
+                ClaudeModelPreference.opus => PhosphorIconsFill.diamond,
+                ClaudeModelPreference.sonnet => PhosphorIconsFill.sparkle,
+                ClaudeModelPreference.fable => PhosphorIconsFill.feather,
+              },
+              size: AppMark.size,
+              color: switch (preference) {
+                ClaudeModelPreference.followComputer => AppMark.slate,
+                ClaudeModelPreference.opus => AppMark.azure,
+                ClaudeModelPreference.sonnet => AppMark.teal,
+                ClaudeModelPreference.fable => AppMark.emerald,
+              },
+            ),
+            onTap: () => Navigator.pop(sheetContext, preference),
+          ),
+      ],
+    ),
   );
 }
 
@@ -8893,26 +8837,32 @@ double transcriptGapBetween(Object current, Object next) {
   return 6;
 }
 
+const TextStyle _kAssistantPlainStyle = TextStyle(
+  fontFamily: AppTypography.assistantFontFamily,
+  fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
+  height: AppTypography.assistantBodyHeight,
+  fontSize: AppTypography.assistantBodySize,
+  color: AppColors.ink,
+  letterSpacing: 0.1,
+);
+
+const TextStyle _kAssistantCodeStyle = TextStyle(
+  fontFamily: AppTypography.codeFontFamily,
+  fontFamilyFallback: AppTypography.codeFontFamilyFallback,
+  fontSize: AppTypography.assistantBodySize,
+  height: AppTypography.assistantBodyHeight,
+  color: AppColors.ink,
+);
+
 /// Shared once — rebuilding MarkdownStyleSheet.fromTheme per bubble is costly
 /// while scrolling long assistant transcripts.
+/// Body-like roles must set fontSize explicitly: MarkdownBody still merges
+/// Theme bodyMedium (14) / code (≈12) under the custom sheet.
 final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
-  p: const TextStyle(
-    fontFamily: AppTypography.assistantFontFamily,
-    fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
-    height: AppTypography.assistantBodyHeight,
-    fontSize: AppTypography.assistantBodySize,
-    color: AppColors.ink,
-    letterSpacing: 0.1,
-  ),
+  p: _kAssistantPlainStyle,
   pPadding: EdgeInsets.zero,
   a: const TextStyle(color: AppColors.accentStrong),
-  code: const TextStyle(
-    fontFamily: AppTypography.codeFontFamily,
-    fontFamilyFallback: AppTypography.codeFontFamilyFallback,
-    fontSize: 12,
-    height: 1.5,
-    color: AppColors.ink,
-  ),
+  code: _kAssistantCodeStyle,
   h1: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
@@ -8940,9 +8890,31 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
     color: AppColors.ink,
   ),
   h3Padding: const EdgeInsets.only(top: 8, bottom: 4),
+  h4: const TextStyle(
+    fontFamily: AppTypography.assistantFontFamily,
+    fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
+    fontSize: 16,
+    fontWeight: FontWeight.w700,
+    height: 1.4,
+    color: AppColors.ink,
+  ),
+  h4Padding: const EdgeInsets.only(top: 8, bottom: 4),
+  h5: _kAssistantPlainStyle.copyWith(fontWeight: FontWeight.w700, height: 1.45),
+  h5Padding: const EdgeInsets.only(top: 8, bottom: 4),
+  h6: _kAssistantPlainStyle.copyWith(fontWeight: FontWeight.w700, height: 1.45),
+  h6Padding: const EdgeInsets.only(top: 8, bottom: 4),
+  em: const TextStyle(fontStyle: FontStyle.italic),
+  strong: const TextStyle(fontWeight: FontWeight.w700),
+  del: const TextStyle(decoration: TextDecoration.lineThrough),
+  blockquote: _kAssistantPlainStyle,
+  img: _kAssistantPlainStyle,
+  checkbox: _kAssistantPlainStyle,
   blockSpacing: 8,
   listIndent: 24,
+  listBullet: _kAssistantPlainStyle,
   listBulletPadding: const EdgeInsets.only(right: 8),
+  tableHead: _kAssistantPlainStyle.copyWith(fontWeight: FontWeight.w600),
+  tableBody: _kAssistantPlainStyle,
   // Intrinsic widths keep every column readable (no char-per-line squeezing);
   // flutter_markdown wraps wide tables in a horizontal scroll automatically.
   // Tables are rare and row-bounded, so intrinsic measurement cost is fine
@@ -8956,15 +8928,6 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
   horizontalRuleDecoration: const BoxDecoration(
     border: Border(top: BorderSide(color: AppColors.line)),
   ),
-);
-
-const TextStyle _kAssistantPlainStyle = TextStyle(
-  fontFamily: AppTypography.assistantFontFamily,
-  fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
-  height: AppTypography.assistantBodyHeight,
-  fontSize: AppTypography.assistantBodySize,
-  color: AppColors.ink,
-  letterSpacing: 0.1,
 );
 
 /// Replaces the default `pre` rendering with a card that carries a language
@@ -9107,16 +9070,7 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            child: Text(
-              widget.code,
-              style: const TextStyle(
-                fontFamily: AppTypography.codeFontFamily,
-                fontFamilyFallback: AppTypography.codeFontFamilyFallback,
-                fontSize: 12,
-                height: 1.5,
-                color: AppColors.ink,
-              ),
-            ),
+            child: Text(widget.code, style: _kAssistantCodeStyle),
           ),
         ],
       ),
@@ -11082,56 +11036,37 @@ Future<void> showPermissionModePicker(
   required bool allowBypassPermissions,
   required ValueChanged<PermissionMode> onSelected,
 }) async {
-  final mode = await showModalBottomSheet<PermissionMode>(
-    context: context,
-    sheetAnimationStyle: appOverlayAnimationStyle(context),
-    backgroundColor: Colors.transparent,
-    barrierColor: Colors.transparent,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (sheetContext) {
-      final media = MediaQuery.of(sheetContext);
-      final available = media.size.height - media.padding.vertical - 120;
-      return SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: available),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const AppOptionSheetHeader(title: 'Claude Code 权限模式'),
-                  const SizedBox(height: 12),
-                  for (final item in PermissionMode.values)
-                    AppOptionRow(
-                      key: ValueKey('permission-mode-${item.wireName}'),
-                      title: item.label,
-                      description:
-                          item == PermissionMode.bypassPermissions &&
-                              !allowBypassPermissions
-                          ? '电脑端未开启 ALLOW_BYPASS_PERMISSIONS'
-                          : item.description,
-                      selected: item == selected,
-                      enabled:
-                          item != PermissionMode.bypassPermissions ||
-                          allowBypassPermissions,
-                      danger: item == PermissionMode.bypassPermissions,
-                      leading: Icon(item.icon),
-                      onTap:
-                          item == PermissionMode.bypassPermissions &&
-                              !allowBypassPermissions
-                          ? null
-                          : () => Navigator.pop(sheetContext, item),
-                    ),
-                ],
-              ),
-            ),
+  final mode = await showAppOptionPicker<PermissionMode>(
+    context,
+    builder: (sheetContext) => Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const AppOptionSheetHeader(title: 'Claude Code 权限模式'),
+        const SizedBox(height: 12),
+        for (final item in PermissionMode.values)
+          AppOptionRow(
+            key: ValueKey('permission-mode-${item.wireName}'),
+            title: item.label,
+            description:
+                item == PermissionMode.bypassPermissions &&
+                    !allowBypassPermissions
+                ? '电脑端未开启 ALLOW_BYPASS_PERMISSIONS'
+                : item.description,
+            selected: item == selected,
+            enabled:
+                item != PermissionMode.bypassPermissions ||
+                allowBypassPermissions,
+            danger: item == PermissionMode.bypassPermissions,
+            leading: Icon(item.icon),
+            onTap:
+                item == PermissionMode.bypassPermissions &&
+                    !allowBypassPermissions
+                ? null
+                : () => Navigator.pop(sheetContext, item),
           ),
-        ),
-      );
-    },
+      ],
+    ),
   );
   if (mode == null || !context.mounted) return;
   if (mode == PermissionMode.bypassPermissions) {
@@ -11166,48 +11101,29 @@ Future<void> showCodexSandboxModePicker(
   required CodexSandboxMode selected,
   required ValueChanged<CodexSandboxMode> onSelected,
 }) async {
-  final mode = await showModalBottomSheet<CodexSandboxMode>(
-    context: context,
-    sheetAnimationStyle: appOverlayAnimationStyle(context),
-    backgroundColor: Colors.transparent,
-    barrierColor: Colors.transparent,
-    isScrollControlled: true,
-    showDragHandle: true,
-    builder: (sheetContext) {
-      final media = MediaQuery.of(sheetContext);
-      final available = media.size.height - media.padding.vertical - 120;
-      return SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: available),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const AppOptionSheetHeader(
-                    title: 'Codex 沙箱模式',
-                    detail: 'Codex 非交互执行不会在任务中途弹出权限审批。',
-                  ),
-                  const SizedBox(height: 12),
-                  for (final item in CodexSandboxMode.values)
-                    AppOptionRow(
-                      key: ValueKey('codex-sandbox-${item.wireName}'),
-                      title: item.label,
-                      description: item.description,
-                      selected: item == selected,
-                      danger: item == CodexSandboxMode.dangerFullAccess,
-                      leading: Icon(item.icon),
-                      onTap: () => Navigator.pop(sheetContext, item),
-                    ),
-                ],
-              ),
-            ),
-          ),
+  final mode = await showAppOptionPicker<CodexSandboxMode>(
+    context,
+    builder: (sheetContext) => Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const AppOptionSheetHeader(
+          title: 'Codex 沙箱模式',
+          detail: 'Codex 非交互执行不会在任务中途弹出权限审批。',
         ),
-      );
-    },
+        const SizedBox(height: 12),
+        for (final item in CodexSandboxMode.values)
+          AppOptionRow(
+            key: ValueKey('codex-sandbox-${item.wireName}'),
+            title: item.label,
+            description: item.description,
+            selected: item == selected,
+            danger: item == CodexSandboxMode.dangerFullAccess,
+            leading: Icon(item.icon),
+            onTap: () => Navigator.pop(sheetContext, item),
+          ),
+      ],
+    ),
   );
   if (mode == null || !context.mounted) return;
   if (mode == CodexSandboxMode.dangerFullAccess) {
@@ -11548,6 +11464,45 @@ class _KeyboardResizeBody extends StatelessWidget {
       ),
     );
   }
+}
+
+Future<T?> showAppOptionPicker<T>(
+  BuildContext context, {
+  bool requestFocus = true,
+  required Widget Function(BuildContext sheetContext) builder,
+}) {
+  return showModalBottomSheet<T>(
+    context: context,
+    sheetAnimationStyle: appOverlayAnimationStyle(context),
+    backgroundColor: Colors.transparent,
+    barrierColor: Colors.transparent,
+    isScrollControlled: true,
+    showDragHandle: false,
+    enableDrag: false,
+    requestFocus: requestFocus,
+    builder: (sheetContext) {
+      // Option rows plus the header can outgrow short screens; keep the
+      // sheet within bounds and scroll instead of clipping trailing rows.
+      final media = MediaQuery.of(sheetContext);
+      final available = media.size.height - media.padding.vertical - 120;
+      return appModalSheetScaffold(
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(maxHeight: available),
+              child: AppSheetSurface(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: SingleChildScrollView(child: builder(sheetContext)),
+              ),
+            ),
+          ),
+        ),
+        barrierColor: AppColors.scrim,
+        onBarrierTap: () => Navigator.pop(sheetContext),
+      );
+    },
+  );
 }
 
 class AppSheetSurface extends StatelessWidget {

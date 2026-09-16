@@ -116,6 +116,8 @@
 - [ ] 桌面托盘二维码窗口
 - [x] 发布 `v1.1.0` GitHub Release 和 Android APK
 - [x] 发布 `v1.2.0` GitHub Release 和 Android APK（Warm Console + 连续字号 + 宽气泡）
+- [x] 发布 `v1.3.0` / `v1.3.1` GitHub Release 和 Android APK
+- [x] 发布 `v1.4.0` GitHub Release 和 Android APK（Cool Glass）
 - [ ] Android 正式签名和应用商店材料
 - [ ] Claude 进程预热 / 长驻 bridge，继续压首包延迟
 - [ ] 可选局域网直连调试入口（默认仍走 tunnel）

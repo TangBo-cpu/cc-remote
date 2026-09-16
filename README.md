@@ -4,9 +4,9 @@
 
 扫码配对后，你就能在冷玻璃控制台里发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更——电脑端 daemon 继续跑 Claude Code CLI，手机只是随身控制台。
 
-[下载 Android APK · v1.3.1](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.1/cc-remote-v1.3.1-android.apk)
+[下载 Android APK · v1.4.0](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.4.0/cc-remote-v1.4.0-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.3.1)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.4.0)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -100,7 +100,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v1.3.1 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.1/cc-remote-v1.3.1-android.apk)（测试签名，个人使用）
+1. 安装 [v1.4.0 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.4.0/cc-remote-v1.4.0-android.apk)（测试签名，个人使用）
 2. 允许「未知来源」安装
 3. 打开 App → 扫终端二维码 → 确认电脑名与服务地址 → 进入控制台
 
@@ -235,7 +235,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v1.3.1](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.3.1)**
-APK：[`cc-remote-v1.3.1-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.1/cc-remote-v1.3.1-android.apk)
+当前公开版：**[v1.4.0](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.4.0)**
+APK：[`cc-remote-v1.4.0-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.4.0/cc-remote-v1.4.0-android.apk)
 
-仓库代码已是 Cool Glass 控制台（冷灰蓝玻璃、语义色、Phosphor Fill 身份图标、助手气泡 hug、流式 Markdown、默认 100% 阅读字号）。安装包仍提供 [v1.3.1 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.1/cc-remote-v1.3.1-android.apk)（测试签名）；尚未另发带新 UI 的 GitHub Release 安装包。
+Cool Glass 控制台：冷灰蓝玻璃、语义色、Phosphor Fill 身份图标、助手气泡 hug、流式 Markdown、默认 100% 阅读字号。安装包使用测试签名，适合个人测试。

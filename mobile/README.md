@@ -6,7 +6,7 @@ Flutter 手机 App，用于扫码配对本机 CC Remote daemon，并远程控制
 
 App 已支持扫码确认、Secure Storage、启动恢复、WebSocket 自动重连、活动任务恢复、流式对话、停止任务、Claude / Codex 会话引擎、Codex 三档沙箱、Claude 斜杠指令与六档思考强度、Markdown 来源链接、跨项目会话搜索、模型和上下文状态同步、一次性工具审批、多项目与多会话、只读工作区、Git diff、图片与文件附件，以及 Android 后台本地通知。
 
-仓库代码已是 Cool Glass。公开安装包仍是 `v1.3.1`；Cool Glass 含 Apple 风格设置、持久化权限模式、上下文余量、恢复对话自动定位到底部、Phosphor Fill 身份图标、助手气泡 hug 与默认 100% 阅读字号。
+仓库代码与公开安装包均为 Cool Glass `v1.4.0`：Apple 风格设置、持久化权限模式、上下文余量、恢复对话自动定位到底部、Phosphor Fill 身份图标、助手气泡 hug、流式 Markdown 与默认 100% 阅读字号。
 
 Composer 悬浮在 transcript 之上：列表可滚入 dock 背后，dock 使用 bounded `Liquid Strong` 玻璃以免滚动叠字掉帧；工具行为圆形附件按钮（仅附件）、思考强度仪表、模型胶囊、图标化权限入口、紧凑上下文余量，以及 `accent` 圆形发送/停止。权限图标保留完整模式 tooltip / 屏读语义和 44px 命中区；上下文使用无底色浅灰细环，深灰短弧表示已消耗比例，右侧只显示剩余百分比，完整 token 数通过 tooltip / 屏读语义提供。点击小仪表后背景整体柔焦，只保留大仪表清晰；沿圆弧滑动吸附低、中、高、超高、最大，点击中心切回自动。思考强度与 Claude Code `/effort` 对齐为六档；`max` 不保存为跨会话默认。底边平时用 `viewPadding` 抬离系统手势条，键盘打开时取消底部间隙和阴影并与 IME 连续衔接。长列表滚动侧：消息四角统一 22px，助手阅读面使用 `surfaceElevated` + 细描边气泡，短文本 hug 内容；无 soft shadow、共享 Markdown 样式表、无标记纯文本跳过 Markdown、有标记时流式期间即渲染、活动轨去掉 `IntrinsicHeight`；恢复或切换到对话时默认定位到最新消息，用户主动上翻后不会被后续刷新强制拉回。“···”菜单底栏最多保留当前模型名，并提供对应屏读语义。chrome 使用 `lucide_icons_flutter`；会话、项目与模型身份标记使用 `phosphor_icons` Fill。页面路由保留平台转场与 predictive back，bottom sheet / dialog 统一为 220ms 进入 / 160ms 退出，reduced motion 时空间动画归零；应用不打包自定义字体，UI 与助手正文使用手机系统默认字体，阅读字号默认 100%。思考态由 `CustomPainter` 绘制固定中心的花形帧动画，系统关闭动画时固定为完整花形；其他活动 running 仍使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`。
 
@@ -30,9 +30,9 @@ flutter run
 
 ## Android 安装
 
-当前公开版本是 [`v1.3.1`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.3.1)：
+当前公开版本是 [`v1.4.0`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.4.0)：
 
-- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.3.1/cc-remote-v1.3.1-android.apk)
+- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.4.0/cc-remote-v1.4.0-android.apk)
 
 下载后在 Android 手机上允许当前来源安装未知应用，并打开 APK 完成安装。当前 APK 使用测试签名，适合个人测试，不应作为应用商店正式包分发。
 
@@ -106,4 +106,4 @@ App 在后台或锁屏时可以发送任务完成、失败、停止和等待权�
 
 ## 当前验证状态
 
-`v1.3.1` 发布门禁已通过：`flutter analyze` 零问题，Flutter 137 项测试通过；daemon 测试按当前配置执行。本地 Cool Glass 构建仍用 `1.3.1+5`，覆盖安装保留配对数据；日常调试构建产物为 `app-debug.apk`。
+`v1.4.0` 发布门禁已通过：`flutter analyze` 零问题，Flutter 150 项测试通过；daemon 64 项通过、1 项跳过。安装包版本为 `1.4.0+6`，覆盖安装保留配对数据；日常调试构建产物为 `app-debug.apk`。

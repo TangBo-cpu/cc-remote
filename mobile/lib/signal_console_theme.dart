@@ -123,7 +123,9 @@ abstract final class AppMark {
   static const amber = Color(0xFFF59E0B); // Amber gold / Planning / CLI
   static const coral = Color(0xFFF97316); // Coral orange / Roadmap
   static const clay = coral;
-  static const violet = Color(0xFF8B5CF6); // Royal violet / Architecture / Backend
+  static const violet = Color(
+    0xFF8B5CF6,
+  ); // Royal violet / Architecture / Backend
   static const dusk = violet;
   static const teal = Color(0xFF14B8A6); // Teal cyan / Docs / PRD
   static const rose = Color(0xFFF43F5E); // Electric rose / AI / High-impact
@@ -669,9 +671,10 @@ Duration appPressAnimationDuration(BuildContext context, bool pressed) {
 // This scrim repaints only itself, so opening a sheet costs compositing, not a
 // full-screen re-raster.
 class SheetScrim extends StatelessWidget {
-  const SheetScrim({super.key, this.color = AppColors.scrim});
+  const SheetScrim({super.key, this.color = AppColors.scrim, this.onTap});
 
   final Color color;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -689,8 +692,15 @@ class SheetScrim extends StatelessWidget {
         ),
       );
     }
+    final painted = RepaintBoundary(child: layer);
     return Positioned.fill(
-      child: IgnorePointer(child: RepaintBoundary(child: layer)),
+      child: onTap == null
+          ? IgnorePointer(child: painted)
+          : GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onTap,
+              child: painted,
+            ),
     );
   }
 }
@@ -700,10 +710,11 @@ class SheetScrim extends StatelessWidget {
 Widget appModalSheetScaffold(
   Widget sheet, {
   Color barrierColor = Colors.black54,
+  VoidCallback? onBarrierTap,
 }) {
   return Stack(
     children: [
-      SheetScrim(color: barrierColor),
+      SheetScrim(color: barrierColor, onTap: onBarrierTap),
       Align(
         alignment: Alignment.bottomCenter,
         // The entrance slide must not re-rasterize the sheet every frame.
