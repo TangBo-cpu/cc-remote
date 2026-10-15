@@ -12,7 +12,7 @@ Flutter App
   -> 常驻 Claude Code stream-json 或 Codex App Server
 ```
 
-当前是单设备授权模型。一个 daemon 可以注册多个项目，每个项目拥有多条独立会话，每条会话绑定一个引擎（`claude` 或 `codex`），新建会话时选择且不可更改。项目只能从电脑端注册，手机不能提交任意文件系统路径。
+当前是单设备授权模型。一个 daemon 可以注册多个项目，每个项目拥有多条独立会话，每条会话绑定一个引擎（`claude` 或 `codex`），新建会话时选择且不可更改。已配对手机可浏览电脑目录，提交已有目录的绝对路径，并在该目录新建会话；已有会话仍绑定原项目。
 
 ## 仓库结构
 
@@ -60,7 +60,7 @@ Flutter 当前仍以 `main.dart` 集中管理应用状态。这个结构与现�
 
 `cc-remote` 启动脚本检查 `127.0.0.1:8787`。没有运行实例时，它启动 daemon 和可选 tunnel，并把当前目录写入 `WORKSPACE_DIR`。daemon 冷启动后会调用 `registerProject(WORKSPACE_DIR)`，把该目录注册为项目并设为活动上下文；这与“daemon 已在跑时再执行 `cc-remote`”的行为对齐，避免重启后一直停在上次活动项目。
 
-已有新版 daemon 时，脚本通过 `/api/local/projects/register` 注册当前目录并切换活动项目。该接口使用本机私有控制 token，不接受手机 Bearer token。手机只能切换已注册项目，不能提交任意文件系统路径。
+已有新版 daemon 时，脚本通过 `/api/local/projects/register` 注册当前目录并切换活动项目。该接口使用本机私有控制 token，不接受手机 Bearer token。手机使用独立的目录浏览与新建会话接口，不能用手机 token 调用本机控制接口。
 
 Windows 启动器复用相同的本地控制接口。没有运行实例时，它直接启动编译后的 Node.js daemon 和可选 cloudflared；已有 daemon 时，只注册并切换所选项目。daemon 的工作目录始终为仓库，项目路径通过 `WORKSPACE_DIR` 传入，启动器设置保存在 `.data/desktop.json`。关闭窗口后保留托盘与服务，退出只停止它启动的进程树。使用说明见 [`../desktop/README.md`](../desktop/README.md)。
 
@@ -98,6 +98,8 @@ daemon 按 `WS_HEARTBEAT_INTERVAL_MS` 发送标准 WebSocket ping，未收到 po
 daemon 开始退出后，对新 HTTP 请求返回 503，并关闭 WebSocket。启动器在用户确认后才发送强制退出请求，并等待 daemon 结束后清理隧道。
 
 项目与会话接口包括 `/api/status`、`/api/projects`、`/api/sessions/:id`、`/api/search/sessions`、创建会话、选择会话、重命名、归档和删除。全文搜索只接受 Bearer 鉴权请求，在 daemon 内存中的权威 transcript 上匹配标题、用户消息和助手消息，排除 system/activity 噪声；按会话聚合、最多返回 50 条安全片段。任一引擎任务运行时都禁止切换或创建会话。
+
+`GET /api/directories` 列出电脑磁盘与主目录，带 `path` 时只列该目录的直接子文件夹，最多返回 500 条并标记截断。`POST /api/projects/open-directory` 接收绝对路径和引擎，验证真实目录与读取权限，再注册或复用项目并创建一条新会话。新目录通过真实路径去重；项目目录与会话保存成功后才切换活动上下文，并广播 catalog、工作目录与 transcript。创建使用现有运行互斥锁，忙碌时返回 409；目录浏览不占用该锁。
 
 工作区接口包括 `/api/workspace`、`/api/workspace/file` 和 `/api/workspace/diff`。路径必须位于活动项目内，Git 内部文件、被忽略文件和路径穿越会被拒绝。接口只读。
 
@@ -151,7 +153,7 @@ App 进程被系统彻底杀死后没有常驻连接，因此不能继续接收�
 
 ## 安全边界
 
-daemon 默认只监听 loopback。公网访问由 tunnel 提供。手机不能注册项目、不能修改工作区、不能调用任意 shell。工作区读取遵循路径限制和 Git 忽略规则。
+daemon 默认只监听 loopback，公网访问由 tunnel 提供。已配对手机可以浏览电脑目录并在所选目录创建会话，目录接口只返回文件夹信息。工作区文件与 Git diff 接口保持只读，仍限制在活动项目内并遵循 Git 忽略规则。手机不能直接调用任意 shell，也不能用 Bearer token 访问本机控制接口。
 
 权限模式映射 Claude Code 原生模式。`bypassPermissions` 可在电脑端关闭；即使开启，手机也需要二次确认，并只对单次任务生效。审批请求只能允许一次或拒绝，手机不能修改工具参数。Codex 会话没有逐工具审批，改用沙箱模式限定写入范围；daemon 在 Windows 上按 PATH 探测 `@openai/codex` 的 `codex.js` 启动器并用当前 Node 运行，可用 `CODEX_BIN` / `CODEX_ARGS` 覆盖。transcript 中 `claudeSessionId` 已更名为 `engineSessionId`，旧快照加载时自动迁移。
 

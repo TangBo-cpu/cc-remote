@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { access, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { createTranscriptState, type TranscriptSnapshot, type TranscriptState } from './transcriptState.js';
 import { isAgentEngine, type AgentEngine } from './engineBridge.js';
+import { canonicalDirectory } from './directoryService.js';
 
 const SCHEMA_VERSION = 1;
 
@@ -81,6 +82,7 @@ export type ProjectSessionState = {
   searchSessions(query: string, limit?: number): SessionSearchResult[];
   registerProject(path: string, name?: string): Promise<ProjectSessionCatalog>;
   createSession(projectId: string, title?: string, engine?: AgentEngine): Promise<SessionContext>;
+  createSessionAtDirectory(path: unknown, engine: AgentEngine): Promise<SessionContext>;
   selectSession(sessionId: string): Promise<SessionContext>;
   setSessionTitleFromPrompt(sessionId: string, prompt: string): Promise<void>;
   setSessionTitle(sessionId: string, title: string): Promise<SessionContext>;
@@ -114,13 +116,17 @@ export async function createProjectSessionState(options: {
   let tmpCounter = 0;
   const transcripts = new Map<string, TranscriptState>();
 
-  async function saveCatalog(): Promise<void> {
-    const snapshot = structuredClone(catalog);
+  async function saveCatalog(value: StoredCatalog = catalog): Promise<void> {
+    const snapshot = structuredClone(value);
     const write = saveQueue.catch(() => undefined).then(async () => {
       await mkdir(dirname(catalogPath), { recursive: true });
       const tmp = `${catalogPath}.${process.pid}.${tmpCounter += 1}.tmp`;
-      await writeFile(tmp, JSON.stringify(snapshot, null, 2) + '\n', 'utf8');
-      await rename(tmp, catalogPath);
+      try {
+        await writeFile(tmp, JSON.stringify(snapshot, null, 2) + '\n', 'utf8');
+        await rename(tmp, catalogPath);
+      } finally {
+        await rm(tmp, { force: true }).catch(() => undefined);
+      }
     });
     saveQueue = write;
     await write;
@@ -305,6 +311,46 @@ export async function createProjectSessionState(options: {
     },
 
     createSession: createSessionRecord,
+
+    async createSessionAtDirectory(path: unknown, engine: AgentEngine): Promise<SessionContext> {
+      if (!isAgentEngine(engine)) throw new Error('invalid_engine');
+      if (current().transcript.snapshot().running) throw new Error('claude_is_busy');
+      const canonicalPath = await canonicalDirectory(path);
+      let existing = catalog.projects.find(item => samePath(item.path, canonicalPath));
+      if (!existing) {
+        for (const project of catalog.projects) {
+          const actual = await realpath(project.path).catch(() => undefined);
+          if (actual && samePath(actual, canonicalPath)) { existing = project; break; }
+        }
+      }
+      const next = structuredClone(catalog);
+      const project = existing
+        ? next.projects.find(item => item.id === existing.id)!
+        : newProject(canonicalPath);
+      if (!existing) next.projects.push(project);
+      const now = Date.now();
+      const session: StoredSession = {
+        id: randomUUID(), projectId: project.id, title: '新会话', engine,
+        createdAt: now, updatedAt: now,
+      };
+      next.sessions.push(session);
+      next.activeProjectId = project.id;
+      next.activeSessionId = session.id;
+      project.updatedAt = now;
+      const transcriptPath = join(sessionsDir, `${session.id}.json`);
+      try {
+        const transcript = await createTranscriptState(transcriptPath);
+        await transcript.flush();
+        await saveCatalog(next);
+        transcripts.set(session.id, transcript);
+        catalog = next;
+        return { project, session, transcript };
+      } catch (error) {
+        saveQueue = saveQueue.catch(() => undefined);
+        await rm(transcriptPath, { force: true }).catch(() => undefined);
+        throw error;
+      }
+    },
 
     async selectSession(sessionId: string): Promise<SessionContext> {
       const context = getSessionContext(sessionId);

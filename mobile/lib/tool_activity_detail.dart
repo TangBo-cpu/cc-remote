@@ -40,6 +40,18 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
   bool expanded = true;
 
   @override
+  void initState() {
+    super.initState();
+    expanded =
+        PageStorage.maybeOf(context)?.readState(
+              context,
+              identifier: ('tool-expanded', widget.activity.activityId),
+            )
+            as bool? ??
+        true;
+  }
+
+  @override
   void didUpdateWidget(covariant ToolActivityDetail oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.activity.activityId != widget.activity.activityId) {
@@ -73,7 +85,14 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
           '${duration.isEmpty ? '' : '，$duration'}',
       onToggle: detail.isEmpty
           ? null
-          : () => setState(() => expanded = !expanded),
+          : () {
+              setState(() => expanded = !expanded);
+              PageStorage.maybeOf(context)?.writeState(
+                context,
+                expanded,
+                identifier: ('tool-expanded', message.activityId),
+              );
+            },
       child: Padding(
         padding: const EdgeInsetsDirectional.fromSTEB(26, 0, 8, 8),
         child: WorkspacePathText(

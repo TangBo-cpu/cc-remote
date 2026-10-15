@@ -144,6 +144,51 @@ test('desktop pairing refresh preserves the paired token until another device pa
   assert.equal(stillAuthorized.status, 200);
 });
 
+test('paired phone browses directories and opens a new engine session without local-control access', async () => {
+  const localHeaders = { 'x-cc-remote-local-token': await localControlToken() };
+  const pairing = await fetch(`${daemon.baseUrl}/api/local/pairing`, { method: 'POST', headers: localHeaders });
+  const { payload } = await pairing.json() as { payload: { nonce: string } };
+  const paired = await fetch(`${daemon.baseUrl}/api/pair`, {
+    method: 'POST', body: JSON.stringify({ nonce: payload.nonce }),
+  });
+  const { token } = await paired.json() as { token: string };
+  const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  assert.equal((await fetch(`${daemon.baseUrl}/api/directories`)).status, 401);
+  assert.equal((await fetch(`${daemon.baseUrl}/api/directories`, { headers: localHeaders })).status, 401);
+  const target = join(daemon.root, 'phone 中文 app');
+  await mkdir(target);
+  await writeFile(join(target, 'hello.txt'), 'workspace content');
+  const listing = await fetch(`${daemon.baseUrl}/api/directories?${new URLSearchParams({ path: target })}`, { headers });
+  assert.equal(listing.status, 200);
+  assert.equal((await listing.json() as { path: string }).path, target);
+  const before = await (await fetch(`${daemon.baseUrl}/api/projects`, { headers })).json() as { activeSessionId: string; sessions: unknown[] };
+  const rejected = await fetch(`${daemon.baseUrl}/api/projects/open-directory`, {
+    method: 'POST', headers, body: JSON.stringify({ path: target, engine: 'unknown' }),
+  });
+  assert.equal(rejected.status, 400);
+  const opened = await fetch(`${daemon.baseUrl}/api/projects/open-directory`, {
+    method: 'POST', headers, body: JSON.stringify({ path: target, engine: 'codex' }),
+  });
+  assert.equal(opened.status, 201);
+  const body = await opened.json() as { sessionId: string; catalog: { sessions: Array<{ id: string; engine: string }> } };
+  assert.equal(body.catalog.sessions.length, before.sessions.length + 1);
+  assert.equal(body.catalog.sessions.find(item => item.id === body.sessionId)?.engine, 'codex');
+  const status = await (await fetch(`${daemon.baseUrl}/api/status`, { headers })).json() as { workspaceDir: string; activeSessionId: string };
+  assert.equal(status.workspaceDir, target);
+  assert.equal(status.activeSessionId, body.sessionId);
+  const workspace = await (await fetch(`${daemon.baseUrl}/api/workspace`, { headers })).json() as { files: string[] };
+  assert.ok(workspace.files.includes('hello.txt'));
+  const missing = await fetch(`${daemon.baseUrl}/api/projects/open-directory`, {
+    method: 'POST', headers, body: JSON.stringify({ path: join(target, 'missing'), engine: 'claude' }),
+  });
+  assert.equal(missing.status, 404);
+  const unchanged = await (await fetch(`${daemon.baseUrl}/api/projects`, { headers })).json() as { activeSessionId: string };
+  assert.equal(unchanged.activeSessionId, body.sessionId);
+  assert.equal((await fetch(`${daemon.baseUrl}/api/local/projects/register`, {
+    method: 'POST', headers, body: JSON.stringify({ path: target }),
+  })).status, 401);
+});
+
 test('desktop shutdown exits without deleting pairing state', async () => {
   const statePath = join(daemon.root, '.data', 'state.json');
   const stateBefore = JSON.parse(await readFile(statePath, 'utf8')) as { tokenHash: string };

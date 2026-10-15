@@ -4,9 +4,9 @@
 
 扫码配对后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v1.5.0](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.5.0/cc-remote-v1.5.0-android.apk)
+[下载 Android APK · v2.0.0](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.0/cc-remote-v2.0.0-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.5.0)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.0)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -16,7 +16,7 @@
   <img src="docs/images/cool-glass-chat.jpg" alt="Cool Glass 对话" width="280" />
 </p>
 
-<p align="center"><sub>v1.4.0 历史截图；v1.5.0 使用跟随系统的浅色 / 深色界面</sub></p>
+<p align="center"><sub>v1.4.0 历史截图；v2.0.0 使用跟随系统的浅色 / 深色界面</sub></p>
 
 ---
 
@@ -26,6 +26,7 @@
 | --- | --- |
 | 出门前丢一条任务 | 手机发 prompt，桌面 Claude 继续跑；流式回复实时回传 |
 | 想换引擎 | 新建会话时选 Claude 或 Codex；Codex 支持动态模型目录、原生指令与已启用 skills，默认完全访问沙箱 |
+| 想换项目目录 | 手机浏览电脑文件夹或输入完整路径，选择 Claude Code / Codex 后在该目录新建对话；需同步更新 App 与 daemon |
 | 工具要权限 | 手机弹出决策卡：看命令摘要与工作目录，拒绝或仅本次允许 |
 | 想确认改了什么 | 只读工作区 + Git diff，手机不提交、不改文件 |
 | 断线了 | transcript 与草稿保留，自动重连；回来后从权威快照继续 |
@@ -37,7 +38,7 @@
 
 - daemon 默认只听 `127.0.0.1`，公网走 Tunnel
 - 一次性扫码配对，Bearer token；退出配对即撤销
-- 手机不能注册任意目录、不能跑任意 shell、不能远程编辑 / 提交
+- 已配对手机可浏览电脑目录并在所选目录新建会话；工作区文件和 Git diff 接口保持只读，手机不直接执行 shell 或提交文件
 
 ---
 
@@ -51,7 +52,7 @@
 | :---: | :---: | :---: |
 | <img src="docs/images/cool-glass-home.png" width="220" alt="主控制台" /> | <img src="docs/images/cool-glass-workspace.jpg" width="220" alt="工作区" /> | <img src="docs/images/cool-glass-startup.jpg" width="220" alt="启动" /> |
 
-v1.5.0 使用中性背景和浅色 / 深色外观，助手正文直接排在页面上，用户消息保留浅灰气泡。思考内容与工具调用默认内联展开，查看命令无需打开详情面板；过程文字为 13 号，回复正文为 15 号，均跟随系统字号。以上图片是 v1.4.0 的历史参考；当前设计规格见 [`DESIGN.md`](DESIGN.md)。
+v2.0.0 使用中性背景和浅色 / 深色外观，助手正文直接排在页面上，用户消息保留浅灰气泡。思考内容与工具调用默认内联展开，查看命令无需打开详情面板；过程文字为 13 号，回复正文为 15 号，均跟随系统字号。以上图片是 v1.4.0 的历史参考；当前设计规格见 [`DESIGN.md`](DESIGN.md)。
 
 ---
 
@@ -102,13 +103,17 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v1.5.0 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.5.0/cc-remote-v1.5.0-android.apk)（沿用测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v2.0.0 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.0/cc-remote-v2.0.0-android.apk)（沿用测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫终端二维码 → 确认电脑名与服务地址 → 进入控制台
 
 ### 4. 开始对话
 
 在 Composer 输入任务，或点空状态快捷芯片。运行中可随时停止；需要权限时在手机上点一次「仅本次允许」或拒绝。
+
+在聊天页顶部打开「项目与会话」→「打开电脑目录」，可浏览电脑磁盘、主目录和最近项目，或输入完整绝对路径。选择 Claude Code / Codex 后点击「在此新建对话」。普通文件夹也可使用，旧对话保留原目录与历史，输入框草稿保留。任务或附件操作尚未结束时仍可浏览目录，创建和切换需等待操作结束。
+
+从旧版本升级时，请同时更新手机 App 和电脑端源码，并重启 daemon。手机覆盖安装保留配对和设置，不要卸载旧版；已有会话无需迁移。
 
 ---
 
@@ -119,6 +124,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 - 扫码配对 / Secure Storage / 启动恢复
 - WebSocket 鉴权、退避重连、前台存活探测与活动任务恢复
 - 多项目、多会话；完整项目路径展示
+- 手机浏览或输入电脑目录，按所选 Claude Code / Codex 引擎新建会话，已有会话保留原目录与历史
 - 会话级引擎切换：Claude Code 或 Codex CLI（新建会话时选择）
 - 会话 transcript 持久化与恢复
 - 跨项目会话全文搜索、匹配片段高亮与命中消息精确跳转
@@ -129,7 +135,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 - 流式输出（合批推送；无标记走 Text，有 Markdown 标记时流式期间即渲染）
 - Claude Streaming Input 与 Codex App Server 常驻复用，后续轮次不重复启动 CLI
 - 助手 Markdown 中的搜索来源 / 引用链接可点击，仅允许 `http` / `https` 并交给系统浏览器打开
-- 停止任务、花形思考动画与运行计时、内联工具调用与命令详情、Skill 标识及原地折叠
+- 停止任务、花形思考动画与运行计时、内联工具调用与命令详情、Skill 标识及原地折叠；滚动离屏和流式思考完成后保留折叠选择
 - Composer 思考强度仪表与六档思考强度（自动 + 低、中、高、超高、最大五手动档）
 - 斜杠指令与技能：Claude Code 原生指令；Codex 原生 `/compact`、`/review` 及当前项目已启用的 skills
 - 模型选择：Claude 静态档位、Codex 动态模型目录与独立偏好
@@ -220,7 +226,8 @@ cc-remote -DisableBypassPermissions
 
 - 配对：终端一次性 JSON 二维码（5 分钟、单次）→ `POST /api/pair` → token 仅返回一次
 - 实时：`/ws` 首条必须 `{ "type": "auth", "token": "..." }`，之后 `prompt` / `stop` / `permission_response` 等；prompt 可带 `engine`（须与会话引擎一致），Codex 会话另带 `sandboxMode`
-- HTTP：健康检查无需鉴权；项目、会话、附件、工作区等需 Bearer
+- HTTP：健康检查无需鉴权；项目、会话、目录、附件、工作区等需 Bearer
+- 目录：`GET /api/directories` 浏览磁盘、主目录或一级子文件夹；`POST /api/projects/open-directory` 按绝对路径与引擎创建新会话，运行期间返回 409
 - 本地项目注册：`POST /api/local/projects/register` 仅本机脚本，不对手机开放
 
 完整消息类型、HTTP 路由与状态机说明见：
@@ -238,7 +245,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v1.5.0](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.5.0)**
-APK：[`cc-remote-v1.5.0-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.5.0/cc-remote-v1.5.0-android.apk)
+当前公开版：**[v2.0.0](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.0)**
+APK：[`cc-remote-v2.0.0-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.0/cc-remote-v2.0.0-android.apk)
 
-此版本将思考过程和工具调用改为无卡片的内联展示，命令详情默认可见，并缩小过程文字字号。Android 版本为 `1.5.0+8`，APK 沿用旧版测试签名，供个人使用；Android 真机安装与界面仍待验收。
+此版本支持手机选择电脑目录并新建 Claude Code / Codex 对话，保留旧会话目录与历史，并修复思考和工具调用在滚动后的折叠状态丢失。Android 版本为 `2.0.0+9`，电脑端 package 版本为 `2.0.0`。APK 沿用旧版测试签名，供个人使用；Android 真机安装与界面仍待验收。

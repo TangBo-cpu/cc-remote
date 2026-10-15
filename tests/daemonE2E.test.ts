@@ -253,6 +253,7 @@ test('daemon persists and resumes a Codex session without invoking the Claude br
     codexArgs: root => [
       codexFixture,
       `--fake-log=${join(root, 'codex-args.jsonl')}`,
+      '--fake-record-cwd=1',
     ],
   });
   let socket: WebSocket | undefined;
@@ -268,16 +269,10 @@ test('daemon persists and resumes a Codex session without invoking the Claude br
     assert.equal(pairResponse.status, 200);
     const { token } = await pairResponse.json() as { token: string };
 
-    const statusResponse = await fetch(`${codexDaemon.baseUrl}/api/status`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    assert.equal(statusResponse.status, 200);
-    const { activeProjectId } = await statusResponse.json() as {
-      activeProjectId: string;
-    };
-
+    const selectedDirectory = join(codexDaemon.root, 'selected project');
+    await mkdir(selectedDirectory);
     const createResponse = await fetch(
-      `${codexDaemon.baseUrl}/api/projects/${encodeURIComponent(activeProjectId)}/sessions`,
+      `${codexDaemon.baseUrl}/api/projects/open-directory`,
       {
         method: 'POST',
         headers: {
@@ -285,7 +280,7 @@ test('daemon persists and resumes a Codex session without invoking the Claude br
           'Content-Type': 'application/json',
           Origin: codexDaemon.baseUrl,
         },
-        body: JSON.stringify({ engine: 'codex' }),
+        body: JSON.stringify({ path: selectedDirectory, engine: 'codex' }),
       },
     );
     assert.equal(createResponse.status, 201);
@@ -344,6 +339,10 @@ test('daemon persists and resumes a Codex session without invoking the Claude br
     assert.equal(firstResult.text, 'fake codex reply');
     assert.equal(firstResult.engineSessionId, 'fake-thread-id');
     await firstIdlePromise;
+    const directoryLog = (await readFile(join(codexDaemon.root, 'codex-args.jsonl'), 'utf8'))
+      .trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(directoryLog.find(entry => entry.kind === 'process')?.cwd, selectedDirectory);
+    assert.equal(directoryLog.find(entry => entry.method === 'thread/start')?.params.cwd, selectedDirectory);
     await new Promise(resolve => setTimeout(resolve, 25));
 
     socket.close();
@@ -448,6 +447,7 @@ test('daemon persists and resumes a Codex session without invoking the Claude br
     assert.deepEqual(records.filter(record => record.kind === 'process'), [{
       kind: 'process',
       args: ['app-server'],
+      cwd: selectedDirectory,
     }]);
     const requests = records.filter(record => record.kind === 'request');
     assert.deepEqual(requests.map(record => record.method), [

@@ -73,6 +73,19 @@ test('running task recovers across reconnect and stops after the process exits',
     assert.equal(createResponse.status, 409);
     assert.deepEqual(await createResponse.json(), { error: 'claude_is_busy' });
 
+    const directoryHeaders = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+    const browseResponse = await fetch(`${daemon.baseUrl}/api/directories?${new URLSearchParams({ path: daemon.root })}`, {
+      headers: directoryHeaders,
+    });
+    assert.equal(browseResponse.status, 200);
+    const openDirectory = await fetch(`${daemon.baseUrl}/api/projects/open-directory`, {
+      method: 'POST', headers: directoryHeaders,
+      body: JSON.stringify({ path: daemon.root, engine: 'codex' }),
+    });
+    assert.equal(openDirectory.status, 409);
+    assert.deepEqual(await openDirectory.json(), { error: 'claude_is_busy' });
+    assert.equal((await statusBody(token)).activeSessionId, sessionId);
+
     const localControl = JSON.parse(await readFile(join(daemon.root, '.data', 'local-control.json'), 'utf8')) as { token: string };
     const shutdownResponse = await fetch(`${daemon.baseUrl}/api/local/shutdown`, {
       method: 'POST',

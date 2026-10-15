@@ -13,7 +13,7 @@ const threadId = fakeOptions.session || 'fake-thread-id';
 let turnNumber = 0;
 let initialized = false;
 
-log({ kind: 'process', args });
+log({ kind: 'process', args, ...(fakeOptions['record-cwd'] === '1' ? { cwd: process.cwd() } : {}) });
 
 const input = createInterface({ input: process.stdin });
 input.on('line', line => {

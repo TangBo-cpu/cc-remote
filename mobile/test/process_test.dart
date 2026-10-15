@@ -57,22 +57,25 @@ Widget host(
   home: Scaffold(body: child),
 );
 
-Widget transcript(List<TranscriptMessage> messages, {bool running = false}) =>
-    TranscriptView(
-      messages: messages,
-      session: null,
-      activeSessionId: null,
-      runStartedAt: null,
-      running: running,
-      connected: true,
-      offline: false,
-      pendingPermissions: const [],
-      respondingPermissionIds: const {},
-      onFillPrompt: (_) {},
-      onPermissionAllow: (_) {},
-      onPermissionDeny: (_) {},
-      onReconnect: () {},
-    );
+Widget transcript(
+  List<TranscriptMessage> messages, {
+  bool running = false,
+  String? activeSessionId,
+}) => TranscriptView(
+  messages: messages,
+  session: null,
+  activeSessionId: activeSessionId,
+  runStartedAt: null,
+  running: running,
+  connected: true,
+  offline: false,
+  pendingPermissions: const [],
+  respondingPermissionIds: const {},
+  onFillPrompt: (_) {},
+  onPermissionAllow: (_) {},
+  onPermissionDeny: (_) {},
+  onReconnect: () {},
+);
 
 void main() {
   test(
@@ -325,6 +328,171 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool')));
     await tester.pumpAndSettle();
     expect(find.text('flutter test'), findsOneWidget);
+  });
+
+  for (final target in ['reasoning', 'tool detail', 'tool group']) {
+    testWidgets('manual $target folding survives scrolling off screen', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        host(
+          transcript([
+            for (var turn = 0; turn < 16; turn++) ...[
+              TranscriptMessage.user('检查 $turn'),
+              thought(ActivityState.done),
+              tool(ActivityState.done, id: 'tool-$turn'),
+              TranscriptMessage.assistant('第 $turn 轮完成。'),
+            ],
+          ]),
+          reduceMotion: true,
+        ),
+      );
+      await tester.pumpAndSettle();
+      final list = tester.widget<ListView>(
+        find.byKey(const ValueKey('transcript-list')),
+      );
+      final scroll = list.controller!;
+      scroll.jumpTo(scroll.position.minScrollExtent);
+      await tester.pumpAndSettle();
+
+      final process = find.byType(ActivityTimelineCard).first;
+      final originalElement = tester.element(process);
+      final toggle = find.descendant(
+        of: process,
+        matching: find.byKey(
+          ValueKey(switch (target) {
+            'reasoning' => 'thinking-history-toggle',
+            'tool detail' => 'activity-step-toggle-tool-0',
+            _ => 'activity-process-toggle',
+          }),
+        ),
+      );
+      final content = find.descendant(
+        of: process,
+        matching: find.byKey(
+          ValueKey(
+            target == 'reasoning'
+                ? 'thinking-history-content'
+                : 'activity-detail-tool-0',
+          ),
+        ),
+      );
+      expect(content, findsOneWidget);
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(content, findsNothing);
+
+      scroll.jumpTo(scroll.position.maxScrollExtent);
+      await tester.pumpAndSettle();
+      expect(originalElement.mounted, isFalse);
+      scroll.jumpTo(scroll.position.minScrollExtent);
+      await tester.pumpAndSettle();
+      expect(content, findsNothing);
+
+      await tester.tap(toggle);
+      await tester.pumpAndSettle();
+      expect(content, findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  testWidgets('group folding preserves individual reasoning and tool choices', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      host(
+        transcript([
+          TranscriptMessage.user('检查项目'),
+          thought(ActivityState.done),
+          tool(ActivityState.done),
+          TranscriptMessage.assistant('检查完成。'),
+        ]),
+        reduceMotion: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool')));
+    await tester.pumpAndSettle();
+    final group = find.byKey(const ValueKey('activity-process-toggle'));
+    await tester.tap(group);
+    await tester.pumpAndSettle();
+    await tester.tap(group);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('thinking-history-content')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('activity-detail-tool')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('thinking-history-toggle')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('activity-step-toggle-tool')),
+      findsOneWidget,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'live reasoning keeps its fold when moved into completed history',
+    (tester) async {
+      Widget buildTurn(bool running) => host(
+        transcript([
+          TranscriptMessage.user('检查项目'),
+          tool(ActivityState.done),
+          thought(running ? ActivityState.running : ActivityState.done),
+          if (!running) TranscriptMessage.assistant('检查完成。'),
+        ], running: running),
+        reduceMotion: true,
+      );
+      await tester.pumpWidget(buildTurn(true));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(buildTurn(false));
+      await tester.pumpAndSettle();
+      expect(find.text('已深度思考'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('thinking-history-content')),
+        findsNothing,
+      );
+      expect(find.text('flutter test'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('fold choices do not leak into another session with reused IDs', (
+    tester,
+  ) async {
+    Widget buildSession(String sessionId) => host(
+      transcript([
+        TranscriptMessage.user('检查项目'),
+        thought(ActivityState.done),
+        tool(ActivityState.done),
+        TranscriptMessage.assistant('检查完成。'),
+      ], activeSessionId: sessionId),
+      reduceMotion: true,
+    );
+    await tester.pumpWidget(buildSession('first'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pumpAndSettle();
+
+    await tester.pumpWidget(buildSession('second'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('thinking-history-content')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('activity-detail-tool')), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('inline command and duration update on completion', (

@@ -24,9 +24,11 @@ import 'conversation_option_sheet.dart';
 import 'codex_model_picker.dart';
 import 'appearance_preference.dart';
 import 'data/api_client.dart';
+import 'data/directory_api.dart';
 import 'data/permission_mode.dart';
 import 'data/remote_models.dart';
 import 'data/websocket_client.dart';
+import 'directory_picker.dart';
 import 'effort_gauge.dart';
 import 'effort_preference.dart';
 import 'model_preference.dart';
@@ -322,6 +324,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final AttachmentPicker attachmentPicker = AttachmentPicker();
   final List<TranscriptMessage> messages = [];
   final ValueNotifier<int> transcriptRevision = ValueNotifier(0);
+  final ValueNotifier<bool> directoryBusy = ValueNotifier(false);
   final List<AttachmentDraft> pendingAttachments = [];
   final List<String> commands = [];
   bool commandsLoading = false;
@@ -367,6 +370,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   bool peekFailed = false;
   int liveMessageCountAtPeek = 0;
 
+  bool get directorySwitchBlocked =>
+      running ||
+      stopping ||
+      uploadingAttachments ||
+      queuedPrompt != null ||
+      pendingPermissions.isNotEmpty;
+
   Object? get ws => wsClient.channel;
   SessionEngine get activeSessionEngine {
     for (final item in remoteSessions) {
@@ -410,6 +420,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     apiClient.close();
     promptController.dispose();
     transcriptRevision.dispose();
+    directoryBusy.dispose();
     super.dispose();
   }
 
@@ -2265,8 +2276,76 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     }
   }
 
+  Future<void> openDirectoryPicker() async {
+    final current = session;
+    if (current == null) return;
+    final api = DirectoryApi(
+      client: apiClient,
+      origin: current.origin,
+      token: current.token,
+    );
+    bool sameConnection() =>
+        mounted &&
+        session?.origin == current.origin &&
+        session?.token == current.token;
+    Future<T> request<T>(Future<T> Function() operation) async {
+      if (!sameConnection()) {
+        throw const DirectoryRequestException('connection_changed');
+      }
+      try {
+        final result = await operation();
+        if (!sameConnection()) {
+          throw const DirectoryRequestException('connection_changed');
+        }
+        return result;
+      } on DirectoryRequestException catch (failure) {
+        if (!mounted) rethrow;
+        if (failure.statusCode == 401 && sameConnection()) {
+          Navigator.of(context).popUntil((route) => route.isFirst);
+          await recoverUnauthorizedSession();
+        }
+        rethrow;
+      }
+    }
+
+    directoryBusy.value = directorySwitchBlocked;
+    await Navigator.of(context).push<void>(
+      AppMaterialPageRoute<void>(
+        reduceMotion: MediaQuery.disableAnimationsOf(context),
+        builder: (_) => DirectoryPickerPage(
+          currentPath: current.workspaceDir,
+          recentProjects: List.of(projects),
+          initialEngine: activeSessionEngine,
+          busyListenable: directoryBusy,
+          onBrowse: (path) => request(() => api.browse(path)),
+          onCreate: (path, engine) async {
+            if (directorySwitchBlocked) {
+              throw const DirectoryRequestException('directory_busy');
+            }
+            final previousSessionId = activeSessionId;
+            final catalog = await request(
+              () => api.createSession(path, engine),
+            );
+            if (activeSessionId != previousSessionId &&
+                activeSessionId != catalog.activeSessionId) {
+              throw const DirectoryRequestException('connection_changed');
+            }
+            setState(() {
+              resetSessionOnlyEffort();
+              clearSessionPeek();
+              transcriptJumpRequest = null;
+              applyCatalog(catalog);
+            });
+            if (session != null) await tokenStore.save(session!);
+            persistTranscriptSnapshotLater();
+          },
+        ),
+      ),
+    );
+  }
+
   void openSessions() {
-    if (projects.isEmpty || uploadingAttachments) return;
+    if (projects.isEmpty) return;
     showSessionNavigator(
       context,
       projects: projects,
@@ -2275,6 +2354,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       activeSessionId: activeSessionId,
       running: running || uploadingAttachments,
       onSelect: selectRemoteSession,
+      onOpenDirectory: widget.demoMode
+          ? null
+          : () => unawaited(openDirectoryPicker()),
       onSearchResult: openRemoteSearchResult,
       onCreate: createRemoteSession,
       onRename: renameRemoteSession,
@@ -2787,6 +2869,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    if (directoryBusy.value != directorySwitchBlocked) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) directoryBusy.value = directorySwitchBlocked;
+      });
+    }
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     final screen = switch (route) {
       ShellRoute.boot => BootstrapScreen(phase: bootstrapPhase),
@@ -4565,7 +4652,7 @@ class ConnectionHeader extends StatelessWidget {
                 child: _HeaderIconButton(
                   tooltip: '项目与会话',
                   icon: LucideIcons.menu,
-                  onPressed: uploadingAttachments ? null : onOpenSessions,
+                  onPressed: onOpenSessions,
                 ),
               ),
               const Spacer(),
@@ -5585,6 +5672,7 @@ Future<void> showSessionNavigator(
   required String? activeProjectId,
   required String? activeSessionId,
   required bool running,
+  VoidCallback? onOpenDirectory,
   required ValueChanged<String> onSelect,
   required ValueChanged<RemoteSessionSearchResult> onSearchResult,
   required void Function(String projectId, SessionEngine engine) onCreate,
@@ -5616,6 +5704,12 @@ Future<void> showSessionNavigator(
           Navigator.pop(pageContext);
           onCreate(projectId, engine);
         },
+        onOpenDirectory: onOpenDirectory == null
+            ? null
+            : () {
+                Navigator.pop(pageContext);
+                onOpenDirectory();
+              },
         onRename: (sessionId, title) async {
           Navigator.pop(pageContext);
           await onRename(sessionId, title);
@@ -5665,6 +5759,7 @@ class SessionNavigatorPage extends StatefulWidget {
     required this.onArchive,
     required this.onDelete,
     required this.onSearch,
+    this.onOpenDirectory,
   });
 
   final List<RemoteProjectSummary> projects;
@@ -5679,6 +5774,7 @@ class SessionNavigatorPage extends StatefulWidget {
   final Future<void> Function(String sessionId) onArchive;
   final Future<void> Function(String sessionId) onDelete;
   final Future<List<RemoteSessionSearchResult>> Function(String query) onSearch;
+  final VoidCallback? onOpenDirectory;
 
   @override
   State<SessionNavigatorPage> createState() => _SessionNavigatorPageState();
@@ -6450,6 +6546,22 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
     );
   }
 
+  Widget buildOpenDirectoryAction() => ListTile(
+    key: const ValueKey('open-computer-directory'),
+    contentPadding: EdgeInsets.zero,
+    leading: const SmartIcon(
+      LucideIcons.folderOpen,
+      size: AppIconSizes.primary,
+    ),
+    title: const Text('打开电脑目录'),
+    subtitle: const Text('浏览或输入路径，在所选目录新建对话'),
+    trailing: const SmartIcon(
+      LucideIcons.chevronRight,
+      size: AppIconSizes.inline,
+    ),
+    onTap: widget.onOpenDirectory,
+  );
+
   Widget buildHomeView() {
     final project = selectedProject;
     final projectSessions = project == null
@@ -6507,6 +6619,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                 ),
                 onTap: () => openView(_SessionNavigatorView.projects),
               ),
+              if (widget.onOpenDirectory != null) buildOpenDirectoryAction(),
               buildSectionTitle('会话'),
               if (projectSessions.isNotEmpty) buildSessionFilterBar(),
               if (projectSessions.isEmpty)
@@ -6568,6 +6681,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
           return Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              if (widget.onOpenDirectory != null) buildOpenDirectoryAction(),
               buildSectionTitle('当前项目'),
               if (current != null) buildProjectRow(current, index: 0),
               buildSectionTitle('其他项目'),
@@ -7907,7 +8021,7 @@ List<Object> _groupTranscriptRows(
   return items;
 }
 
-class _TranscriptProcessBlock extends StatefulWidget {
+class _TranscriptProcessBlock extends StatelessWidget {
   const _TranscriptProcessBlock({
     super.key,
     required this.group,
@@ -7920,31 +8034,12 @@ class _TranscriptProcessBlock extends StatefulWidget {
   final int? revealRawIndex;
 
   @override
-  State<_TranscriptProcessBlock> createState() =>
-      _TranscriptProcessBlockState();
-}
-
-class _TranscriptProcessBlockState extends State<_TranscriptProcessBlock> {
-  bool toolsExpanded = true;
-
-  @override
-  void didUpdateWidget(covariant _TranscriptProcessBlock oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.group.rawIndex != widget.group.rawIndex) {
-      toolsExpanded = true;
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final group = widget.group;
     final tools = group.rows
         .where((row) => row.message.activityKind == ActivityKind.tool)
         .map((row) => row.message)
         .toList();
-    final reveal = group.rows.any(
-      (row) => row.rawIndex == widget.revealRawIndex,
-    );
+    final reveal = group.rows.any((row) => row.rawIndex == revealRawIndex);
     final liveThought = group.running
         ? group.rows
               .where(
@@ -7964,7 +8059,7 @@ class _TranscriptProcessBlockState extends State<_TranscriptProcessBlock> {
           if (historyRows[i].message.activityKind == ActivityKind.tool)
             buildTool!(historyRows[i].message)
           else
-            widget.buildPart(historyRows[i]),
+            buildPart(historyRows[i]),
         ],
       ],
     );
@@ -7973,13 +8068,10 @@ class _TranscriptProcessBlockState extends State<_TranscriptProcessBlock> {
         : ActivityTimelineCard(
             activities: tools,
             running: group.running,
-            expanded: toolsExpanded || reveal,
-            onExpandedChanged: (value) => setState(() => toolsExpanded = value),
+            expanded: reveal ? true : null,
             revealActivityId: reveal
                 ? group.rows
-                      .firstWhere(
-                        (row) => row.rawIndex == widget.revealRawIndex,
-                      )
+                      .firstWhere((row) => row.rawIndex == revealRawIndex)
                       .message
                       .activityId
                 : null,
@@ -7988,10 +8080,7 @@ class _TranscriptProcessBlockState extends State<_TranscriptProcessBlock> {
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        content,
-        if (liveThought != null) widget.buildPart(liveThought),
-      ],
+      children: [content, if (liveThought != null) buildPart(liveThought)],
     );
   }
 }
@@ -8001,6 +8090,7 @@ class _TranscriptViewState extends State<TranscriptView> {
   static const maxJumpAttempts = 48;
 
   final ScrollController scrollController = ScrollController();
+  final Map<int, PageStorageBucket> activityStorage = {};
   final Map<int, GlobalKey> rowKeys = {};
   Timer? highlightTimer;
   int? highlightedRawIndex;
@@ -8029,6 +8119,7 @@ class _TranscriptViewState extends State<TranscriptView> {
       highlightTimer?.cancel();
       highlightedRawIndex = null;
       rowKeys.clear();
+      activityStorage.clear();
       didInitialBottomJump = false;
       followingBottom = true;
       unreadOutputCount = 0;
@@ -8587,6 +8678,17 @@ class _TranscriptViewState extends State<TranscriptView> {
                     onDeny: () => widget.onPermissionDeny(request),
                   );
                 }
+                if (item is _ProcessGroupRow) {
+                  row = PageStorage(
+                    key: ValueKey(widget.activeSessionId),
+                    bucket: activityStorage.putIfAbsent(
+                      item.rawIndex,
+                      PageStorageBucket.new,
+                    ),
+                    child: row,
+                  );
+                }
+
                 Object gapItem(Object value) {
                   if (value is _VisibleTranscriptRow) return value.message;
                   if (value is _ProcessGroupRow) return value.message;
@@ -10575,6 +10677,12 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
   void initState() {
     super.initState();
     displayedTitle = groupTitle(widget.activities);
+    expanded =
+        PageStorage.maybeOf(
+              context,
+            )?.readState(context, identifier: 'activity-timeline-expanded')
+            as bool? ??
+        true;
   }
 
   @override
@@ -10697,6 +10805,11 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
             onToggle: () {
               final next = !isExpanded;
               setState(() => expanded = next);
+              PageStorage.maybeOf(context)?.writeState(
+                context,
+                next,
+                identifier: 'activity-timeline-expanded',
+              );
               widget.onExpandedChanged?.call(next);
             },
             child:

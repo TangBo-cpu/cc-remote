@@ -37,6 +37,18 @@ class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
   bool expanded = true;
 
   @override
+  void initState() {
+    super.initState();
+    expanded =
+        PageStorage.maybeOf(context)?.readState(
+              context,
+              identifier: ('thinking-expanded', widget.message.activityId),
+            )
+            as bool? ??
+        true;
+  }
+
+  @override
   void didUpdateWidget(covariant ThinkingHistoryBlock oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.message.activityId != widget.message.activityId) {
@@ -87,7 +99,14 @@ class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
           : null,
       semanticLabel: '$title$elapsed',
       onToggle: detail.isNotEmpty
-          ? () => setState(() => expanded = !expanded)
+          ? () {
+              setState(() => expanded = !expanded);
+              PageStorage.maybeOf(context)?.writeState(
+                context,
+                expanded,
+                identifier: ('thinking-expanded', message.activityId),
+              );
+            }
           : null,
       child: Container(
         key: const ValueKey('thinking-history-content'),

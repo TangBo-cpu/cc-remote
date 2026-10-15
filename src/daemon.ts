@@ -13,6 +13,7 @@ import {
   type SessionContext,
 } from './projectSessionState.js';
 import { WorkspaceService } from './workspaceService.js';
+import { browseDirectories, DirectoryError } from './directoryService.js';
 import {
   AttachmentStore,
   attachmentDescriptor,
@@ -40,6 +41,7 @@ import {
   extractCodexSessionInfo,
 } from './codexBridge.js';
 import {
+  isAgentEngine,
   normalizeAgentEngine,
   normalizeCodexSandboxMode,
   normalizeEngineEffort,
@@ -486,6 +488,37 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       ...auth.status(),
       ...engineSessionStatus(activeContext),
     });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/directories') {
+    try {
+      sendJson(res, 200, await browseDirectories(url.searchParams.has('path') ? url.searchParams.get('path') : undefined));
+    } catch (error) {
+      if (error instanceof DirectoryError) sendJson(res, error.status, { error: error.code });
+      else sendJson(res, 500, { error: 'directory_read_failed' });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/projects/open-directory') {
+    if (!runFlight.tryBegin('mutate')) return sendJson(res, 409, { error: 'claude_is_busy' });
+    try {
+      const body = await readJson<{ path?: unknown; engine?: unknown }>(req);
+      if (!body || !isAgentEngine(body.engine)) return sendJson(res, 400, { error: 'invalid_engine' });
+      const context = await projectSessions.createSessionAtDirectory(body.path, body.engine);
+      await selectActiveSession(context);
+      broadcastActiveSession();
+      sendJson(res, 201, {
+        ok: true, projectId: context.project.id, sessionId: context.session.id,
+        catalog: projectSessions.catalog(),
+      });
+    } catch (error) {
+      if (error instanceof DirectoryError) sendJson(res, error.status, { error: error.code });
+      else sendJson(res, 500, { error: 'directory_open_failed' });
+    } finally {
+      runFlight.end();
+    }
     return;
   }
 
