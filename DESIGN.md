@@ -1,157 +1,62 @@
----
-name: CC Remote Cool Glass Console
-description: A restrained Apple-inspired blue-gray glass control surface for supervising desktop Claude Code sessions.
-colors:
-  paper: "#F1F5F9"
-  surface: "#F7FAFC"
-  surface-elevated: "#FBFCFD"
-  control: "#EEEFF0"
-  ink: "#1C1C1E"
-  muted: "#636B74"
-  inactive: "#8E8E93"
-  inactive-light: "#BEC7D0"
-  accent: "#3877A7"
-  accent-soft: "#E4EFF7"
-  danger: "#B54747"
-  warning: "#94662D"
-  glass: "rgba(248,251,254,0.80)"
-  glass-strong: "rgba(249,251,253,0.92)"
-  glass-control: "rgba(255,255,255,0.75)"
-  glass-highlight: "rgba(255,255,255,0.70)"
-  scrim: "rgba(17,24,32,0.29)"
-typography:
-  headline:
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-    fontSize: "21px"
-    fontWeight: 700
-    lineHeight: 1.25
-    letterSpacing: "-0.02em"
-  title:
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-    fontSize: "16px"
-    fontWeight: 700
-    lineHeight: 1.35
-  body:
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-    fontSize: "15px"
-    fontWeight: 400
-    lineHeight: 1.6
-  label:
-    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
-    fontSize: "12px"
-    fontWeight: 500
-    lineHeight: 1.35
-  code:
-    fontFamily: "JetBrains Mono, SFMono-Regular, Consolas, monospace"
-    fontSize: "12px"
-    fontWeight: 500
-    lineHeight: 1.45
-rounded:
-  compact: "8px"
-  control: "12px"
-  surface: "16px"
-  header: "22px"
-  composer: "28px"
-  pill: "999px"
-spacing:
-  xxs: "4px"
-  xs: "8px"
-  sm: "12px"
-  md: "16px"
-  lg: "20px"
-  xl: "24px"
-  xxl: "32px"
-components:
-  button-primary:
-    backgroundColor: "{colors.accent}"
-    textColor: "{colors.surface-elevated}"
-    typography: "{typography.label}"
-    rounded: "{rounded.control}"
-    height: "52px"
-    padding: "0 20px"
-  session-header:
-    backgroundColor: "transparent"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.header}"
-    height: "48px"
-    padding: "0"
-  composer:
-    backgroundColor: "{colors.glass-strong}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.composer}"
-    height: "110px"
-    padding: "14px 12px 12px"
-  activity-card:
-    backgroundColor: "{colors.surface}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.surface}"
-    padding: "14px 16px"
----
+# CC Remote design system
 
-# Design System: CC Remote Cool Glass Console
+CC Remote is a mobile console for supervising desktop Claude Code and Codex sessions. The transcript, current task state, and permission decisions take priority over decoration.
 
-## Overview
+## Appearance
 
-**Creative North Star: “Cool Glass Control Surface”**
+The app provides two palettes: light and dark. Settings offers Follow system, Light, and Dark; Follow system is the default. An explicit choice is stored locally and restored on launch. Switching appearance preserves the current session, draft, transcript position, and open settings page.
 
-Operate-mode mobile UI for remote supervision of a real desktop Claude Code session. The replacement world is pale blue, cool gray, and Apple-inspired: content remains a standard readable material, while controls and navigation use restrained translucent surfaces. Glass is a material treatment, not the product identity; blue is a sparse action cue.
-
-The chat surface is calm. No ornamental motion, glow, saturated or blue-purple decorative gradient, terminal chrome, or generic glassmorphism. The current low-contrast static cool blue-gray background gradient is allowed. The implementation is Flutter-native; bounded header/composer chrome may sample the background with real backdrop blur, while content and text-heavy sheets stay static.
+Pages and transcript text use the active light or dark palette. Floating controls, the composer, and panels use neutral glass with restrained backdrop blur, near-white or charcoal fills, faint highlight edges, and soft offset shadows. Old background preferences are ignored.
 
 ## Colors
 
-`AppColors` and `AppLiquidGlass` in `mobile/lib/signal_console_theme.dart` are normative. `paper`, `surface`, and `surfaceElevated` form the cool near-white content field. Ordinary controls use neutral graphite-gray fills and ink; blue is reserved for primary, selected, focus, and active states. `Liquid Thin` and `Liquid Strong` provide static fallbacks plus lower-opacity backdrop variants for bounded floating chrome. `danger` and `warning` remain independent semantic colors.
+`AppPalette.of(context)` selects semantic colors from the active Flutter theme. Components read these roles instead of choosing raw palette values. `AppColors` remains a light-palette compatibility facade for static style defaults and existing callers.
 
-## Typography
+| Role | Light | Dark |
+| --- | --- | --- |
+| Page | `#F9F9F9` | `#111111` |
+| Surface | `#FFFFFF` | `#1B1B1B` |
+| Control | `#F0F0F0` | `#292929` |
+| Primary text | `#202020` | `#EEEEEE` |
+| Secondary text | `#626262` | `#B0B0B0` |
+| Primary action / focus | `#303030` | `#E7E7E7` |
+| Selection surface | `#EAEAEA` | `#343434` |
+| Link text | `#505050` | `#D0D0D0` |
+| Success feedback | `#4C7D63` | `#91B19E` |
+| Session navigation cue | `#3877A7` | `#87B7DB` |
+| Error / destructive action | `#B42318` | `#FF8A80` |
+| Warning | `#8A5A20` | `#EAB86A` |
+| Divider | `#E5E5E5` | `#363636` |
 
-Use platform system UI for interface and assistant reading text. Use system monospace / JetBrains Mono fallback for commands, paths, code, diffs, and numeric evidence. Baseline body text is 15px with 1.6 line height; labels remain at least 12px. Respect system text scaling and the app reading-scale setting.
+Primary actions use charcoal in light mode and near-white in dark mode. Links use their own neutral text role with a thin underline. Selection uses neutral surfaces, icons, and font weight. Ordinary controls use neutral colors; session navigation keeps its original blue cues and colored identity marks. Success color is limited to small confirmation feedback; errors and warnings keep their own roles and accompany a label or icon. Filled buttons use their paired foreground role: `onCta` for primary actions and `onStop` for destructive actions.
 
-## Layout
+Body text and action labels require at least 4.5:1 contrast against their actual background. Disabled controls use their disabled role. Photos and camera content retain their own content colors.
 
-Reference phone is 390×844 with 20px horizontal safe margins and a 4px base / 8px primary rhythm. Preserve the existing information order: connection/session header, transcript and activity evidence, then composer. Visual controls may be 36px, but every interactive control keeps a minimum 48dp hit area. Sheets and drawers remain platform-native and reachable with one hand.
+## Layout and typography
 
-## Elevation & Depth
+Keep the existing navigation and chat layout. Separate groups with spacing and alignment before adding borders or surfaces. Avoid nested decorative cards.
 
-Depth comes from cool tonal layering, a directional top-left highlight, a faint lower-right thickness cue, and neutral shadow rings instead of tinted outlines. Header controls use bounded `Liquid Thin` backdrop blur; the floating composer uses bounded `Liquid Strong` backdrop blur over the transcript. Prompt chips, compact controls, settings, and app sheets retain static fallbacks. Never add blur or filters to individual scrolling rows.
+Use the platform UI font for interface and transcript text, and a monospace font for code, paths, and commands. Preserve reading-size settings and system text scaling. Text must wrap or scroll within its viewport without hiding controls.
 
-## Shapes
-
-Use 8px compact, 12px control, 16px surface, 22px header, and 28px composer radii. Pills are reserved for compact selectors and tags. Chrome icons stay linear Lucide, optically 20–24px. Session, project, and model identity marks use Phosphor Fill. Hit areas are 48dp even when the visible icon/control is 36px.
+Spacing follows 4, 8, 12, 16, 20, 24, and 32 points. Reuse the shared radius and touch-target constants. Compact visible icons retain an accessible touch target.
 
 ## Components
 
-### Content and transcript
+- The header contains project/session navigation, new conversation, and more actions. The transcript scrolls behind it up to the screen's top edge. A clipped backdrop blur fades out below the controls and passes through touch events; controls remain inside the system safe area. Initial transcript padding follows the measured navigation, status, and recovery-panel height. Search targets stop below that overlay.
+- The session navigator retains its original list spacing, colored session/project marks, blue context and selection cues, and existing search and menu behavior.
+- The composer uses a 32-point corner radius, strong glass fill, and soft shadow outside the content clip. Focus adds an accent outline. Its tools have no shared filled rail; the attachment action has a light circular seat. Send and stop retain loading and disabled states.
+- Assistant replies sit directly on the page without a bubble fill or outline. User messages use a neutral gray bubble without a border or shadow. Search matches retain their temporary highlight. File cards use a faint outline and a separate neutral icon seat. Markdown headings, links, tables, and code update when appearance changes.
+- A turn collects intermediate narration, reasoning, and tools into one process. Reasoning and narration retain their order within the tool history. Live thinking appears outside the tool disclosure, so folding tools never hides its animation. Completed processes use a bordered card with a colored icon; tool summaries show completion, failure, or stop state and the step count. History starts folded unless manually opened during generation. User and system-message boundaries remain separate, and search opens the process containing its target.
+- Reasoning shows a fixed-center bloom animation and “思考中” with elapsed time while running. Completed reasoning shows a colored brain icon and “已深度思考”. Expanding displays selectable Markdown with a 2-point start border and natural content height. Empty completed reasoning is hidden. Timer labels describe elapsed run time rather than model-reported reasoning duration.
+- Tool groups use bordered cards and colored tool icons with separate running, error, and stop cues. The latest two steps remain visible during a run; expanding shows the full sequence. Skill rows retain their name badge. Selecting a tool opens a separate bottom sheet at 40% height, expandable to 80%. The sheet has a fixed title, a scrollable body, a 32-point top radius, and a maximum width of 720 points. It updates through turn completion and preserves workspace-path navigation. Cached and remote history remain available, and permission requests retain explicit allow/deny actions.
+- Menus, model pickers, settings, and the workspace use the same palette and shared glass material. Sheets separate from the page through their surface and scrim.
+- Inline recovery cards use a neutral control fill and primary text for reconnect actions, keeping the alert and its recovery action below the transcript in visual emphasis.
+- Startup shows the app name and the current initialization phase on the page background.
 
-Content stays on standard cool near-white materials for comfortable reading. User bubbles, assistant reading blocks, code, diff, activity evidence, and recovery states retain their existing hierarchy and copy; short assistant replies hug content, long replies wrap in the column, and separation comes from tone, spacing, a hairline outline, icon, and text rather than a card wall.
+## Motion and validation
 
-### Navigation and controls
+Running titles use a 2-second linear text shimmer. The thinking bloom expands and contracts through fixed-center frames over 3 seconds. Active tool titles remain visible for at least 1.2 seconds, with later updates replacing pending titles. Adjacent chevrons rotate over 200ms using Cubic(0.22, 1, 0.36, 1). Expanded content mounts at its natural height and preserves the disclosure's reading anchor. Tool sheets open and snap over 250ms and close over 200ms. Reduced motion keeps a static bloom and tool progress marker, disables shimmer, arrow rotation, and sheet transitions, and retains elapsed-time updates. Sheet snapping uses 1ms because Flutter requires a positive duration. Appearance changes apply immediately without a whole-page color crossfade.
 
-Header and `PromptChip` use `Liquid Thin`; the composer and `AppSheetSurface` use `Liquid Strong`; model, permission, effort, and attachment controls use the compact thin recipe inside the strong composer. Ordinary control ink is graphite; blue marks only primary, selected, focus, or active state. Dangerous stop/error actions use `danger`; warnings use `warning`.
+Validate both palettes, system appearance changes, saved appearance restoration, open-sheet updates, cached Markdown colors, and draft/session preservation. Check short screens and enlarged text. Android system bars follow the active appearance.
 
-### Settings and effort gauge
-
-`_SettingsModalSurface` uses the high-opacity `Liquid Strong` recipe with only the static top arc highlight and no real blur. The existing effort gauge may retain its established bounded blur. This is not a general invitation to blur transcript content.
-
-## Do's and Don'ts
-
-### Do:
-
-- Use glass only for controls and navigation; keep content on standard material.
-- Use thicker translucent material for text-heavy overlays.
-- Contract the highlight and reduce shadow depth while pressed; restore over 160ms.
-- Keep blue quiet, semantic colors independent, and state readable through icon + text + tone.
-- Preserve Reduce Motion behavior and 48dp hit areas.
-- Let authoritative host events define stopped, completed, and failed states.
-
-### Don't:
-
-- Don't use terracotta/warm-paper styling as the chat console world.
-- Don't use blue-purple gradients, glow, HUD chrome, black control docks, or stacked generic glass cards.
-- Don't add fragment shaders, continuous material animation, or blur to text-heavy sheets and scrolling rows before device profiling.
-- Don't apply real blur to every scrolling message or activity item.
-- Don't use color alone for connection, warning, danger, or completion.
-- Don't claim a task stopped because a local timer expired.
-
-## Unresolved
-
-Dark mode is out of scope for this replacement and remains a follow-up decision. The bounded header/composer blur still needs device screenshot review and real-device profile measurement before any shader dependency is considered.
+Device acceptance must check keyboard transitions, scrolling, and permission decisions on a real device. Widget tests and browser previews do not prove native gesture behavior.

@@ -5,8 +5,9 @@ import { readFile } from 'node:fs/promises';
 import { delimiter, extname, join } from 'node:path';
 import qrcode from 'qrcode-terminal';
 import WebSocket, { WebSocketServer } from 'ws';
-import { createAuthState } from './authState.js';
+import { createAuthState, type PairingPayload } from './authState.js';
 import { createLocalControlState } from './localControlState.js';
+import { createPairingQr } from './pairingQr.js';
 import {
   createProjectSessionState,
   type SessionContext,
@@ -26,6 +27,7 @@ import {
   extractClaudeCommands,
   extractClaudeSessionInfo,
   isMissingConversationError,
+  mergeClaudeSessionInfo,
   restoreClaudeSessionInfo,
   type ClaudeActivity,
   type ClaudePermissionMode,
@@ -47,6 +49,7 @@ import {
   type EngineBridge,
 } from './engineBridge.js';
 import { createRunFlight } from './runFlight.js';
+import { syncClaudeSessionHistory } from './claudeSessionHistory.js';
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 8787);
@@ -137,6 +140,10 @@ const localControl = await createLocalControlState();
 const projectSessions = await createProjectSessionState({ initialWorkspace: WORKSPACE_DIR });
 // Align cold start with "cc-remote already running" register path: activate WORKSPACE_DIR.
 await projectSessions.registerProject(WORKSPACE_DIR);
+for (const session of projectSessions.catalog().sessions) {
+  const context = projectSessions.getSession(session.id);
+  if (context) await syncNativeClaudeHistory(context);
+}
 const attachments = new AttachmentStore();
 let activeContext = projectSessions.active();
 let workspace = new WorkspaceService(activeContext.project.path);
@@ -176,19 +183,14 @@ let nextRunId = 0;
 let activeRunId: string | undefined;
 let activeRunStartedAt: number | undefined;
 let sessionInfo: ClaudeSessionInfo = activeContext.transcript.snapshot().sessionInfo;
-if (activeContext.session.engine === 'claude' && !Object.keys(sessionInfo).length) {
-  const restoredSessionInfo = await restoreClaudeSessionInfo({
-    sessionId: activeContext.transcript.snapshot().engineSessionId || '',
-  });
-  if (restoredSessionInfo) {
-    sessionInfo = restoredSessionInfo;
-    activeContext.transcript.setSessionInfo(restoredSessionInfo);
-    await activeContext.transcript.flush();
-  }
-}
+await applyRestoredClaudeSessionInfo(
+  activeContext,
+  activeContext.transcript.snapshot().engineSessionId,
+);
 
 const server = createServer(async (req, res) => {
   try {
+    if (shuttingDown) return sendJson(res, 503, { error: 'shutting_down' });
     if (!isAllowedHost(req)) return sendJson(res, 403, { error: 'bad_host' });
 
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
@@ -259,6 +261,10 @@ wss.on('connection', ws => {
   });
 
   ws.on('message', data => {
+    if (shuttingDown) {
+      ws.close(1001, 'shutting_down');
+      return;
+    }
     if (authenticated && authGeneration !== auth.getAuthGeneration()) {
       ws.close(1008, 'authorization_expired');
       return;
@@ -274,11 +280,8 @@ wss.on('connection', ws => {
         sendStatus(ws, true);
         send(ws, { type: 'catalog', ...projectSessions.catalog() });
         const commands = commandCaches.get(commandCacheKey(activeContext)) || [];
-        if (activeContext.session.engine === 'codex' || commands.length) {
-          send(ws, sessionMessage({ type: 'commands', commands }));
-        } else {
-          void refreshCommands();
-        }
+        send(ws, sessionMessage({ type: 'commands', commands, loaded: commandCaches.has(commandCacheKey(activeContext)) }));
+        if (activeContext.session.engine === 'claude') void refreshCommands().catch(() => {});
         if (Object.keys(sessionInfo).length) {
           send(ws, sessionMessage({ type: 'session_info', ...sessionInfo }));
         }
@@ -333,17 +336,23 @@ wss.on('connection', ws => {
   });
 });
 
+let pairingPayload: PairingPayload;
+let pairingQr: ReturnType<typeof createPairingQr> | undefined;
+let shuttingDown = false;
+
 server.listen(PORT, HOST, () => {
-  const pairPayload = auth.createPairingPayload(PUBLIC_ORIGIN, DEVICE_NAME);
-  const pairQr = JSON.stringify(pairPayload);
+  pairingPayload = auth.createPairingPayload(PUBLIC_ORIGIN, DEVICE_NAME);
+  const pairQr = JSON.stringify(pairingPayload);
   console.log(`CC Remote listening on http://${HOST}:${PORT}`);
   console.log(`Workspace: ${activeContext.project.path}`);
   console.log(`Public origin: ${PUBLIC_ORIGIN}`);
   console.log(`Device name: ${DEVICE_NAME}`);
-  console.log('Scan this QR with the CC Remote mobile app:');
-  console.log(pairQr);
-  qrcode.generate(pairQr, { small: true });
-  void refreshCommands();
+  if (process.env.CC_REMOTE_DESKTOP !== '1') {
+    console.log('Scan this QR with the CC Remote mobile app:');
+    console.log(pairQr);
+    qrcode.generate(pairQr, { small: true });
+  }
+  if (activeContext.session.engine === 'claude') void refreshCommands().catch(() => {});
 });
 
 async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
@@ -354,7 +363,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     return;
   }
 
-  if (req.method === 'POST' && url.pathname === '/api/local/projects/register') {
+  if (url.pathname.startsWith('/api/local/')) {
     // Token alone is not enough: tunnel traffic also arrives from 127.0.0.1.
     if (!isLocalControlRequest(req)) {
       sendJson(res, 403, { error: 'local_only' });
@@ -364,6 +373,60 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       sendJson(res, 401, { error: 'invalid_local_control_token' });
       return;
     }
+    if (!isAllowedOrigin(req)) {
+      sendJson(res, 403, { error: 'bad_origin' });
+      return;
+    }
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/local/status') {
+    sendJson(res, 200, {
+      ...auth.status(),
+      ...taskStatus(activeContext),
+      deviceName: DEVICE_NAME,
+      workspaceDir: activeContext.project.path,
+      publicOrigin: PUBLIC_ORIGIN,
+      authGeneration: auth.getAuthGeneration(),
+      processId: process.pid,
+      connectedClients: authedSockets.size,
+      pairing: !auth.status().paired && Date.now() < pairingPayload.expiresAt
+        ? pairingQr ||= createPairingQr(pairingPayload) : null,
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/local/pairing') {
+    pairingPayload = auth.createPairingPayload(PUBLIC_ORIGIN, DEVICE_NAME);
+    pairingQr = createPairingQr(pairingPayload);
+    sendJson(res, 200, pairingQr);
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/local/shutdown') {
+    const body = await readJson<{ force?: boolean }>(req);
+    if (runFlight.isBusy() && body.force !== true) {
+      sendJson(res, 409, { error: 'claude_is_busy' });
+      return;
+    }
+    shuttingDown = true;
+    try {
+      await projectSessions.flush();
+    } catch (err) {
+      shuttingDown = false;
+      throw err;
+    }
+    sendJson(res, 200, { ok: true });
+    bridge.close();
+    clearInterval(wsHeartbeatTimer);
+    closeAllSockets();
+    server.close();
+    setTimeout(() => {
+      void projectSessions.flush().then(() => process.exit(0), () => process.exit(1));
+    }, 2_000).unref();
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/local/projects/register') {
     if (!runFlight.tryBegin('mutate')) {
       sendJson(res, 409, { error: 'claude_is_busy' });
       return;
@@ -375,6 +438,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       await selectActiveSession(projectSessions.active());
       broadcastCatalog();
       sendJson(res, 200, { ok: true, ...projectSessions.catalog() });
+    } catch (err) {
+      const code = err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : '';
+      const message = err instanceof Error ? err.message : String(err);
+      if (code === 'ENOENT' || message === 'workspace_not_directory') {
+        sendJson(res, 400, { error: 'workspace_not_found' });
+        return;
+      }
+      throw err;
     } finally {
       runFlight.end();
     }
@@ -420,6 +491,34 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 
   if (req.method === 'GET' && url.pathname === '/api/projects') {
     sendJson(res, 200, projectSessions.catalog());
+    return;
+  }
+
+  if (req.method === 'GET' && (url.pathname === '/api/models' || url.pathname === '/api/commands')) {
+    const context = activeContext;
+    const requestedSessionId = url.searchParams.get('sessionId');
+    if (requestedSessionId !== context.session.id) {
+      sendJson(res, 409, { error: 'session_changed' });
+      return;
+    }
+    const currentBridge = bridge;
+    try {
+      if (url.pathname === '/api/models') {
+        if (!(currentBridge instanceof CodexBridge)) {
+          sendJson(res, 400, { error: 'model_catalog_not_supported' });
+          return;
+        }
+        const models = await currentBridge.listModels();
+        sendJson(res, 200, sessionMessage({ models }, context));
+      } else {
+        const commands = await refreshCommands();
+        sendJson(res, 200, sessionMessage({ commands }, context));
+      }
+    } catch (error) {
+      // ponytail: the client only sees a generic 502, so log the real cause once
+      console.warn(`[catalog] ${url.pathname} failed:`, error);
+      sendJson(res, 502, { error: 'engine_catalog_unavailable' });
+    }
     return;
   }
 
@@ -490,10 +589,11 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     if (!runFlight.tryBegin('mutate')) return sendJson(res, 409, { error: 'claude_is_busy' });
     try {
       const body = await readJson<{ title?: string }>(req);
-      await projectSessions.setSessionTitle(
+      const context = await projectSessions.setSessionTitle(
         decodeURIComponent(renameSessionMatch[1]),
         body.title || '',
       );
+      await syncNativeClaudeHistory(context);
       broadcastCatalog();
       sendJson(res, 200, { ok: true, ...projectSessions.catalog() });
     } catch (error) {
@@ -696,6 +796,7 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
     decision?: string;
     sessionId?: string;
     promptId?: unknown;
+    probeId?: unknown;
     model?: unknown;
     effort?: unknown;
     engine?: unknown;
@@ -708,6 +809,14 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
       ws.close(1008, 'auth_failed');
       return;
     }
+    return;
+  }
+
+  if (msg.type === 'ping') {
+    if (typeof msg.probeId !== 'string' || !msg.probeId || msg.probeId.length > 128) {
+      throw new Error('invalid_probe_id');
+    }
+    send(ws, { type: 'pong', probeId: msg.probeId });
     return;
   }
 
@@ -1005,6 +1114,16 @@ async function runPromptFlight(
     runContext.transcript.setEngineSessionId(result.sessionId);
     if (engine === 'claude') await auth.setClaudeSessionId(result.sessionId);
   }
+  if (engine === 'claude') {
+    await syncNativeClaudeHistory(runContext);
+    const restored = await applyRestoredClaudeSessionInfo(
+      runContext,
+      result.sessionId || runContext.transcript.snapshot().engineSessionId,
+    );
+    if (restored) {
+      broadcast(sessionMessage({ type: 'session_info', ...sessionInfo }, runContext, runId));
+    }
+  }
   if (result.stopped) {
     await runContext.transcript.finishStopped();
     broadcast(sessionMessage({ type: 'stopped' }, runContext, runId));
@@ -1101,14 +1220,19 @@ async function readJson<T>(req: IncomingMessage): Promise<T> {
 
 function sendJson(res: ServerResponse, status: number, data: unknown): void {
   if (res.headersSent) return;
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-  res.end(JSON.stringify(data));
+  const body = JSON.stringify(data);
+  res.writeHead(status, {
+    'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
+    'Content-Length': Buffer.byteLength(body),
+  });
+  res.end(body);
 }
 
 function sendStatus(ws: WebSocket, authenticated: boolean): void {
   send(ws, sessionMessage({
     type: 'status',
     authenticated,
+    connectionProbe: true,
     ...taskStatus(activeContext),
     ...engineSessionStatus(activeContext),
     workspaceDir: activeContext.project.path,
@@ -1119,27 +1243,28 @@ function refreshCommands(): Promise<string[]> {
   const project = activeContext.project;
   const context = activeContext;
   const cacheKey = commandCacheKey(context);
-  if (context.session.engine === 'codex') {
-    commandCaches.set(cacheKey, []);
-    broadcast(sessionMessage({ type: 'commands', commands: [] }, context));
-    return Promise.resolve([]);
-  }
   const existing = commandDiscoveries.get(cacheKey);
   if (existing) return existing;
-  const discovery = discoverClaudeCommands({
-    claudeBin: CLAUDE_BIN,
-    workspaceDir: project.path,
-  }).then(commands => {
-    if (commands.length) {
+  const currentBridge = bridge;
+  const discovery = (currentBridge instanceof CodexBridge
+    ? currentBridge.listCommands()
+    : discoverClaudeCommands({ claudeBin: CLAUDE_BIN, workspaceDir: project.path }))
+  .then(commands => {
+    if (bridge === currentBridge) {
       commandCaches.set(cacheKey, commands);
-      if (activeContext.project.id === project.id
-        && activeContext.session.engine === 'claude') {
-        broadcast(sessionMessage({ type: 'commands', commands }));
-      }
+      broadcast(sessionMessage({ type: 'commands', commands, loading: false }));
     }
     return commands;
+  }).catch(error => {
+    if (bridge === currentBridge) {
+      broadcast(sessionMessage({
+        type: 'commands', commands: commandCaches.get(cacheKey) || [],
+        loading: false, error: 'engine_catalog_unavailable',
+      }));
+    }
+    throw error;
   }).finally(() => {
-    commandDiscoveries.delete(cacheKey);
+    if (commandDiscoveries.get(cacheKey) === discovery) commandDiscoveries.delete(cacheKey);
   });
   commandDiscoveries.set(cacheKey, discovery);
   return discovery;
@@ -1161,23 +1286,41 @@ function createBridge(workspaceDir: string, engine: AgentEngine): EngineBridge {
   });
 }
 
+async function syncNativeClaudeHistory(context: SessionContext): Promise<void> {
+  const sessionId = context.transcript.snapshot().engineSessionId;
+  if (context.session.engine !== 'claude' || !sessionId) return;
+  try {
+    await syncClaudeSessionHistory({ sessionId, title: context.session.title });
+  } catch (error) {
+    console.warn('[claude-history] Could not sync the desktop session list:', error);
+  }
+}
+
 async function selectActiveSession(context: SessionContext): Promise<void> {
   bridge.close();
+  commandDiscoveries.clear();
   activeContext = context;
   workspace = new WorkspaceService(context.project.path);
   bridge = createBridge(context.project.path, context.session.engine);
   sessionInfo = context.transcript.snapshot().sessionInfo;
-  if (context.session.engine === 'claude' && !Object.keys(sessionInfo).length) {
-    const restored = await restoreClaudeSessionInfo({
-      sessionId: context.transcript.snapshot().engineSessionId || '',
-    });
-    if (restored) {
-      sessionInfo = restored;
-      context.transcript.setSessionInfo(restored);
-      await context.transcript.flush();
-    }
-  }
-  void refreshCommands();
+  await applyRestoredClaudeSessionInfo(
+    context,
+    context.transcript.snapshot().engineSessionId,
+  );
+  if (context.session.engine === 'claude') void refreshCommands().catch(() => {});
+}
+
+async function applyRestoredClaudeSessionInfo(
+  context: SessionContext,
+  sessionId: string | undefined,
+): Promise<boolean> {
+  if (context.session.engine !== 'claude' || !sessionId) return false;
+  const restored = await restoreClaudeSessionInfo({ sessionId });
+  if (!restored) return false;
+  sessionInfo = mergeClaudeSessionInfo(sessionInfo, restored);
+  context.transcript.setSessionInfo(sessionInfo);
+  await context.transcript.flush();
+  return true;
 }
 
 function broadcastCatalog(): void {
@@ -1201,7 +1344,7 @@ function broadcastActiveSession(): void {
   }, activeContext, activeRunId));
   broadcast(sessionMessage(permissionCapabilities(activeContext)));
   const commands = commandCaches.get(commandCacheKey(activeContext)) || [];
-  broadcast(sessionMessage({ type: 'commands', commands }));
+  broadcast(sessionMessage({ type: 'commands', commands, loaded: commandCaches.has(commandCacheKey(activeContext)) }));
 }
 
 function sessionMessage(

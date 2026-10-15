@@ -5,12 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:http/http.dart' as http;
 
+import 'noto_icon.dart';
 import 'signal_console_theme.dart';
-
-const _ink = AppColors.ink;
-const _muted = AppColors.muted;
-const _accent = AppColors.accent;
-const _line = AppColors.line;
+import 'workspace_paths.dart';
 
 Future<void> showWorkspaceDrawer(
   BuildContext context, {
@@ -18,6 +15,8 @@ Future<void> showWorkspaceDrawer(
   required String token,
   required String workspaceName,
   bool demoMode = false,
+  int initialTab = 0,
+  String? initialPath,
 }) {
   final reduceMotion = MediaQuery.disableAnimationsOf(context);
   return showGeneralDialog<void>(
@@ -46,6 +45,8 @@ Future<void> showWorkspaceDrawer(
                   token: token,
                   workspaceName: workspaceName,
                   demoMode: demoMode,
+                  initialTab: initialTab,
+                  initialPath: initialPath,
                 ),
               ),
             ),
@@ -74,6 +75,8 @@ class WorkspaceDrawer extends StatefulWidget {
     required this.workspaceName,
     this.demoMode = false,
     this.api,
+    this.initialTab = 0,
+    this.initialPath,
   });
 
   final Uri origin;
@@ -81,18 +84,22 @@ class WorkspaceDrawer extends StatefulWidget {
   final String workspaceName;
   final bool demoMode;
   final WorkspaceApi? api;
+  final int initialTab;
+  final String? initialPath;
 
   @override
   State<WorkspaceDrawer> createState() => _WorkspaceDrawerState();
 }
 
 class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
+  AppPalette get palette => AppPalette.of(context);
   late final WorkspaceApi api;
   WorkspaceSnapshot? snapshot;
   WorkspaceDocument? document;
   bool loading = true;
   bool failed = false;
-  int tab = 0;
+  late int tab = widget.initialTab.clamp(0, 1);
+  bool didOpenInitialPath = false;
 
   @override
   void initState() {
@@ -132,6 +139,31 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
         loading = false;
       });
     }
+    if (!mounted) return;
+    await openInitialPathIfNeeded();
+  }
+
+  Future<void> openInitialPathIfNeeded() async {
+    final path = widget.initialPath;
+    if (didOpenInitialPath || path == null || path.trim().isEmpty) return;
+    didOpenInitialPath = true;
+    await openResolvedPath(path);
+  }
+
+  Future<void> openResolvedPath(String rawPath) async {
+    final path = normalizeWorkspacePath(rawPath);
+    if (path == null || path.isEmpty) return;
+    final data = snapshot;
+    if (data != null) {
+      for (final change in data.changes) {
+        if (change.path == path || change.previousPath == path) {
+          setState(() => tab = 1);
+          await openChange(change);
+          return;
+        }
+      }
+    }
+    await openFile(path);
   }
 
   Future<void> openFile(String path) async {
@@ -185,15 +217,15 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
       child: Container(
         margin: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: AppColors.glassStrong,
+          color: palette.glassStrong,
           borderRadius: BorderRadius.circular(AppRadii.surface),
-          boxShadow: AppElevation.floatingOverlay(),
+          boxShadow: AppElevation.floatingOverlay(context: context),
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
           children: [
             _header(),
-            const Divider(height: 1, color: _line),
+            Divider(height: 1, color: palette.line),
             Expanded(
               child: AnimatedSwitcher(
                 duration: reduceMotion ? Duration.zero : AppMotion.standard,
@@ -245,7 +277,7 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
                   child: child,
                 ),
               ),
-              child: Icon(
+              child: SmartIcon(
                 document == null ? LucideIcons.x : LucideIcons.arrowLeft,
                 key: ValueKey(document == null ? 'close' : 'back'),
               ),
@@ -278,8 +310,8 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
                     document?.path.split('/').last ?? widget.workspaceName,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: _ink,
+                    style: TextStyle(
+                      color: palette.ink,
                       fontSize: 16,
                       fontWeight: FontWeight.w700,
                     ),
@@ -288,8 +320,8 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
                     document?.path ?? _workspaceSubtitle(),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: _muted,
+                    style: TextStyle(
+                      color: palette.muted,
                       fontSize: 12,
                       fontFamily: AppTypography.codeFontFamily,
                       fontFamilyFallback: AppTypography.codeFontFamilyFallback,
@@ -307,7 +339,7 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
                 ? IconButton(
                     key: const ValueKey('workspace-refresh'),
                     onPressed: loading ? null : refresh,
-                    icon: const Icon(LucideIcons.refreshCw),
+                    icon: const SmartIcon(LucideIcons.refreshCw),
                     tooltip: '刷新工作区',
                   )
                 : const SizedBox.square(
@@ -336,7 +368,7 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
           child: Container(
             padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
-              color: AppColors.glass,
+              color: palette.control,
               borderRadius: BorderRadius.circular(12),
             ),
             child: Stack(
@@ -356,9 +388,8 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
                       heightFactor: 1,
                       child: DecoratedBox(
                         decoration: BoxDecoration(
-                          color: AppColors.glassControl,
+                          color: palette.surface,
                           borderRadius: BorderRadius.circular(9),
-                          boxShadow: AppElevation.surfaceCard(),
                         ),
                       ),
                     ),
@@ -412,11 +443,11 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
                     ? Duration.zero
                     : AppMotion.fast,
                 tween: ColorTween(
-                  begin: selected ? _accent : _muted,
-                  end: selected ? _accent : _muted,
+                  begin: selected ? palette.accent : palette.muted,
+                  end: selected ? palette.accent : palette.muted,
                 ),
                 builder: (context, color, _) =>
-                    Icon(icon, size: 17, color: color),
+                    Icon(icon, size: AppIconSizes.inline, color: color),
               ),
               const SizedBox(width: 6),
               AnimatedDefaultTextStyle(
@@ -424,8 +455,8 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
                     ? Duration.zero
                     : AppMotion.fast,
                 style: TextStyle(
-                  color: selected ? _ink : _muted,
-                  fontWeight: FontWeight.w600,
+                  color: selected ? palette.ink : palette.muted,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
                 ),
                 child: Text(label),
               ),
@@ -508,7 +539,7 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 24),
       itemCount: data.changes.length,
       separatorBuilder: (_, _) =>
-          const Divider(height: 1, indent: 42, color: _line),
+          Divider(height: 1, indent: 42, color: palette.line),
       itemBuilder: (context, index) {
         final change = data.changes[index];
         return SignalPressEffect(
@@ -516,7 +547,7 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
           builder: (context, pressed, child) => SignalAnimatedSurface(
             duration: appPressAnimationDuration(context, pressed),
             decoration: BoxDecoration(
-              color: pressed ? AppColors.control : Colors.transparent,
+              color: pressed ? palette.control : Colors.transparent,
               borderRadius: BorderRadius.circular(10),
             ),
             child: child,
@@ -540,9 +571,9 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
                   : '${change.previousPath} →',
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
-                color: _muted,
+                color: palette.muted,
                 fontFamily: AppTypography.codeFontFamily,
                 fontFamilyFallback: AppTypography.codeFontFamilyFallback,
               ),
@@ -838,13 +869,15 @@ class _TreeNodeTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     if (!node.directory) {
+      final icon = _fileIcon(node.name);
       return SignalPressEffect(
         scaleOnPress: false,
         builder: (context, pressed, child) => SignalAnimatedSurface(
           duration: appPressAnimationDuration(context, pressed),
           decoration: BoxDecoration(
-            color: pressed ? AppColors.control : Colors.transparent,
+            color: pressed ? palette.control : Colors.transparent,
             borderRadius: BorderRadius.circular(10),
           ),
           child: child,
@@ -853,10 +886,10 @@ class _TreeNodeTile extends StatelessWidget {
           dense: true,
           minTileHeight: 48,
           contentPadding: const EdgeInsets.only(left: 12, right: 8),
-          leading: Icon(
-            _fileIcon(node.name),
-            size: 18,
-            color: _fileColor(node.name),
+          leading: SmartIcon(
+            icon,
+            size: AppIconSizes.control,
+            color: notoGlyphFor(icon) == null ? palette.muted : null,
           ),
           title: Text(
             node.name,
@@ -872,11 +905,7 @@ class _TreeNodeTile extends StatelessWidget {
       dense: true,
       shape: const Border(),
       collapsedShape: const Border(),
-      leading: const Icon(
-        LucideIcons.folder,
-        size: 19,
-        color: Color(0xFF5E9CAF),
-      ),
+      leading: const SmartIcon(LucideIcons.folder, size: AppIconSizes.control),
       title: Text(
         node.name,
         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
@@ -895,6 +924,7 @@ class _FileView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final lines = document.content.split('\n');
     final width = lines.length.toString().length;
     const maxLineCharacters = 12000;
@@ -905,14 +935,14 @@ class _FileView extends StatelessWidget {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            color: const Color(0xFFFFF3D9),
+            color: palette.warningSoft,
             child: Text(
               document.truncated && hasLongLine
                   ? '文件和超长单行均已截断显示'
                   : document.truncated
                   ? '文件较大，只显示前面的内容'
                   : '超长单行已截断显示',
-              style: const TextStyle(fontSize: 12),
+              style: TextStyle(fontSize: 12, color: palette.warning),
             ),
           ),
         Expanded(
@@ -936,8 +966,8 @@ class _FileView extends StatelessWidget {
                       child: Text(
                         (index + 1).toString().padLeft(width),
                         textAlign: TextAlign.right,
-                        style: const TextStyle(
-                          color: AppColors.inactive,
+                        style: TextStyle(
+                          color: palette.inactive,
                           fontFamily: AppTypography.codeFontFamily,
                           fontFamilyFallback:
                               AppTypography.codeFontFamilyFallback,
@@ -952,8 +982,8 @@ class _FileView extends StatelessWidget {
                         scrollDirection: Axis.horizontal,
                         child: Text(
                           displayLine.isEmpty ? ' ' : displayLine,
-                          style: const TextStyle(
-                            color: AppColors.ink,
+                          style: TextStyle(
+                            color: palette.ink,
                             fontFamily: AppTypography.codeFontFamily,
                             fontFamilyFallback:
                                 AppTypography.codeFontFamilyFallback,
@@ -981,6 +1011,7 @@ class _DiffView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final lines = diff.split('\n');
     return SelectionArea(
       child: ListView.builder(
@@ -994,11 +1025,11 @@ class _DiffView extends StatelessWidget {
           final hunk = line.startsWith('@@');
           return Container(
             color: added
-                ? AppColors.control
+                ? palette.control
                 : removed
-                ? AppColors.danger.withValues(alpha: 0.07)
+                ? palette.danger.withValues(alpha: 0.07)
                 : hunk
-                ? AppColors.accent.withValues(alpha: 0.06)
+                ? palette.accent.withValues(alpha: 0.06)
                 : Colors.transparent,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1008,11 +1039,11 @@ class _DiffView extends StatelessWidget {
                   height: 23,
                   child: ColoredBox(
                     color: added
-                        ? AppColors.inactive
+                        ? palette.inactive
                         : removed
-                        ? AppColors.danger
+                        ? palette.danger
                         : hunk
-                        ? AppColors.accent
+                        ? palette.accent
                         : Colors.transparent,
                   ),
                 ),
@@ -1027,7 +1058,7 @@ class _DiffView extends StatelessWidget {
                       child: Text(
                         line.isEmpty ? ' ' : line,
                         style: TextStyle(
-                          color: hunk ? _accent : _ink,
+                          color: hunk ? palette.accent : palette.ink,
                           fontFamily: AppTypography.codeFontFamily,
                           fontFamilyFallback:
                               AppTypography.codeFontFamilyFallback,
@@ -1054,13 +1085,14 @@ class _ChangeBadge extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final status = change.unstaged ?? change.staged ?? 'M';
     final label = status == '?' ? 'U' : status;
     final color = switch (label) {
-      'A' || 'U' => AppColors.inactive,
-      'D' => AppColors.danger,
-      'R' => AppColors.muted,
-      _ => _accent,
+      'A' || 'U' => palette.inactive,
+      'D' => palette.danger,
+      'R' => palette.muted,
+      _ => palette.accent,
     };
     return Container(
       width: 28,
@@ -1090,6 +1122,7 @@ class _DiffScopeChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return SignalPressEffect(
       child: InkWell(
         borderRadius: BorderRadius.circular(AppRadii.compact),
@@ -1100,14 +1133,14 @@ class _DiffScopeChip extends StatelessWidget {
             alignment: Alignment.center,
             padding: const EdgeInsets.symmetric(horizontal: 8),
             decoration: BoxDecoration(
-              color: AppColors.control,
+              color: palette.control,
               borderRadius: BorderRadius.circular(AppRadii.compact),
-              border: Border.all(color: AppColors.line),
+              border: Border.all(color: palette.line),
             ),
             child: Text(
               label,
-              style: const TextStyle(
-                color: AppColors.muted,
+              style: TextStyle(
+                color: palette.muted,
                 fontSize: 12,
                 fontWeight: FontWeight.w700,
               ),
@@ -1135,30 +1168,31 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(28),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: 34, color: const Color(0xFF8EABB4)),
+            Icon(icon, size: AppIconSizes.hero, color: palette.muted),
             const SizedBox(height: 12),
             Text(
               title,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: _ink, fontWeight: FontWeight.w700),
+              style: TextStyle(color: palette.ink, fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 5),
             Text(
               detail,
               textAlign: TextAlign.center,
-              style: const TextStyle(color: _muted, fontSize: 12),
+              style: TextStyle(color: palette.muted, fontSize: 12),
             ),
             if (action != null) ...[
               const SizedBox(height: 14),
               TextButton.icon(
                 onPressed: action,
-                icon: const Icon(LucideIcons.refreshCw),
+                icon: const SmartIcon(LucideIcons.refreshCw),
                 label: const Text('重新读取'),
               ),
             ],
@@ -1184,17 +1218,5 @@ IconData _fileIcon(String name) {
     'png' || 'jpg' || 'jpeg' || 'webp' => LucideIcons.image,
     'dart' || 'ts' || 'js' || 'tsx' || 'jsx' => LucideIcons.fileCode,
     _ => LucideIcons.fileText,
-  };
-}
-
-Color _fileColor(String name) {
-  final extension = name.contains('.')
-      ? name.split('.').last.toLowerCase()
-      : '';
-  return switch (extension) {
-    'dart' => const Color(0xFF168EB0),
-    'ts' || 'js' || 'tsx' || 'jsx' => const Color(0xFFD0982A),
-    'md' => const Color(0xFF6D7F89),
-    _ => const Color(0xFF82959D),
   };
 }

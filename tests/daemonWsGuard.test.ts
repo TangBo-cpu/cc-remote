@@ -245,9 +245,84 @@ test('WebSocket upgrade is rejected when connection limit is reached', async () 
     });
     assert.equal(statusCode, 503);
   } finally {
-    for (const socket of holders) socket.close();
+    await Promise.all(holders.map(async socket => {
+      if (socket.readyState === WebSocket.CLOSED) return;
+      const closed = once(socket, 'close');
+      socket.close();
+      await closed;
+    }));
   }
 });
+
+test('application probe requires authentication', async () => {
+  const socket = new WebSocket(daemon.baseUrl.replace('http:', 'ws:') + '/ws', {
+    headers: { Origin: daemon.baseUrl },
+  });
+  socket.on('error', () => {});
+  await once(socket, 'open');
+  const closed = once(socket, 'close');
+  socket.send(JSON.stringify({ type: 'ping', probeId: 'probe-1' }));
+  const [code] = await closed as [number, Buffer];
+  assert.equal(code, 1008);
+});
+
+test('authenticated application probe echoes its id without changing the session', async () => {
+  const paired = await fetch(`${daemon.baseUrl}/api/pair`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: daemon.baseUrl },
+    body: JSON.stringify({ nonce: daemon.nonce }),
+  });
+  assert.equal(paired.status, 200);
+  const { token } = await paired.json() as { token: string };
+  const socket = new WebSocket(daemon.baseUrl.replace('http:', 'ws:') + '/ws', {
+    headers: { Origin: daemon.baseUrl },
+  });
+  socket.on('error', () => {});
+  try {
+    await once(socket, 'open');
+    const statusReceived = nextMessage(socket, 'status');
+    socket.send(JSON.stringify({ type: 'auth', token }));
+    const status = await statusReceived;
+    assert.equal(status.connectionProbe, true);
+
+    const before = await (await fetch(`${daemon.baseUrl}/api/status`, {
+      headers: { Authorization: `Bearer ${token}`, Origin: daemon.baseUrl },
+    })).json();
+    const pongReceived = nextMessage(socket, 'pong');
+    socket.send(JSON.stringify({ type: 'ping', probeId: 'probe-1' }));
+    assert.deepEqual(await pongReceived, { type: 'pong', probeId: 'probe-1' });
+    const after = await (await fetch(`${daemon.baseUrl}/api/status`, {
+      headers: { Authorization: `Bearer ${token}`, Origin: daemon.baseUrl },
+    })).json();
+    assert.deepEqual(after, before);
+
+    const invalidReceived = nextMessage(socket, 'error');
+    socket.send(JSON.stringify({ type: 'ping', probeId: 'x'.repeat(129) }));
+    assert.equal((await invalidReceived).message, 'invalid_probe_id');
+    assert.equal(socket.readyState, WebSocket.OPEN);
+  } finally {
+    const closed = once(socket, 'close');
+    socket.terminate();
+    await closed;
+  }
+});
+
+function nextMessage(socket: WebSocket, type: string): Promise<Record<string, unknown>> {
+  return new Promise((resolveMessage, rejectMessage) => {
+    const timer = setTimeout(() => {
+      socket.off('message', onMessage);
+      rejectMessage(new Error(`message_timeout:${type}`));
+    }, 2000);
+    const onMessage = (raw: WebSocket.RawData) => {
+      const message = JSON.parse(raw.toString()) as Record<string, unknown>;
+      if (message.type !== type) return;
+      clearTimeout(timer);
+      socket.off('message', onMessage);
+      resolveMessage(message);
+    };
+    socket.on('message', onMessage);
+  });
+}
 
 async function startGuardDaemon(
   extraEnv: Record<string, string> = {},

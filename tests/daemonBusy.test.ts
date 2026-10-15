@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
@@ -72,6 +72,14 @@ test('running task recovers across reconnect and stops after the process exits',
     );
     assert.equal(createResponse.status, 409);
     assert.deepEqual(await createResponse.json(), { error: 'claude_is_busy' });
+
+    const localControl = JSON.parse(await readFile(join(daemon.root, '.data', 'local-control.json'), 'utf8')) as { token: string };
+    const shutdownResponse = await fetch(`${daemon.baseUrl}/api/local/shutdown`, {
+      method: 'POST',
+      headers: { 'x-cc-remote-local-token': localControl.token },
+    });
+    assert.equal(shutdownResponse.status, 409);
+    assert.deepEqual(await shutdownResponse.json(), { error: 'claude_is_busy' });
 
     activeSocket.close();
     await once(activeSocket, 'close');

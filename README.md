@@ -2,11 +2,11 @@
 
 **在手机上远程控制本机 Claude Code。**
 
-扫码配对后，你就能在冷玻璃控制台里发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更——电脑端 daemon 继续跑 Claude Code CLI，手机只是随身控制台。
+扫码配对后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v1.4.0](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.4.0/cc-remote-v1.4.0-android.apk)
+[下载 Android APK · v1.4.1](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.4.1/cc-remote-v1.4.1-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.4.0)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.4.1)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -16,7 +16,7 @@
   <img src="docs/images/cool-glass-chat.jpg" alt="Cool Glass 对话" width="280" />
 </p>
 
-<p align="center"><sub>Cool Glass Console · 当前界面</sub></p>
+<p align="center"><sub>v1.4.0 历史截图；v1.4.1 使用跟随系统的浅色 / 深色界面</sub></p>
 
 ---
 
@@ -25,11 +25,13 @@
 | 场景 | 体验 |
 | --- | --- |
 | 出门前丢一条任务 | 手机发 prompt，桌面 Claude 继续跑；流式回复实时回传 |
-| 想换引擎 | 新建会话时选 Claude 或 Codex；Codex 会话用三档沙箱模式控制写入范围 |
+| 想换引擎 | 新建会话时选 Claude 或 Codex；Codex 支持动态模型目录、原生指令与已启用 skills，默认完全访问沙箱 |
 | 工具要权限 | 手机弹出决策卡：看命令摘要与工作目录，拒绝或仅本次允许 |
 | 想确认改了什么 | 只读工作区 + Git diff，手机不提交、不改文件 |
 | 断线了 | transcript 与草稿保留，自动重连；回来后从权威快照继续 |
 | 字号不合适 | 设置里连续滑杆，默认 100% |
+| 外观随环境切换 | 默认跟随系统，也可固定浅色或深色 |
+| 查看执行过程 | 彩色工具卡片、Skill 标识、可折叠历史与独立思考动画 |
 
 **安全边界（产品承诺）：**
 
@@ -39,7 +41,7 @@
 
 ---
 
-## 界面参考
+## 界面参考（v1.4.0）
 
 | 对话 | 项目与会话 | 选择模型 |
 | :---: | :---: | :---: |
@@ -49,7 +51,7 @@
 | :---: | :---: | :---: |
 | <img src="docs/images/cool-glass-home.png" width="220" alt="主控制台" /> | <img src="docs/images/cool-glass-workspace.jpg" width="220" alt="工作区" /> | <img src="docs/images/cool-glass-startup.jpg" width="220" alt="启动" /> |
 
-冷白纸面与冷灰层级、克制的单一蓝色只用于主动作与选中态、短回复 hug 的助手气泡、冷玻璃 Composer；顶部只有圆形菜单 + 新建/更多胶囊，模型放在输入台。设计规格见 [`DESIGN.md`](DESIGN.md)。
+v1.4.1 使用中性背景和浅色 / 深色外观，助手正文直接排在页面上，用户消息保留浅灰气泡。工具执行以卡片显示，思考花朵动画独立于折叠历史。以上图片是 v1.4.0 的历史参考；当前设计规格见 [`DESIGN.md`](DESIGN.md)。
 
 ---
 
@@ -100,7 +102,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v1.4.0 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.4.0/cc-remote-v1.4.0-android.apk)（测试签名，个人使用）
+1. 安装 [v1.4.1 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.4.1/cc-remote-v1.4.1-android.apk)（沿用测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫终端二维码 → 确认电脑名与服务地址 → 进入控制台
 
@@ -115,23 +117,24 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 **连接与会话**
 
 - 扫码配对 / Secure Storage / 启动恢复
-- WebSocket 鉴权、自动重连、活动任务恢复
+- WebSocket 鉴权、退避重连、前台存活探测与活动任务恢复
 - 多项目、多会话；完整项目路径展示
 - 会话级引擎切换：Claude Code 或 Codex CLI（新建会话时选择）
 - 会话 transcript 持久化与恢复
 - 跨项目会话全文搜索、匹配片段高亮与命中消息精确跳转
+- 手机 Claude 会话按标题出现在原生 `claude -r` 恢复列表；需要同步更新电脑端 daemon
 
 **对话与控制**
 
 - 流式输出（合批推送；无标记走 Text，有 Markdown 标记时流式期间即渲染）
 - Claude Streaming Input 与 Codex App Server 常驻复用，后续轮次不重复启动 CLI
 - 助手 Markdown 中的搜索来源 / 引用链接可点击，仅允许 `http` / `https` 并交给系统浏览器打开
-- 停止任务、花形思考状态与本轮运行计时、安全化工具活动
+- 停止任务、花形思考动画与运行计时、彩色工具卡片、Skill 标识与工具详情
 - Composer 思考强度仪表与六档思考强度（自动 + 低、中、高、超高、最大五手动档）
-- Claude Code 斜杠指令
-- 模型选择（Composer 模型胶囊 + 共享 AppOptionRow sheet，Phosphor Fill 身份图标）
-- 六种权限模式 + 一次性工具审批
-- Codex 沙箱模式三档（read-only / workspace-write / danger-full-access），danger 发送一次后自动回落 read-only
+- 斜杠指令与技能：Claude Code 原生指令；Codex 原生 `/compact`、`/review` 及当前项目已启用的 skills
+- 模型选择：Claude 静态档位、Codex 动态模型目录与独立偏好
+- 六种权限模式 + 一次性工具审批（Claude 会话）
+- Codex 沙箱模式三档（read-only / workspace-write / danger-full-access），默认完全访问且持续生效，可显式改为只读或工作区可写
 - 图片 / 文件附件（每轮最多 5 个，单文件 ≤ 25MB；Codex 会话仅支持图片）
 
 **工作区（只读）**
@@ -143,7 +146,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 - Android 后台本地通知（完成 / 失败 / 等待权限）
 - 连续字号滑杆（约 0.85×–1.40×，默认 1.0）
-- 聊天背景等对话偏好
+- 外观：跟随系统 / 浅色 / 深色，选择本地持久化
 
 **当前不做 / 限制**
 
@@ -235,7 +238,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v1.4.0](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.4.0)**
-APK：[`cc-remote-v1.4.0-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.4.0/cc-remote-v1.4.0-android.apk)
+当前公开版：**[v1.4.1](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.4.1)**
+APK：[`cc-remote-v1.4.1-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.4.1/cc-remote-v1.4.1-android.apk)
 
-Cool Glass 控制台：冷灰蓝玻璃、语义色、Phosphor Fill 身份图标、助手气泡 hug、流式 Markdown、默认 100% 阅读字号。安装包使用测试签名，适合个人测试。
+此版本同步 Android 与 daemon 源码，恢复工具卡片和思考动画，并改进 Claude 原生会话恢复。APK 沿用旧版测试签名，供个人使用；Android 真机安装与界面仍待验收。

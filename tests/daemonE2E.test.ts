@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer, request } from 'node:http';
@@ -134,6 +135,40 @@ test('logout revokes the old Bearer token and closes its WebSocket', async () =>
     headers: { Authorization: `Bearer ${token}` },
   });
   assert.equal(statusResponse.status, 401);
+});
+
+test('daemon exposes existing Claude app sessions and syncs renamed desktop titles', async () => {
+  const sessionId = randomUUID();
+  const historyDaemon = await startDaemon({ staleSessionId: sessionId, nativeHistory: true });
+  const nativePath = join(historyDaemon.root, '.claude', 'projects', 'fixture', `${sessionId}.jsonl`);
+  try {
+    const entries = (await readFile(nativePath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(entries[0].entrypoint, 'cc-app');
+    assert.equal(entries[0].message.content, 'existing phone conversation');
+    assert.equal(entries.at(-1).customTitle, '当前会话');
+    const response = await fetch(`${historyDaemon.baseUrl}/api/pair`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: historyDaemon.baseUrl },
+      body: JSON.stringify({ nonce: historyDaemon.nonce }),
+    });
+    const { token } = await response.json() as { token: string };
+    const catalog = JSON.parse(await readFile(join(historyDaemon.root, '.data', 'projects.json'), 'utf8'));
+    const renameResponse = await fetch(`${historyDaemon.baseUrl}/api/sessions/${catalog.activeSessionId}/title`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json', Origin: historyDaemon.baseUrl,
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ title: '手机上的摄像头会话' }),
+    });
+    assert.equal(renameResponse.status, 200);
+    const renamed = (await readFile(nativePath, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(renamed.at(-1).customTitle, '手机上的摄像头会话');
+  } finally {
+    historyDaemon.child.kill();
+    await Promise.race([once(historyDaemon.child, 'exit'), new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000))]);
+    await rm(historyDaemon.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
 });
 
 test('daemon retries a prompt without a stale Claude session id', async () => {
@@ -311,6 +346,24 @@ test('daemon persists and resumes a Codex session without invoking the Claude br
     await firstIdlePromise;
     await new Promise(resolve => setTimeout(resolve, 25));
 
+    socket.close();
+    await once(socket, 'close');
+    socket = new WebSocket(codexDaemon.baseUrl.replace('http:', 'ws:') + '/ws', {
+      headers: { Origin: codexDaemon.baseUrl },
+    });
+    await once(socket, 'open');
+    const restoredSnapshot = waitForWsMessage(socket, message =>
+      message.type === 'transcript_snapshot' && message.sessionId === sessionId);
+    socket.send(JSON.stringify({ type: 'auth', token }));
+    const snapshot = await restoredSnapshot;
+    assert.equal(snapshot.engineSessionId, 'fake-thread-id');
+    assert.equal(snapshot.running, false);
+    assert.equal(
+      (snapshot.messages as Array<{ role: string; text: string }>).find(message =>
+        message.role === 'assistant')?.text,
+      'fake codex reply',
+    );
+
     const secondResultPromise = waitForPromptResult(socket, sessionId);
     socket.send(JSON.stringify({
       type: 'prompt',
@@ -325,6 +378,58 @@ test('daemon persists and resumes a Codex session without invoking the Claude br
     assert.equal(secondResult.text, 'fake codex reply');
     assert.equal(secondResult.engineSessionId, 'fake-thread-id');
 
+    const form = new FormData();
+    form.append('files', new Blob(['not an image'], { type: 'text/plain' }), 'notes.txt');
+    const uploadResponse = await fetch(
+      `${codexDaemon.baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/attachments`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, Origin: codexDaemon.baseUrl },
+        body: form,
+      },
+    );
+    assert.equal(uploadResponse.status, 201);
+    const uploadBody = await uploadResponse.json() as {
+      attachments: Array<{ id: string }>;
+    };
+    const rejectedPrompt = waitForWsMessage(socket, message =>
+      message.type === 'error' && message.promptId === 'codex-e2e-non-image');
+    socket.send(JSON.stringify({
+      type: 'prompt',
+      promptId: 'codex-e2e-non-image',
+      sessionId,
+      engine: 'codex',
+      sandboxMode: 'read-only',
+      permissionMode: 'manual',
+      attachmentIds: [uploadBody.attachments[0].id],
+      text: 'reject this attachment',
+    }));
+    const rejection = await rejectedPrompt;
+    assert.equal(rejection.message, 'codex_only_supports_image_attachments');
+
+    const dangerResultPromise = waitForPromptResult(socket, sessionId);
+    socket.send(JSON.stringify({
+      type: 'prompt',
+      promptId: 'codex-e2e-danger',
+      sessionId,
+      engine: 'codex',
+      sandboxMode: 'danger-full-access',
+      permissionMode: 'manual',
+      text: 'danger mode prompt',
+    }));
+    const dangerResult = await dangerResultPromise;
+    assert.equal(dangerResult.text, 'fake codex reply');
+    const transcriptResponse = await fetch(
+      `${codexDaemon.baseUrl}/api/sessions/${encodeURIComponent(sessionId)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    assert.equal(transcriptResponse.status, 200);
+    const transcriptBody = await transcriptResponse.json() as {
+      transcript: { sandboxMode?: string; sessionInfo?: { model?: string } };
+    };
+    assert.equal(transcriptBody.transcript.sandboxMode, 'danger-full-access');
+    assert.equal(transcriptBody.transcript.sessionInfo?.model, 'gpt-6-sol');
+
     const records = (await readFile(
       join(codexDaemon.root, 'codex-args.jsonl'),
       'utf8',
@@ -335,7 +440,10 @@ test('daemon persists and resumes a Codex session without invoking the Claude br
         kind: 'process' | 'request';
         args?: string[];
         method?: string;
-        params?: { input?: Array<{ type: string; text?: string }> };
+        params?: {
+          input?: Array<{ type: string; text?: string }>;
+          sandbox?: string;
+        };
       });
     assert.deepEqual(records.filter(record => record.kind === 'process'), [{
       kind: 'process',
@@ -347,13 +455,16 @@ test('daemon persists and resumes a Codex session without invoking the Claude br
       'thread/start',
       'turn/start',
       'turn/start',
+      'thread/resume',
+      'turn/start',
     ]);
     assert.deepEqual(
       requests
         .filter(record => record.method === 'turn/start')
         .map(record => record.params?.input?.find(item => item.type === 'text')?.text),
-      ['first Codex prompt', 'second Codex prompt'],
+      ['first Codex prompt', 'second Codex prompt', 'danger mode prompt'],
     );
+    assert.equal(requests[4].params?.sandbox, 'danger-full-access');
 
     await assert.rejects(
       () => readFile(join(codexDaemon.root, 'claude-args.jsonl'), 'utf8'),
@@ -377,12 +488,96 @@ test('daemon persists and resumes a Codex session without invoking the Claude br
   }
 });
 
+test('Codex catalogs are authenticated, scoped to the session, and usable by prompts', async () => {
+  const catalogDaemon = await startDaemon({
+    codexBin: process.execPath,
+    codexArgs: root => [resolve('tests/fixtures/fakeCodex.mjs'), `--fake-log=${join(root, 'codex-catalog.jsonl')}`],
+  });
+  let socket: WebSocket | undefined;
+  try {
+    assert.equal((await fetch(`${catalogDaemon.baseUrl}/api/models?sessionId=missing`)).status, 401);
+    assert.equal((await fetch(`${catalogDaemon.baseUrl}/api/commands?sessionId=missing`)).status, 401);
+    const pair = await fetch(`${catalogDaemon.baseUrl}/api/pair`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: catalogDaemon.baseUrl },
+      body: JSON.stringify({ nonce: catalogDaemon.nonce }),
+    });
+    const { token } = await pair.json() as { token: string };
+    const headers = { Authorization: `Bearer ${token}` };
+    const status = await fetch(`${catalogDaemon.baseUrl}/api/status`, { headers });
+    const { activeProjectId } = await status.json() as { activeProjectId: string };
+    const create = await fetch(`${catalogDaemon.baseUrl}/api/projects/${activeProjectId}/sessions`, {
+      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', Origin: catalogDaemon.baseUrl },
+      body: JSON.stringify({ engine: 'codex' }),
+    });
+    assert.equal(create.status, 201);
+    const { sessionId } = await create.json() as { sessionId: string };
+    await assert.rejects(readFile(join(catalogDaemon.root, 'codex-catalog.jsonl'), 'utf8'), { code: 'ENOENT' });
+    assert.equal((await fetch(`${catalogDaemon.baseUrl}/api/models?sessionId=old-session`, { headers })).status, 409);
+
+    socket = new WebSocket(catalogDaemon.baseUrl.replace('http:', 'ws:') + '/ws', { headers: { Origin: catalogDaemon.baseUrl } });
+    await once(socket, 'open');
+    const authenticated = waitForWsMessage(socket, message => message.type === 'status' && message.authenticated === true);
+    socket.send(JSON.stringify({ type: 'auth', token }));
+    await authenticated;
+    const commandsPushed = waitForWsMessage(socket, message => message.type === 'commands' && (message.commands as string[])?.includes('inspect'));
+    const [modelsResponse, commandsResponse] = await Promise.all([
+      fetch(`${catalogDaemon.baseUrl}/api/models?sessionId=${sessionId}`, { headers }),
+      fetch(`${catalogDaemon.baseUrl}/api/commands?sessionId=${sessionId}`, { headers }),
+    ]);
+    assert.equal(modelsResponse.status, 200);
+    assert.equal(commandsResponse.status, 200);
+    const models = await modelsResponse.json() as { sessionId: string; engine: string; models: Array<{ model: string }> };
+    assert.equal(models.sessionId, sessionId);
+    assert.equal(models.engine, 'codex');
+    assert.deepEqual(models.models.map(item => item.model), ['gpt-test-codex', 'gpt-test-fast']);
+    const commands = await commandsResponse.json() as { commands: string[] };
+    assert.deepEqual(commands.commands, ['compact', 'review', 'inspect']);
+    await commandsPushed;
+    const resultPromise = waitForPromptResult(socket, sessionId);
+    socket.send(JSON.stringify({
+      type: 'prompt', promptId: 'catalog-skill', sessionId, engine: 'codex',
+      model: 'gpt-test-codex', text: '/inspect check tests',
+    }));
+    assert.equal((await resultPromise).text, 'fake codex reply');
+    const compactPromise = waitForPromptResult(socket, sessionId);
+    socket.send(JSON.stringify({
+      type: 'prompt', promptId: 'catalog-compact', sessionId, engine: 'codex',
+      model: 'gpt-test-codex', text: '/compact',
+    }));
+    assert.equal((await compactPromise).text, '上下文压缩完成。');
+    const reviewPromise = waitForPromptResult(socket, sessionId);
+    socket.send(JSON.stringify({
+      type: 'prompt', promptId: 'catalog-review', sessionId, engine: 'codex',
+      model: 'gpt-test-codex', text: '/review',
+    }));
+    assert.equal((await reviewPromise).text, 'native review result');
+    const records = (await readFile(join(catalogDaemon.root, 'codex-catalog.jsonl'), 'utf8')).trim().split(/\r?\n/).map(line => JSON.parse(line));
+    assert.equal(records.filter(item => item.kind === 'process').length, 1);
+    const turn = records.find(item => item.method === 'turn/start');
+    assert.equal(turn.params.model, 'gpt-test-codex');
+    assert.equal(turn.params.input[0].text, '$inspect check tests');
+    assert.equal(turn.params.input[1].type, 'skill');
+    assert.equal(records.filter(item => item.method === 'turn/start').length, 1);
+    assert.equal(records.find(item => item.method === 'thread/compact/start').params.threadId, 'fake-thread-id');
+    assert.deepEqual(records.find(item => item.method === 'review/start').params.target, { type: 'uncommittedChanges' });
+  } finally {
+    socket?.close();
+    catalogDaemon.child.kill();
+    await Promise.race([
+      catalogDaemon.child.exitCode === null ? once(catalogDaemon.child, 'exit') : Promise.resolve(),
+      new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
+    ]);
+    await rm(catalogDaemon.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
 async function startDaemon(options: {
   claudeBin?: string;
   claudeArgs?: (root: string) => string[];
   codexBin?: string;
   codexArgs?: (root: string) => string[];
   staleSessionId?: string;
+  nativeHistory?: boolean;
 } = {}): Promise<RunningDaemon> {
   const root = await mkdtemp(join(tmpdir(), 'cc-remote-daemon-e2e-'));
   await writeFile(join(root, 'README.md'), '# fixture\n', 'utf8');
@@ -400,6 +595,14 @@ async function startDaemon(options: {
       messages: [],
     }, null, 2) + '\n', 'utf8');
   }
+  if (options.nativeHistory && options.staleSessionId) {
+    const directory = join(root, '.claude', 'projects', 'fixture');
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, `${options.staleSessionId}.jsonl`), JSON.stringify({
+      type: 'user', sessionId: options.staleSessionId, entrypoint: 'sdk-cli',
+      message: { role: 'user', content: 'existing phone conversation' },
+    }) + '\n');
+  }
   const port = await findFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const daemonPath = resolve('src/daemon.ts');
@@ -413,6 +616,7 @@ async function startDaemon(options: {
       PUBLIC_ORIGIN: baseUrl,
       WORKSPACE_DIR: root,
       CLAUDE_BIN: options.claudeBin ?? join(root, 'missing-claude-executable'),
+      CLAUDE_CONFIG_DIR: join(root, '.claude'),
       ...(options.claudeArgs ? { CLAUDE_ARGS: options.claudeArgs(root).join('|') } : {}),
       CODEX_BIN: options.codexBin ?? join(root, 'missing-codex-executable'),
       ...(options.codexArgs ? { CODEX_ARGS: options.codexArgs(root).join('|') } : {}),

@@ -39,6 +39,7 @@ class RemoteWebSocketClient {
     List<Duration>? reconnectDelays,
     DateTime Function()? now,
     Duration authTimeout = _defaultAuthTimeout,
+    Duration livenessTimeout = _defaultLivenessTimeout,
   }) : _connect =
            connect ??
            ((Uri uri) => IOWebSocketChannel.connect(
@@ -48,11 +49,15 @@ class RemoteWebSocketClient {
            )),
        _reconnectDelays = reconnectDelays ?? _defaultReconnectDelays,
        _now = now ?? DateTime.now,
-       _authTimeout = authTimeout;
+       _authTimeout = authTimeout,
+       _livenessTimeout = livenessTimeout;
 
   static const _defaultConnectTimeout = Duration(seconds: 12);
   static const _defaultPingInterval = Duration(seconds: 20);
   static const _defaultAuthTimeout = Duration(seconds: 12);
+  static const _defaultLivenessTimeout = Duration(seconds: 8);
+  // Tunnel latency can exceed two seconds without the connection being dead.
+  static const resumeProbeTimeout = _defaultLivenessTimeout;
 
   static const _defaultReconnectDelays = <Duration>[
     Duration(seconds: 1),
@@ -67,11 +72,19 @@ class RemoteWebSocketClient {
   final List<Duration> _reconnectDelays;
   final DateTime Function() _now;
   final Duration _authTimeout;
+  final Duration _livenessTimeout;
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _subscription;
   Timer? _reconnectTimer;
   Timer? _authTimer;
   bool _transportReady = false;
+  bool _authenticated = false;
+  bool _supportsConnectionProbe = false;
+  Timer? _probeTimer;
+  Completer<void>? _probe;
+  String? _probeId;
+  bool _reconnectNowOnProbeFailure = false;
+  int _probeSequence = 0;
   int _generation = 0;
   int _reconnectAttempt = 0;
   bool _explicitlyClosed = true;
@@ -85,6 +98,51 @@ class RemoteWebSocketClient {
   Object? _lastError;
 
   WebSocketChannel? get channel => _channel;
+  bool get isActive => !_explicitlyClosed && _origin != null && _token != null;
+  bool get isAuthenticated => _authenticated;
+
+  Future<void> ensureConnected({
+    bool retryNow = false,
+    Duration? probeTimeout,
+    bool reconnectNowOnProbeFailure = false,
+  }) {
+    if (!isActive) return Future<void>.value();
+    final channel = _channel;
+    if (channel == null) {
+      if (_reconnectTimer == null || retryNow) {
+        _reconnectTimer?.cancel();
+        _reconnectTimer = null;
+        _openConnection();
+      }
+      return Future<void>.value();
+    }
+    // The existing connect/auth timers own an unfinished handshake.
+    if (!_authenticated || !_supportsConnectionProbe) {
+      return Future<void>.value();
+    }
+    // A resume request also upgrades a probe started by a soft refresh.
+    _reconnectNowOnProbeFailure |= reconnectNowOnProbeFailure;
+    final pending = _probe;
+    if (pending != null) return pending.future;
+
+    final generation = _generation;
+    final probe = Completer<void>();
+    _probe = probe;
+    final probeId = '$generation-${++_probeSequence}';
+    _probeId = probeId;
+    final timeout = probeTimeout ?? _livenessTimeout;
+    _probeTimer = Timer(timeout, () {
+      if (!_isCurrent(channel, generation)) return;
+      _reportError(TimeoutException('websocket_liveness_timeout', timeout));
+      _handleDisconnect(
+        channel,
+        generation,
+        immediate: reconnectNowOnProbeFailure,
+      );
+    });
+    send({'type': 'ping', 'probeId': probeId}, expectedConnection: channel);
+    return probe.future;
+  }
 
   void connect({
     required Uri origin,
@@ -137,12 +195,14 @@ class RemoteWebSocketClient {
         _onMessage?.call(data);
         if (authenticated && !_isCurrent(channel, generation)) return;
         if (authenticated) {
+          final wasAuthenticated = _authenticated;
+          _authenticated = true;
           _authTimer?.cancel();
           _authTimer = null;
           _reconnectAttempt = 0;
           _lastError = null;
           _publishState(RemoteConnectionPhase.connected);
-          _retryPendingPrompt(channel, generation);
+          if (!wasAuthenticated) _retryPendingPrompt(channel, generation);
         }
       },
       onError: (Object error, StackTrace stackTrace) {
@@ -265,6 +325,16 @@ class RemoteWebSocketClient {
     try {
       final decoded = jsonDecode(data.toString());
       if (decoded is! Map<String, dynamic>) return false;
+      if (decoded['type'] == 'pong' &&
+          _probeId != null &&
+          decoded['probeId'] == _probeId) {
+        _finishProbe();
+      }
+      if (decoded['type'] == 'status' &&
+          decoded['authenticated'] == true &&
+          decoded.containsKey('connectionProbe')) {
+        _supportsConnectionProbe = decoded['connectionProbe'] == true;
+      }
       final pendingPromptId = _pendingPrompt?['promptId'];
       final messagePromptId = decoded['promptId'];
       if (pendingPromptId is String && messagePromptId == pendingPromptId) {
@@ -292,20 +362,34 @@ class RemoteWebSocketClient {
     }
   }
 
-  void _handleDisconnect(WebSocketChannel channel, int generation) {
+  void _handleDisconnect(
+    WebSocketChannel channel,
+    int generation, {
+    bool immediate = false,
+  }) {
     if (!_isCurrent(channel, generation)) return;
+    immediate |= _probe != null && _reconnectNowOnProbeFailure;
     _closeCurrentConnection();
-    _scheduleReconnect();
+    _scheduleReconnect(immediate: immediate);
   }
 
-  void _scheduleReconnect() {
+  void _scheduleReconnect({bool immediate = false}) {
     if (_explicitlyClosed ||
         _reconnectDelays.isEmpty ||
-        _reconnectTimer != null ||
         _origin == null ||
         _token == null) {
       return;
     }
+    if (immediate) {
+      // A failed resume probe already proved this socket unusable; waiting out
+      // the backoff would only stretch the visible reconnect.
+      _reconnectTimer?.cancel();
+      _reconnectTimer = null;
+      _reconnectAttempt += 1;
+      _openConnection();
+      return;
+    }
+    if (_reconnectTimer != null) return;
     final index = _reconnectAttempt < _reconnectDelays.length
         ? _reconnectAttempt
         : _reconnectDelays.length - 1;
@@ -326,6 +410,9 @@ class RemoteWebSocketClient {
     _authTimer?.cancel();
     _authTimer = null;
     _transportReady = false;
+    _authenticated = false;
+    _supportsConnectionProbe = false;
+    _finishProbe();
     final subscription = _subscription;
     if (subscription != null) unawaited(subscription.cancel());
     _subscription = null;
@@ -334,6 +421,16 @@ class RemoteWebSocketClient {
     if (channel != null) {
       unawaited(channel.sink.close().catchError((_) {}));
     }
+  }
+
+  void _finishProbe() {
+    _probeTimer?.cancel();
+    _probeTimer = null;
+    _probeId = null;
+    _reconnectNowOnProbeFailure = false;
+    final probe = _probe;
+    _probe = null;
+    probe?.complete();
   }
 
   void _reportError(Object error) {

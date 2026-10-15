@@ -22,6 +22,7 @@ export type TranscriptMessage = {
   activityState?: ClaudeActivity['state'] | 'stopped';
   activityTool?: string;
   activityDetail?: string;
+  activityDurationMs?: number;
 };
 
 export type TranscriptSnapshot = {
@@ -115,9 +116,8 @@ export async function createTranscriptState(
 
   if (state.running) {
     state.running = false;
-    if (state.sandboxMode === 'danger-full-access') state.sandboxMode = 'read-only';
     state.pendingPermissions = [];
-    state.messages = state.messages.filter(message => message.role !== 'activity');
+    finishActivities(state.messages, 'stopped');
     state.messages.push({ role: 'system', text: INTERRUPTED_MESSAGE });
     state.revision += 1;
     state.updatedAt = Date.now();
@@ -169,6 +169,7 @@ export async function createTranscriptState(
       const nextText = pending.pendingAssistantPrefix + text;
       clearPendingAssistantPrefix(pending);
       mutate(() => {
+        finishActivities(state.messages, 'done', 'thinking');
         state.messages.push({ role: 'assistant', text: nextText });
       });
     },
@@ -176,16 +177,18 @@ export async function createTranscriptState(
     mergeActivity(activity: ClaudeActivity): void {
       if (!state.running || activity.kind === 'summary') return;
       mutate(() => {
-        if (activity.kind === 'thinking' && activity.state === 'running') {
-          const existingThinking = state.messages.findIndex(message =>
-            message.role === 'activity' && message.activityKind === 'thinking');
-          if (existingThinking < 0) {
-            state.messages.push(activityMessage(activity));
-          }
-          return;
+        if (activity.kind === 'tool' && activity.state === 'running') {
+          finishActivities(state.messages, 'done', 'thinking');
         }
-        const index = state.messages.findIndex(message =>
-          message.role === 'activity' && message.activityId === activity.id);
+        const start = currentTurnStart(state.messages);
+        let index = -1;
+        for (let candidate = state.messages.length - 1; candidate >= start; candidate -= 1) {
+          if (state.messages[candidate].role === 'activity'
+              && state.messages[candidate].activityId === activity.id) {
+            index = candidate;
+            break;
+          }
+        }
         const next = activityMessage(activity, index >= 0 ? state.messages[index] : undefined);
         if (index >= 0) state.messages[index] = next;
         else state.messages.push(next);
@@ -227,9 +230,8 @@ export async function createTranscriptState(
       clearPendingAssistantPrefix(pending);
       mutate(() => {
         state.running = false;
-        if (state.sandboxMode === 'danger-full-access') state.sandboxMode = 'read-only';
         state.pendingPermissions = [];
-        removeActivities(state.messages);
+        finishActivities(state.messages, 'done');
         if (!hasAssistantReplyAfterLastUser(state.messages)) {
           state.messages.push({ role: 'system', text: '本轮没有返回文本，请重试' });
         }
@@ -242,9 +244,8 @@ export async function createTranscriptState(
       clearPendingAssistantPrefix(pending);
       mutate(() => {
         state.running = false;
-        if (state.sandboxMode === 'danger-full-access') state.sandboxMode = 'read-only';
         state.pendingPermissions = [];
-        removeActivities(state.messages);
+        finishActivities(state.messages, 'stopped');
         state.messages.push({ role: 'system', text: '已停止' });
       });
       await flush();
@@ -255,9 +256,8 @@ export async function createTranscriptState(
       clearPendingAssistantPrefix(pending);
       mutate(() => {
         state.running = false;
-        if (state.sandboxMode === 'danger-full-access') state.sandboxMode = 'read-only';
         state.pendingPermissions = [];
-        removeActivities(state.messages);
+        finishActivities(state.messages, 'error');
         state.messages.push({ role: 'system', text: `错误：${message}` });
       });
       await flush();
@@ -333,6 +333,7 @@ function activityMessage(activity: ClaudeActivity, previous?: TranscriptMessage)
     activityState: activity.state,
     activityTool: activity.toolName ?? previous?.activityTool,
     activityDetail: activity.detail ?? previous?.activityDetail,
+    activityDurationMs: activity.durationMs ?? previous?.activityDurationMs,
   };
 }
 
@@ -344,9 +345,29 @@ function activityLabel(activity: ClaudeActivity): string {
   return `已${action}`;
 }
 
-function removeActivities(messages: TranscriptMessage[]): void {
+function currentTurnStart(messages: TranscriptMessage[]): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === 'activity') messages.splice(index, 1);
+    if (messages[index].role === 'user') return index + 1;
+  }
+  return 0;
+}
+
+function finishActivities(
+  messages: TranscriptMessage[],
+  status: 'done' | 'error' | 'stopped',
+  kind?: ClaudeActivity['kind'],
+): void {
+  for (let index = currentTurnStart(messages); index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.role !== 'activity' || message.activityState !== 'running'
+        || (kind && message.activityKind !== kind)) continue;
+    const label = message.activityKind === 'thinking' ? '思考' : '工具执行';
+    messages[index] = {
+      ...message,
+      activityState: status,
+      text: status === 'done' ? `${label}完成`
+        : status === 'error' ? `${label}失败` : `${label}已停止`,
+    };
   }
 }
 

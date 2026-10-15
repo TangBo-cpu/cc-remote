@@ -117,6 +117,8 @@ test('normalizes a persisted running task to interrupted on daemon restart', asy
     assert.equal(state.snapshot().running, false);
     assert.deepEqual(state.snapshot().messages, [
       { role: 'user', text: '长任务' },
+      { role: 'activity', text: '思考已停止', activityId: 'thinking',
+        activityKind: 'thinking', activityState: 'stopped' },
       { role: 'system', text: '电脑端重启，任务已中断' },
     ]);
     const saved = JSON.parse(await readFile(path, 'utf8')) as { running: boolean };
@@ -138,6 +140,7 @@ test('keeps safe activity metadata and clears the conversation atomically', asyn
       state: 'running',
       toolName: 'Read',
       detail: 'README.md',
+      durationMs: 3200,
     });
     await state.flush();
     assert.deepEqual(state.snapshot().messages.at(-1), {
@@ -148,6 +151,7 @@ test('keeps safe activity metadata and clears the conversation atomically', asyn
       activityState: 'running',
       activityTool: 'Read',
       activityDetail: 'README.md',
+      activityDurationMs: 3200,
     });
 
     await state.clear();
@@ -215,6 +219,54 @@ test('persists attachment metadata without exposing local file paths', async () 
       size: 2048,
     }]);
     assert.equal(JSON.stringify(message).includes('uploads'), false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('process history survives completion, repeated IDs and restart', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-process-'));
+  const path = join(dir, 'transcript.json');
+  try {
+    const state = await createTranscriptState(path);
+    state.beginPrompt('first', 'auto');
+    state.mergeActivity({ id: 'thinking', kind: 'thinking', state: 'running', detail: 'First thought.' });
+    state.mergeActivity({ id: 'thinking', kind: 'thinking', state: 'done', durationMs: 3200 });
+    state.mergeActivity({ id: 'summary', kind: 'summary', state: 'done', durationMs: 90000 });
+    state.appendText('First answer.');
+    await state.finishDone();
+    state.beginPrompt('second', 'auto');
+    state.mergeActivity({ id: 'thinking', kind: 'thinking', state: 'running', detail: 'Second thought.' });
+    await state.finishStopped();
+    const restored = await createTranscriptState(path);
+    const thoughts = restored.snapshot().messages.filter(message => message.activityKind === 'thinking');
+    assert.equal(thoughts.length, 2);
+    assert.equal(thoughts[0].activityState, 'done');
+    assert.equal(thoughts[0].activityDetail, 'First thought.');
+    assert.equal(thoughts[0].activityDurationMs, 3200);
+    assert.equal(thoughts[1].activityState, 'stopped');
+    assert.equal(thoughts[1].activityDetail, 'Second thought.');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('tool progress and text close thinking, error preserves tool evidence', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-process-'));
+  try {
+    const state = await createTranscriptState(join(dir, 'transcript.json'));
+    state.beginPrompt('check', 'auto');
+    state.mergeActivity({ id: 'thinking', kind: 'thinking', state: 'running', detail: 'Check files.' });
+    state.mergeActivity({ id: 'read', kind: 'tool', state: 'running', toolName: 'Read', detail: 'README.md' });
+    assert.equal(state.snapshot().messages[1].activityState, 'done');
+    await state.finishError('failed');
+    assert.equal(state.snapshot().messages[2].activityState, 'error');
+    assert.equal(state.snapshot().messages[2].activityDetail, 'README.md');
+    state.beginPrompt('reply', 'auto');
+    state.mergeActivity({ id: 'thinking', kind: 'thinking', state: 'running' });
+    state.appendText('answer');
+    assert.equal(state.snapshot().messages.at(-2)?.activityState, 'done');
+    await state.finishDone();
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

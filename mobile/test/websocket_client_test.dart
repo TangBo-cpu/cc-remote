@@ -645,6 +645,301 @@ void main() {
     client.close();
   });
 
+  group('connection liveness', () {
+    late FakeWebSocketChannel first;
+    late FakeWebSocketChannel second;
+    late RemoteWebSocketClient client;
+    late List<Object> errors;
+    late List<RemoteConnectionSnapshot> snapshots;
+    late int connectCount;
+
+    setUp(() async {
+      first = FakeWebSocketChannel();
+      second = FakeWebSocketChannel();
+      final channels = [first, second];
+      errors = [];
+      snapshots = [];
+      connectCount = 0;
+      client = RemoteWebSocketClient(
+        connect: (_) {
+          connectCount += 1;
+          return channels.removeAt(0);
+        },
+        livenessTimeout: const Duration(milliseconds: 20),
+        reconnectDelays: const [Duration(milliseconds: 100)],
+      );
+      addTearDown(client.close);
+      client.connect(
+        origin: Uri.parse('https://example.test'),
+        token: 'secret',
+        onMessage: (_) {},
+        onError: errors.add,
+        onDone: () {},
+        onState: snapshots.add,
+      );
+      await Future<void>.delayed(Duration.zero);
+      first.incoming.add(
+        jsonEncode({
+          'type': 'status',
+          'authenticated': true,
+          'connectionProbe': true,
+        }),
+      );
+      await Future<void>.delayed(Duration.zero);
+    });
+
+    test('keeps the authenticated socket when its probe succeeds', () async {
+      final check = client.ensureConnected(retryNow: true);
+      final ping = jsonDecode(first.sent.last as String);
+      expect(ping['type'], 'ping');
+      expect(ping['probeId'], isNotEmpty);
+      first.replyToProbe();
+      await check;
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+
+      expect(connectCount, 1);
+      expect(client.channel, same(first));
+      expect(client.isAuthenticated, isTrue);
+      expect(errors, isEmpty);
+    });
+
+    test(
+      'a silent socket enters automatic recovery after the probe expires',
+      () async {
+        await client.ensureConnected();
+
+        expect(client.channel, isNull);
+        expect(client.isActive, isTrue);
+        expect(client.isAuthenticated, isFalse);
+        expect(errors.single, isA<TimeoutException>());
+        expect(snapshots.last.phase, RemoteConnectionPhase.retrying);
+        await Future<void>.delayed(const Duration(milliseconds: 140));
+        expect(connectCount, 2);
+        expect(client.channel, same(second));
+      },
+    );
+
+    test('a resume probe reconnects without waiting out the backoff', () async {
+      await client.ensureConnected(
+        probeTimeout: const Duration(milliseconds: 10),
+        reconnectNowOnProbeFailure: true,
+      );
+
+      expect(errors.single, isA<TimeoutException>());
+      expect(connectCount, 2);
+      expect(client.channel, same(second));
+      expect(
+        snapshots.where(
+          (snapshot) => snapshot.phase == RemoteConnectionPhase.retrying,
+        ),
+        isEmpty,
+      );
+    });
+
+    test('resume upgrades an existing probe to immediate recovery', () async {
+      final check = client.ensureConnected();
+      final resume = client.ensureConnected(reconnectNowOnProbeFailure: true);
+      expect(resume, same(check));
+      await resume;
+
+      expect(connectCount, 2);
+      expect(client.channel, same(second));
+      expect(snapshots.last.phase, RemoteConnectionPhase.connecting);
+    });
+
+    test('a resume probe retries immediately when the stream closes', () async {
+      final check = client.ensureConnected(reconnectNowOnProbeFailure: true);
+      await first.incoming.close();
+      await check;
+
+      expect(connectCount, 2);
+      expect(client.channel, same(second));
+      expect(snapshots.last.phase, RemoteConnectionPhase.connecting);
+    });
+
+    test('a resume probe retries immediately when sending fails', () async {
+      first.failNextSend();
+      await client.ensureConnected(reconnectNowOnProbeFailure: true);
+
+      expect(connectCount, 2);
+      expect(client.channel, same(second));
+      expect(errors.single, isA<StateError>());
+    });
+
+    test(
+      'successful resume does not disable later reconnect backoff',
+      () async {
+        final check = client.ensureConnected(reconnectNowOnProbeFailure: true);
+        first.replyToProbe();
+        await check;
+        await first.incoming.close();
+        await Future<void>.delayed(Duration.zero);
+
+        expect(connectCount, 1);
+        expect(snapshots.last.phase, RemoteConnectionPhase.retrying);
+      },
+    );
+
+    test('a short resume probe still keeps a responsive socket', () async {
+      final check = client.ensureConnected(
+        probeTimeout: const Duration(milliseconds: 30),
+        reconnectNowOnProbeFailure: true,
+      );
+      first.replyToProbe();
+      await check;
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+
+      expect(connectCount, 1);
+      expect(client.channel, same(first));
+      expect(errors, isEmpty);
+    });
+
+    test('concurrent checks share one probe', () async {
+      final check = client.ensureConnected();
+      final sameCheck = client.ensureConnected(retryNow: true);
+      expect(sameCheck, same(check));
+      expect(
+        first.sent.where((data) => jsonDecode(data)['type'] == 'ping'),
+        hasLength(1),
+      );
+      first.replyToProbe();
+      await Future.wait([check, sameCheck]);
+      expect(connectCount, 1);
+    });
+
+    test('a probe cannot close a replacement connection', () async {
+      final check = client.ensureConnected();
+      expect(client.reconnect(), isTrue);
+      await check;
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+
+      expect(connectCount, 2);
+      expect(client.channel, same(second));
+      expect(errors, isEmpty);
+    });
+
+    test('closing cancels a probe and its recovery', () async {
+      final check = client.ensureConnected();
+      client.close();
+      await check;
+      await Future<void>.delayed(const Duration(milliseconds: 140));
+
+      expect(connectCount, 1);
+      expect(client.isActive, isFalse);
+      expect(client.channel, isNull);
+      expect(errors, isEmpty);
+    });
+
+    test(
+      'refresh does not replace a connection awaiting authentication',
+      () async {
+        client.reconnect();
+        await Future<void>.delayed(Duration.zero);
+        await client.ensureConnected(retryNow: true);
+
+        expect(connectCount, 2);
+        expect(client.channel, same(second));
+        expect(second.sent, [
+          jsonEncode({'type': 'auth', 'token': 'secret'}),
+        ]);
+      },
+    );
+
+    test('a soft refresh preserves the scheduled retry', () async {
+      await first.incoming.close();
+      await Future<void>.delayed(Duration.zero);
+      await client.ensureConnected();
+
+      expect(connectCount, 1);
+      expect(snapshots.last.phase, RemoteConnectionPhase.retrying);
+      await client.ensureConnected(retryNow: true);
+      expect(connectCount, 2);
+      await Future<void>.delayed(const Duration(milliseconds: 140));
+      expect(connectCount, 2);
+    });
+
+    test(
+      'a probe send failure releases the check and schedules recovery',
+      () async {
+        first.failNextSend();
+        await client.ensureConnected();
+
+        expect(errors.single, isA<StateError>());
+        expect(client.channel, isNull);
+        expect(snapshots.last.phase, RemoteConnectionPhase.retrying);
+      },
+    );
+
+    test(
+      'a successful probe does not discard an unacknowledged prompt',
+      () async {
+        final prompt = <String, dynamic>{
+          'type': 'prompt',
+          'promptId': 'pending-1',
+          'sessionId': 'session-1',
+          'text': 'keep this request',
+        };
+        expect(client.sendPrompt(prompt), isTrue);
+        final check = client.ensureConnected();
+        first.replyToProbe();
+        await check;
+        client.reconnect();
+        await Future<void>.delayed(Duration.zero);
+        second.incoming.add(
+          jsonEncode({'type': 'status', 'authenticated': true}),
+        );
+        await Future<void>.delayed(Duration.zero);
+
+        expect(second.sent, [
+          jsonEncode({'type': 'auth', 'token': 'secret'}),
+          jsonEncode(prompt),
+        ]);
+      },
+    );
+
+    test('legacy servers are not sent an unsupported probe', () async {
+      client.reconnect();
+      await Future<void>.delayed(Duration.zero);
+      second.incoming.add(
+        jsonEncode({'type': 'status', 'authenticated': true}),
+      );
+      await Future<void>.delayed(Duration.zero);
+      await client.ensureConnected(retryNow: true);
+      await Future<void>.delayed(const Duration(milliseconds: 40));
+
+      expect(client.channel, same(second));
+      expect(second.sent, [
+        jsonEncode({'type': 'auth', 'token': 'secret'}),
+      ]);
+      expect(errors, isEmpty);
+    });
+
+    test('an unrelated pong does not satisfy the active probe', () async {
+      final check = client.ensureConnected();
+      first.incoming.add(jsonEncode({'type': 'pong', 'probeId': 'old-probe'}));
+      first.incoming.add(jsonEncode({'type': 'text', 'text': 'buffered data'}));
+      await check;
+
+      expect(errors.single, isA<TimeoutException>());
+      expect(client.channel, isNull);
+    });
+
+    test('status broadcasts do not replay a pending prompt', () async {
+      final prompt = <String, dynamic>{
+        'type': 'prompt',
+        'promptId': 'pending-1',
+        'text': 'run once',
+      };
+      expect(client.sendPrompt(prompt), isTrue);
+      first.incoming.add(jsonEncode({'type': 'status', 'authenticated': true}));
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        first.sent.where((data) => jsonDecode(data)['type'] == 'prompt'),
+        hasLength(1),
+      );
+    });
+  });
+
   test('maps an origin base path to the daemon websocket endpoint', () {
     expect(
       RemoteWebSocketClient.webSocketUri(
@@ -662,6 +957,11 @@ class FakeWebSocketChannel extends StreamChannelMixin
   late final FakeWebSocketSink _sink = FakeWebSocketSink(sent, incoming);
 
   void failNextSend() => _sink.nextError = StateError('send_failed');
+
+  void replyToProbe() {
+    final ping = jsonDecode(sent.last as String);
+    incoming.add(jsonEncode({'type': 'pong', 'probeId': ping['probeId']}));
+  }
 
   @override
   String? get protocol => null;

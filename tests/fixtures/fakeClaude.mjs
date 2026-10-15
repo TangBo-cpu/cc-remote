@@ -13,6 +13,7 @@ if (options.log) appendFileSync(options.log, JSON.stringify(process.argv.slice(2
 if (options.envlog) {
   appendFileSync(options.envlog, JSON.stringify({
     effort: process.env.CLAUDE_CODE_EFFORT_LEVEL ?? null,
+    entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT ?? null,
   }) + '\n');
 }
 

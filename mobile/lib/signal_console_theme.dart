@@ -5,70 +5,159 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+class AppPalette {
+  const AppPalette._(this.brightness);
+
+  static const light = AppPalette._(Brightness.light);
+  static const dark = AppPalette._(Brightness.dark);
+
+  final Brightness brightness;
+
+  static AppPalette of(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark ? dark : light;
+
+  bool get _isLight => brightness == Brightness.light;
+
+  Color get paper =>
+      _isLight ? const Color(0xFFF9F9F9) : const Color(0xFF111111);
+  Color get surface =>
+      _isLight ? const Color(0xFFFFFFFF) : const Color(0xFF1B1B1B);
+  Color get surfaceElevated => surface;
+  Color get control =>
+      _isLight ? const Color(0xFFF0F0F0) : const Color(0xFF292929);
+  Color get ink => _isLight ? const Color(0xFF202020) : const Color(0xFFEEEEEE);
+  Color get muted =>
+      _isLight ? const Color(0xFF626262) : const Color(0xFFB0B0B0);
+  Color get inactive =>
+      _isLight ? const Color(0xFF858585) : const Color(0xFF858585);
+  Color get inactiveLight =>
+      _isLight ? const Color(0xFFD0D0D0) : const Color(0xFF464646);
+  Color get accent =>
+      _isLight ? const Color(0xFF303030) : const Color(0xFFE7E7E7);
+  Color get accentStrong => accent;
+  Color get navigatorAccent =>
+      _isLight ? const Color(0xFF3877A7) : const Color(0xFF87B7DB);
+  Color get link =>
+      _isLight ? const Color(0xFF505050) : const Color(0xFFD0D0D0);
+  Color get success =>
+      _isLight ? const Color(0xFF4C7D63) : const Color(0xFF91B19E);
+  Color get danger =>
+      _isLight ? const Color(0xFFB42318) : const Color(0xFFFF8A80);
+  Color get line =>
+      _isLight ? const Color(0xFFE5E5E5) : const Color(0xFF363636);
+  Color get lineStrong =>
+      _isLight ? const Color(0xFFD2D2D2) : const Color(0xFF4A4A4A);
+  Color get warning =>
+      _isLight ? const Color(0xFF8A5A20) : const Color(0xFFEAB86A);
+  Color get warningSoft =>
+      _isLight ? const Color(0xFFFFF2D8) : const Color(0xFF4A3820);
+  Color get assistantBubble => surface;
+  Color get userBubble =>
+      _isLight ? const Color(0xFFEDEDED) : const Color(0xFF2A2A2A);
+  Color get bubbleOutline =>
+      _isLight ? const Color(0x14000000) : const Color(0x14FFFFFF);
+  Color get composerControlFill => control;
+  Color get composerControlRest =>
+      _isLight ? const Color(0x0A000000) : const Color(0x0AFFFFFF);
+  Color get composerControlPressed =>
+      _isLight ? const Color(0x14000000) : const Color(0x14FFFFFF);
+  Color get composerControlInk => ink;
+  Color get composerDisabledFill => const Color(0x00000000);
+  Color get glass =>
+      _isLight ? const Color(0xE8FFFFFF) : const Color(0xE82A2A2A);
+  Color get glassStrong =>
+      _isLight ? const Color(0xF2FFFFFF) : const Color(0xF22A2A2A);
+  Color get glassControl =>
+      _isLight ? const Color(0xFFF2F2F2) : const Color(0xFF343434);
+  Color get glassHighlight =>
+      _isLight ? const Color(0xB3FFFFFF) : const Color(0x18FFFFFF);
+  Color get liquidThinHighlight =>
+      _isLight ? const Color(0xF8FFFFFF) : const Color(0xF8323232);
+  Color get liquidThinBody =>
+      _isLight ? const Color(0xF5FAFAFA) : const Color(0xF52C2C2C);
+  Color get liquidThinEdge =>
+      _isLight ? const Color(0xEFF5F5F5) : const Color(0xEF282828);
+  Color get liquidStrongHighlight =>
+      _isLight ? const Color(0xFCFFFFFF) : const Color(0xFC323232);
+  Color get liquidStrongBody =>
+      _isLight ? const Color(0xF9FDFDFD) : const Color(0xF92C2C2C);
+  Color get liquidStrongEdge =>
+      _isLight ? const Color(0xF5FAFAFA) : const Color(0xF5282828);
+  Color get liquidFocus => accent.withValues(alpha: 0.28);
+  Color get scrim =>
+      _isLight ? const Color(0x52000000) : const Color(0x80000000);
+  Color get cta => accent;
+  Color get onCta =>
+      _isLight ? const Color(0xFFFFFFFF) : const Color(0xFF111111);
+  Color get accentSoft =>
+      _isLight ? const Color(0xFFEAEAEA) : const Color(0xFF343434);
+  Color get stop => danger;
+  Color get stopGlass => stop.withValues(alpha: 0.85);
+  Color get stopGlow => stop.withValues(alpha: 0.12);
+  Color get onStop =>
+      _isLight ? const Color(0xFFFFFFFF) : const Color(0xFF111111);
+  Color get porcelain => surface;
+  Color get porcelainMuted => control;
+  Color get code => ink;
+  Color get codeMuted => inactive;
+  Color get bgTop => paper;
+  Color get bgMid => paper;
+  Color get bgBottom => paper;
+}
+
+/// Light static compatibility colors for callers that have not adopted AppPalette yet.
 class AppColors {
-  static const paper = Color(0xFFF1F5F9);
-  static const surface = Color(0xFFF7FAFC);
-  static const surfaceElevated = Color(0xFFFBFCFD);
-  static const control = Color(0xFFEEEFF0);
-  static const ink = Color(0xFF1C1C1E);
-  static const muted = Color(0xFF636B74);
-  static const inactive = Color(0xFF8E8E93);
-  static const inactiveLight = Color(0xFFBEC7D0);
-
-  /// Calm interactive blue. Keep it rare; glass itself stays neutral.
-  static const accent = Color(0xFF3877A7);
+  static const paper = Color(0xFFF9F9F9);
+  static const surface = Color(0xFFFFFFFF);
+  static const surfaceElevated = Color(0xFFFFFFFF);
+  static const control = Color(0xFFF0F0F0);
+  static const ink = Color(0xFF202020);
+  static const muted = Color(0xFF626262);
+  static const inactive = Color(0xFF858585);
+  static const inactiveLight = Color(0xFFD0D0D0);
+  static const accent = Color(0xFF303030);
   static const accentStrong = accent;
-  static const danger = Color(0xFFB54747);
-  static const line = Color(0xFFDDE4EA);
-  static const lineStrong = inactiveLight;
-
-  /// "Degraded but alive" states: waiting on the host, reconnecting, unconfirmed stop.
-  /// Amber must never mark a completed failure; that is danger's job.
+  static const link = Color(0xFF505050);
+  static const success = Color(0xFF4C7D63);
+  static const danger = Color(0xFFB42318);
+  static const line = Color(0xFFE5E5E5);
+  static const lineStrong = Color(0xFFD2D2D2);
   static const warning = Color(0xFF8A5A20);
-  static const warningSoft = Color(0xFFF4E9DA);
-
-  /// Quiet role separation without turning every message into an accent.
-  /// A blue-leaning step that reads clearly over paper (the old near-twin
-  /// of paper was invisible) while staying calmer than a selected state.
-  static const userBubble = Color(0xFFCBD9E3);
-
-  /// Neutral structural edge that keeps light bubbles visible on wallpapers.
-  /// The color step above carries the hierarchy; this outline is only the
-  /// wallpaper fallback, so it stays as faint as possible.
-  static const bubbleOutline = Color(0x0A000000);
-
-  /// Blue remains reserved for selected/search-highlighted states.
-  static const composerControlFill = Color(0xFFE6EFF5);
-  static const composerControlRest = Color(0x0A1C1C1E);
-  static const composerControlPressed = Color(0x141C1C1E);
+  static const warningSoft = Color(0xFFFFF2D8);
+  static const assistantBubble = surface;
+  static const userBubble = Color(0xFFEDEDED);
+  static const bubbleOutline = Color(0x14000000);
+  static const composerControlFill = control;
+  static const composerControlRest = Color(0x0A000000);
+  static const composerControlPressed = Color(0x14000000);
   static const composerControlInk = ink;
   static const composerDisabledFill = Color(0x00000000);
-
-  /// Apple-like material roles. Only overlays use real backdrop blur.
-  static const glass = Color(0xCCF8FBFE);
-  static const glassStrong = Color(0xEBF9FBFD);
-  static const glassControl = Color(0xBFFFFFFF);
+  static const glass = Color(0xE8FFFFFF);
+  static const glassStrong = Color(0xF2FFFFFF);
+  static const glassControl = Color(0xFFF2F2F2);
   static const glassHighlight = Color(0xB3FFFFFF);
-  static const liquidThinHighlight = Color(0xF0FFFFFF);
-  static const liquidThinBody = Color(0xE3F8FAFC);
-  static const liquidThinEdge = Color(0xD1E9F0F5);
+  static const liquidThinHighlight = Color(0xF8FFFFFF);
+  static const liquidThinBody = Color(0xF5FAFAFA);
+  static const liquidThinEdge = Color(0xEFF5F5F5);
   static const liquidStrongHighlight = Color(0xFCFFFFFF);
-  static const liquidStrongBody = Color(0xF6F9FBFD);
-  static const liquidStrongEdge = Color(0xEEF0F4F7);
-  static const liquidFocus = Color(0x473877A7);
-  static const scrim = Color(0x4A111820);
-
+  static const liquidStrongBody = Color(0xF9FDFDFD);
+  static const liquidStrongEdge = Color(0xF5FAFAFA);
+  static const liquidFocus = Color(0x47303030);
+  static const scrim = Color(0x52000000);
   static const cta = accentStrong;
-  static const onCta = surfaceElevated;
-  static const accentSoft = Color(0xFFE4EFF7);
+  static const onCta = Color(0xFFFFFFFF);
+  static const accentSoft = Color(0xFFEAEAEA);
   static const stop = danger;
+  static const stopGlass = Color(0xD9B42318);
+  static const stopGlow = Color(0x1FB42318);
+  static const onStop = Color(0xFFFFFFFF);
   static const porcelain = surfaceElevated;
   static const porcelainMuted = control;
   static const code = ink;
   static const codeMuted = inactive;
-  static const bgTop = Color(0xFFF8FAFD);
+  static const bgTop = paper;
   static const bgMid = paper;
-  static const bgBottom = Color(0xFFEAF0F6);
+  static const bgBottom = paper;
 }
 
 class AppTypography {
@@ -111,6 +200,27 @@ class AppSizes {
   static const composer = 110.0;
 }
 
+/// Icon size ladder — five steps. Pick the step that matches the icon's role
+/// and never pass a raw number. A 2026-10 audit found 19 ad-hoc values in this
+/// app (9, 10, 11 … 26, 28, 34, 40), which is what made the icon layer read as
+/// inconsistent.
+abstract final class AppIconSizes {
+  /// Inside a badge, pill, or status dot.
+  static const badge = 12.0;
+
+  /// Inline with text — row chevrons and small leading glyphs.
+  static const inline = 16.0;
+
+  /// Standard control: buttons, list leading, 36pt seats.
+  static const control = 20.0;
+
+  /// App bar actions and prominent tiles.
+  static const primary = 24.0;
+
+  /// Empty-state and hero marks.
+  static const hero = 32.0;
+}
+
 /// Filled 16px identity marks (Linear-style). Color is the identifier;
 /// do not sit these in a control well.
 abstract final class AppMark {
@@ -150,7 +260,7 @@ class AppRadii {
   static const header = 22.0;
 
   /// Floating composer shell — softer than a docked bar.
-  static const composerFloat = 28.0;
+  static const composerFloat = 32.0;
   static const pill = 999.0;
 
   /// Soft chat bubbles (Claude / iMessage-like).
@@ -164,10 +274,14 @@ class AppRadii {
   static const sheetTop = 22.0;
 }
 
-/// Shared recipe for option rows inside modal pickers (permission mode,
-/// sandbox mode, engine choice). 48pt icon seat, title + description two-level
-/// hierarchy, far-end check, one corner value. Rows are what makes pickers
-/// read as "designed" versus a settings-list pasted into a sheet.
+/// Shared recipe for one-shot option rows (session engine choice, settings):
+/// 36pt icon seat, title + description two-level hierarchy, far-end check, one
+/// corner value. Rows are what makes pickers read as "designed" versus a
+/// settings-list pasted into a sheet.
+///
+/// [ConversationOptionSheet] keeps its own row instead: those options carry
+/// longer descriptions and a live catalogue, so it uses a radio indicator and a
+/// taller seat.
 class AppOptionRow extends StatelessWidget {
   const AppOptionRow({
     super.key,
@@ -194,99 +308,129 @@ class AppOptionRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     final active = enabled && onTap != null;
-    final accent = danger ? AppColors.danger : AppColors.accentStrong;
+    final accent = danger ? palette.danger : palette.accentStrong;
     final borderRadius = BorderRadius.circular(AppRadii.control);
     return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.only(bottom: 3),
       child: Semantics(
         selected: selected,
         enabled: active,
         button: true,
-        child: Material(
-          color: selected ? AppColors.composerControlFill : AppColors.surface,
-          borderRadius: borderRadius,
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: active ? onTap : null,
+        child: Container(
+          decoration: BoxDecoration(
+            color: selected ? palette.composerControlFill : Colors.transparent,
             borderRadius: borderRadius,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              child: Row(
-                children: [
-                  if (boxedLeading)
-                    SizedBox.square(
-                      dimension: AppSizes.iconControl,
-                      child: DecoratedBox(
-                        decoration: BoxDecoration(
-                          color: selected
-                              ? AppColors.surfaceElevated
-                              : AppColors.control,
-                          borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: selected
+                  ? palette.accent.withValues(alpha: 0.22)
+                  : Colors.transparent,
+              width: 1,
+            ),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: borderRadius,
+            clipBehavior: Clip.antiAlias,
+            child: InkWell(
+              onTap: active ? onTap : null,
+              borderRadius: borderRadius,
+              splashColor: palette.accent.withValues(alpha: 0.08),
+              highlightColor: palette.accent.withValues(alpha: 0.04),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                child: Row(
+                  children: [
+                    if (boxedLeading)
+                      SizedBox.square(
+                        dimension: AppSizes.iconControl,
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: selected
+                                ? palette.surfaceElevated
+                                : palette.control.withValues(alpha: 0.6),
+                            borderRadius: BorderRadius.circular(10),
+                            border: selected
+                                ? Border.all(
+                                    color: palette.accent.withValues(
+                                      alpha: 0.15,
+                                    ),
+                                    width: 1,
+                                  )
+                                : null,
+                          ),
+                          child: Center(
+                            child: IconTheme(
+                              data: IconThemeData(
+                                size: AppIconSizes.control,
+                                color: !enabled
+                                    ? palette.inactive
+                                    : (selected || danger
+                                          ? accent
+                                          : palette.muted),
+                              ),
+                              child: leading ?? const Icon(LucideIcons.circle),
+                            ),
+                          ),
                         ),
+                      )
+                    else
+                      SizedBox(
+                        width: 24,
                         child: Center(
-                          child: IconTheme(
-                            data: IconThemeData(
-                              size: 20,
-                              color: !enabled
-                                  ? AppColors.inactive
-                                  : (selected || danger
-                                        ? accent
-                                        : AppColors.muted),
-                            ),
-                            child: leading ?? const Icon(LucideIcons.circle),
-                          ),
+                          child:
+                              leading ??
+                              Icon(
+                                LucideIcons.circle,
+                                size: AppMark.size,
+                                color: palette.muted,
+                              ),
                         ),
                       ),
-                    )
-                  else
-                    SizedBox(
-                      width: 20,
-                      child: Center(
-                        child:
-                            leading ??
-                            Icon(
-                              LucideIcons.circle,
-                              size: AppMark.size,
-                              color: AppColors.muted,
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: selected
+                                  ? FontWeight.w700
+                                  : FontWeight.w600,
+                              letterSpacing: -0.15,
+                              color: enabled ? palette.ink : palette.inactive,
                             ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            description,
+                            style: TextStyle(
+                              fontSize: 12,
+                              height: 1.35,
+                              color: selected
+                                  ? palette.ink.withValues(alpha: 0.72)
+                                  : palette.muted,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  SizedBox(width: boxedLeading ? 12 : 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          title,
-                          style: TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            letterSpacing: -0.15,
-                            color: enabled ? AppColors.ink : AppColors.inactive,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          description,
-                          style: const TextStyle(
-                            fontSize: 12,
-                            height: 1.35,
-                            color: AppColors.muted,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  if (selected)
-                    Icon(LucideIcons.check, size: 20, color: accent)
-                  else if (showDisclosure)
-                    const Icon(
-                      LucideIcons.chevronRight,
-                      size: 18,
-                      color: AppColors.inactive,
-                    ),
-                ],
+                    if (selected)
+                      Icon(LucideIcons.check, size: AppIconSizes.control, color: accent)
+                    else if (showDisclosure)
+                      Icon(
+                        LucideIcons.chevronRight,
+                        size: AppIconSizes.control,
+                        color: palette.inactive,
+                      ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -307,27 +451,36 @@ class AppOptionSheetHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Align(
+          alignment: Alignment.center,
+          child: Container(
+            width: 32,
+            height: 4,
+            margin: const EdgeInsets.only(bottom: 12),
+            decoration: BoxDecoration(
+              color: palette.lineStrong.withValues(alpha: 0.6),
+              borderRadius: BorderRadius.circular(AppRadii.pill),
+            ),
+          ),
+        ),
         Text(
           title,
-          style: const TextStyle(
+          style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.w700,
             letterSpacing: -0.3,
-            color: AppColors.ink,
+            color: palette.ink,
           ),
         ),
         if (detail != null) ...[
           const SizedBox(height: 4),
           Text(
             detail!,
-            style: const TextStyle(
-              fontSize: 12,
-              height: 1.4,
-              color: AppColors.muted,
-            ),
+            style: TextStyle(fontSize: 12, height: 1.4, color: palette.muted),
           ),
         ],
       ],
@@ -335,136 +488,138 @@ class AppOptionSheetHeader extends StatelessWidget {
   }
 }
 
-/// Neutral material lift: pure black rings adapt to cool glass surfaces.
 class AppElevation {
-  /// Neutral ring + quiet lift for interactive cards on light surfaces.
-  static List<BoxShadow> surfaceCard() => const [
-    BoxShadow(color: Color(0x0F000000), spreadRadius: 1),
+  static Color _shadowColor(BuildContext? context, double alpha) {
+    final dark =
+        context != null && AppPalette.of(context).brightness == Brightness.dark;
+    return Colors.black.withValues(alpha: dark ? alpha * 0.75 : alpha);
+  }
+
+  static List<BoxShadow> surfaceCard({
+    BuildContext? context,
+    bool pressed = false,
+  }) => [
     BoxShadow(
-      color: Color(0x0F000000),
+      color: _shadowColor(context, pressed ? 0.025 : 0.035),
       blurRadius: 2,
-      offset: Offset(0, 1),
-      spreadRadius: -1,
+      offset: const Offset(0, 1),
     ),
-    BoxShadow(color: Color(0x0A000000), blurRadius: 4, offset: Offset(0, 2)),
-  ];
-
-  static List<BoxShadow> floatingOverlay() => const [
-    BoxShadow(color: Color(0x12000000), spreadRadius: 1),
     BoxShadow(
-      color: Color(0x22000000),
-      blurRadius: 30,
-      offset: Offset(0, 14),
-      spreadRadius: -8,
+      color: _shadowColor(context, pressed ? 0.025 : 0.045),
+      blurRadius: pressed ? 6 : 12,
+      offset: Offset(0, pressed ? 1 : 3),
+      spreadRadius: -4,
     ),
   ];
 
-  static List<BoxShadow> softCard({double alpha = 0.07}) => [
+  static List<BoxShadow> stopControl({
+    BuildContext? context,
+    bool pressed = false,
+  }) => [
     BoxShadow(
-      color: Colors.black.withValues(alpha: alpha),
+      color: (context == null ? AppPalette.light : AppPalette.of(context))
+          .stopGlow,
+      blurRadius: 8,
+      offset: const Offset(0, 2),
+    ),
+    BoxShadow(
+      color: _shadowColor(context, 0.08),
+      blurRadius: 2,
+      offset: const Offset(0, 1),
+    ),
+  ];
+
+  static List<BoxShadow> floatingOverlay({BuildContext? context}) => [
+    BoxShadow(
+      color: _shadowColor(context, 0.04),
+      blurRadius: 3,
+      offset: const Offset(0, 1),
+    ),
+    BoxShadow(
+      color: _shadowColor(context, 0.09),
+      blurRadius: 28,
+      offset: const Offset(0, 10),
+      spreadRadius: -6,
+    ),
+  ];
+
+  static List<BoxShadow> softCard({
+    BuildContext? context,
+    double alpha = 0.07,
+  }) => [
+    BoxShadow(
+      color: _shadowColor(context, alpha),
       blurRadius: 18,
       offset: const Offset(0, 6),
       spreadRadius: -4,
     ),
   ];
 
-  // No per-bubble shadow: N soft blurs while scrolling is a common FPS killer.
-  static List<BoxShadow> softBubble({double alpha = 0.05}) => const [];
+  static List<BoxShadow> softBubble({
+    BuildContext? context,
+    double alpha = 0.05,
+  }) => const [];
 
-  static List<BoxShadow> liquidThin({bool pressed = false}) => pressed
-      ? const [
-          BoxShadow(color: Color(0x0A000000), spreadRadius: 1),
-          BoxShadow(
-            color: Color(0x0A000000),
-            blurRadius: 2,
-            offset: Offset(0, 1),
-            spreadRadius: -1,
-          ),
-          BoxShadow(
-            color: Color(0x0D000000),
-            blurRadius: 7,
-            offset: Offset(0, 3),
-            spreadRadius: -3,
-          ),
-        ]
-      : const [
-          BoxShadow(color: Color(0x0F000000), spreadRadius: 1),
-          BoxShadow(
-            color: Color(0x0D000000),
-            blurRadius: 3,
-            offset: Offset(0, 1),
-            spreadRadius: -1,
-          ),
-          BoxShadow(
-            color: Color(0x12000000),
-            blurRadius: 12,
-            offset: Offset(0, 5),
-            spreadRadius: -4,
-          ),
-        ];
+  static List<BoxShadow> liquidThin({
+    BuildContext? context,
+    bool pressed = false,
+  }) => [
+    BoxShadow(
+      color: _shadowColor(context, pressed ? 0.025 : 0.035),
+      blurRadius: 2,
+      offset: const Offset(0, 1),
+    ),
+    BoxShadow(
+      color: _shadowColor(context, pressed ? 0.035 : 0.055),
+      blurRadius: pressed ? 7 : 12,
+      offset: Offset(0, pressed ? 1 : 3),
+      spreadRadius: -4,
+    ),
+  ];
 
-  static List<BoxShadow> liquidStrong({bool pressed = false}) => pressed
-      ? const [
-          BoxShadow(color: Color(0x0D000000), spreadRadius: 1),
-          BoxShadow(
-            color: Color(0x0D000000),
-            blurRadius: 2,
-            offset: Offset(0, 1),
-            spreadRadius: -1,
-          ),
-          BoxShadow(
-            color: Color(0x14000000),
-            blurRadius: 10,
-            offset: Offset(0, 4),
-            spreadRadius: -4,
-          ),
-        ]
-      : const [
-          BoxShadow(color: Color(0x0F000000), spreadRadius: 1),
-          BoxShadow(
-            color: Color(0x0F000000),
-            blurRadius: 3,
-            offset: Offset(0, 1),
-            spreadRadius: -1,
-          ),
-          BoxShadow(
-            color: Color(0x1A000000),
-            blurRadius: 20,
-            offset: Offset(0, 8),
-            spreadRadius: -6,
-          ),
-        ];
+  static List<BoxShadow> liquidStrong({
+    BuildContext? context,
+    bool pressed = false,
+  }) => [
+    BoxShadow(
+      color: _shadowColor(context, pressed ? 0.03 : 0.045),
+      blurRadius: 3,
+      offset: const Offset(0, 1),
+    ),
+    BoxShadow(
+      color: _shadowColor(context, pressed ? 0.04 : 0.065),
+      blurRadius: pressed ? 10 : 18,
+      offset: Offset(0, pressed ? 2 : 5),
+      spreadRadius: -4,
+    ),
+  ];
 }
 
 class AppLiquidGlass {
   static const thinBackdropGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xA8FFFFFF), Color(0x66F7F8FA), Color(0x42E9ECEF)],
+    colors: [Color(0xEAFFFFFF), Color(0xDDFDFDFD), Color(0xD4F6F6F6)],
     stops: [0, 0.58, 1],
   );
-
   static const thinBackdropPressedGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0x8CFFFFFF), Color(0x5CF7F8FA), Color(0x4AE4E7EA)],
+    colors: [Color(0xE5FCFCFC), Color(0xD9FAFAFA), Color(0xD4F2F2F2)],
     stops: [0, 0.48, 1],
   );
-
   static const strongBackdropGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xB8FFFFFF), Color(0x7AF7F8FA), Color(0x55E9ECEF)],
+    colors: [Color(0xF5FFFFFF), Color(0xEDFFFFFF), Color(0xE6FAFAFA)],
     stops: [0, 0.54, 1],
   );
-
   static const strongBackdropPressedGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xA6FFFFFF), Color(0x70F7F8FA), Color(0x5CE4E7EA)],
+    colors: [Color(0xF0FCFCFC), Color(0xE9FBFBFB), Color(0xE2F6F6F6)],
     stops: [0, 0.44, 1],
   );
-
   static const thinGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
@@ -475,14 +630,12 @@ class AppLiquidGlass {
     ],
     stops: [0, 0.62, 1],
   );
-
   static const thinPressedGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xE2FFFFFF), AppColors.liquidThinBody, Color(0xD8E7EEF4)],
+    colors: [Color(0xF4FCFCFC), AppColors.liquidThinBody, Color(0xEFF2F2F2)],
     stops: [0, 0.34, 1],
   );
-
   static const strongGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
@@ -493,67 +646,79 @@ class AppLiquidGlass {
     ],
     stops: [0, 0.52, 1],
   );
-
   static const strongPressedGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xF4FFFFFF), AppColors.liquidStrongBody, Color(0xF0EDF2F6)],
+    colors: [Color(0xF8FCFCFC), AppColors.liquidStrongBody, Color(0xF2F6F6F6)],
     stops: [0, 0.30, 1],
   );
 
+  static LinearGradient _forPalette(
+    LinearGradient gradient,
+    AppPalette palette,
+  ) {
+    if (palette.brightness == Brightness.light) return gradient;
+    const tones = [Color(0xFF323232), Color(0xFF2C2C2C), Color(0xFF282828)];
+    return LinearGradient(
+      begin: gradient.begin,
+      end: gradient.end,
+      stops: gradient.stops,
+      colors: [
+        for (var i = 0; i < tones.length; i++)
+          tones[i].withValues(alpha: gradient.colors[i].a),
+      ],
+    );
+  }
+
   static BoxDecoration thin({
+    BuildContext? context,
     BorderRadius? borderRadius,
     BoxShape shape = BoxShape.rectangle,
     bool pressed = false,
     bool elevated = true,
     bool backdrop = false,
   }) {
+    final palette = context == null ? AppPalette.light : AppPalette.of(context);
+    final gradient = backdrop
+        ? (pressed ? thinBackdropPressedGradient : thinBackdropGradient)
+        : (pressed ? thinPressedGradient : thinGradient);
     return BoxDecoration(
-      gradient: backdrop
-          ? pressed
-                ? thinBackdropPressedGradient
-                : thinBackdropGradient
-          : pressed
-          ? thinPressedGradient
-          : thinGradient,
+      gradient: _forPalette(gradient, palette),
       borderRadius: shape == BoxShape.rectangle ? borderRadius : null,
       shape: shape,
+      border: Border.all(color: palette.glassHighlight, width: 0.5),
       boxShadow: elevated
-          ? AppElevation.liquidThin(pressed: pressed)
+          ? AppElevation.liquidThin(context: context, pressed: pressed)
           : const [],
     );
   }
 
   static BoxDecoration strong({
+    BuildContext? context,
     BorderRadius? borderRadius,
     bool pressed = false,
     bool focused = false,
     bool elevated = true,
     bool backdrop = false,
   }) {
+    final palette = context == null ? AppPalette.light : AppPalette.of(context);
+    final gradient = backdrop
+        ? (pressed ? strongBackdropPressedGradient : strongBackdropGradient)
+        : (pressed ? strongPressedGradient : strongGradient);
     return BoxDecoration(
-      gradient: backdrop
-          ? pressed
-                ? strongBackdropPressedGradient
-                : strongBackdropGradient
-          : pressed
-          ? strongPressedGradient
-          : strongGradient,
-      border: focused
-          ? Border.all(color: AppColors.liquidFocus, width: 2)
-          : null,
+      gradient: _forPalette(gradient, palette),
+      border: Border.all(
+        color: focused ? palette.liquidFocus : palette.glassHighlight,
+        width: focused ? 2 : 0.5,
+      ),
       borderRadius: borderRadius,
       boxShadow: elevated
-          ? AppElevation.liquidStrong(pressed: pressed)
+          ? AppElevation.liquidStrong(context: context, pressed: pressed)
           : const [],
     );
   }
 }
 
-// Glass surfaces rebuild constantly (stream flushes, press animations, panel
-// timers). Reusing one immutable filter per sigma keeps the identical-instance
-// check in RenderBackdropFilter quiet, so an unchanged surface is not marked
-// for paint — and not re-blurred — on unrelated rebuilds.
 final Map<double, ui.ImageFilter> _blurFiltersBySigma = {};
 
 ui.ImageFilter _blurFilterFor(double sigma) => _blurFiltersBySigma.putIfAbsent(
@@ -575,25 +740,26 @@ class SignalLiquidGlass extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final material = BackdropFilter.grouped(
+    final surface = DecoratedBox(
+      decoration: decoration.copyWith(boxShadow: const []),
+      child: child,
+    );
+    final blurred = BackdropFilter.grouped(
       filter: _blurFilterFor(blurSigma),
-      child: DecoratedBox(
-        decoration: decoration.copyWith(boxShadow: const []),
-        child: child,
-      ),
+      child: surface,
     );
     final clipped = decoration.shape == BoxShape.circle
-        ? ClipOval(child: material)
+        ? ClipOval(child: blurred)
         : ClipRRect(
             borderRadius: decoration.borderRadius ?? BorderRadius.zero,
-            child: material,
+            child: blurred,
           );
     return DecoratedBox(
       decoration: BoxDecoration(
-        shape: decoration.shape,
         borderRadius: decoration.shape == BoxShape.rectangle
             ? decoration.borderRadius
             : null,
+        shape: decoration.shape,
         boxShadow: decoration.boxShadow,
       ),
       child: clipped,
@@ -671,24 +837,25 @@ Duration appPressAnimationDuration(BuildContext context, bool pressed) {
 // This scrim repaints only itself, so opening a sheet costs compositing, not a
 // full-screen re-raster.
 class SheetScrim extends StatelessWidget {
-  const SheetScrim({super.key, this.color = AppColors.scrim, this.onTap});
+  const SheetScrim({super.key, this.color, this.onTap});
 
-  final Color color;
+  final Color? color;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final animation = ModalRoute.of(context)?.animation;
+    final scrim = color ?? AppPalette.of(context).scrim;
     final Widget layer;
     if (animation == null || animation.value >= 1) {
-      layer = ColoredBox(color: color);
+      layer = ColoredBox(color: scrim);
     } else if (animation.value <= 0) {
       layer = const SizedBox.expand();
     } else {
       layer = AnimatedBuilder(
         animation: animation,
         builder: (context, _) => ColoredBox(
-          color: color.withValues(alpha: color.a * animation.value),
+          color: scrim.withValues(alpha: scrim.a * animation.value),
         ),
       );
     }
@@ -709,7 +876,7 @@ class SheetScrim extends StatelessWidget {
 /// with `barrierColor: Colors.transparent` on the route.
 Widget appModalSheetScaffold(
   Widget sheet, {
-  Color barrierColor = Colors.black54,
+  Color? barrierColor,
   VoidCallback? onBarrierTap,
 }) {
   return Stack(
@@ -851,22 +1018,39 @@ class _ReducedMotionPageTransitionsBuilder extends PageTransitionsBuilder {
   }
 }
 
-ThemeData buildSignalConsoleTheme() {
+ThemeData buildSignalConsoleTheme([Brightness brightness = Brightness.light]) {
+  final palette = brightness == Brightness.dark
+      ? AppPalette.dark
+      : AppPalette.light;
   final scheme =
       ColorScheme.fromSeed(
-        seedColor: AppColors.accent,
-        brightness: Brightness.light,
+        seedColor: palette.accent,
+        brightness: brightness,
       ).copyWith(
-        primary: AppColors.cta,
-        onPrimary: AppColors.onCta,
-        secondary: AppColors.accentStrong,
-        onSecondary: AppColors.onCta,
-        surface: AppColors.surface,
-        onSurface: AppColors.ink,
-        error: AppColors.danger,
-        outline: AppColors.lineStrong,
-        outlineVariant: AppColors.line,
-        surfaceContainerHighest: AppColors.control,
+        primary: palette.cta,
+        onPrimary: palette.onCta,
+        secondary: palette.accentStrong,
+        onSecondary: palette.onCta,
+        primaryContainer: palette.accentSoft,
+        onPrimaryContainer: palette.ink,
+        secondaryContainer: palette.accentSoft,
+        onSecondaryContainer: palette.ink,
+        tertiary: palette.accent,
+        onTertiary: palette.onCta,
+        tertiaryContainer: palette.control,
+        onTertiaryContainer: palette.ink,
+        surface: palette.surface,
+        onSurface: palette.ink,
+        error: palette.danger,
+        onError: palette.onStop,
+        outline: palette.lineStrong,
+        outlineVariant: palette.line,
+        surfaceTint: Colors.transparent,
+        surfaceContainerLowest: palette.surface,
+        surfaceContainerLow: palette.surface,
+        surfaceContainer: palette.surface,
+        surfaceContainerHigh: palette.control,
+        surfaceContainerHighest: palette.control,
       );
 
   TextStyle signalText(
@@ -875,10 +1059,10 @@ ThemeData buildSignalConsoleTheme() {
     required FontWeight weight,
     required double height,
     double letterSpacing = 0,
-    Color color = AppColors.ink,
+    Color? color,
   }) {
     return (base ?? const TextStyle()).copyWith(
-      color: color,
+      color: color ?? palette.ink,
       fontSize: size,
       fontWeight: weight,
       height: height,
@@ -974,7 +1158,7 @@ ThemeData buildSignalConsoleTheme() {
       size: 12,
       weight: FontWeight.w400,
       height: 1.35,
-      color: AppColors.muted,
+      color: palette.muted,
     ),
     labelLarge: signalText(
       materialText.labelLarge,
@@ -1000,6 +1184,7 @@ ThemeData buildSignalConsoleTheme() {
   );
 
   return ThemeData(
+    brightness: brightness,
     useMaterial3: true,
     splashFactory: InkSparkle.splashFactory,
     pageTransitionsTheme: const PageTransitionsTheme(
@@ -1025,38 +1210,39 @@ ThemeData buildSignalConsoleTheme() {
       },
     ),
     colorScheme: scheme,
-    scaffoldBackgroundColor: AppColors.paper,
+    scaffoldBackgroundColor: palette.paper,
+    cardTheme: CardThemeData(
+      color: palette.surface,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+    ),
     textTheme: textTheme,
     primaryTextTheme: textTheme,
     appBarTheme: AppBarTheme(
       backgroundColor: Colors.transparent,
-      foregroundColor: AppColors.ink,
+      foregroundColor: palette.ink,
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       titleTextStyle: textTheme.titleLarge,
     ),
-    iconTheme: const IconThemeData(color: AppColors.ink, size: 21),
-    dividerTheme: const DividerThemeData(
-      color: AppColors.line,
-      thickness: 1,
-      space: 1,
-    ),
+    iconTheme: IconThemeData(color: palette.ink, size: AppIconSizes.control),
+    dividerTheme: DividerThemeData(color: palette.line, thickness: 1, space: 1),
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: AppColors.control,
-      hintStyle: textTheme.bodyMedium?.copyWith(color: AppColors.muted),
+      fillColor: palette.control,
+      hintStyle: textTheme.bodyMedium?.copyWith(color: palette.muted),
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(AppRadii.control),
-        borderSide: const BorderSide(color: AppColors.line),
+        borderSide: BorderSide(color: palette.line),
       ),
       enabledBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(AppRadii.control),
-        borderSide: const BorderSide(color: AppColors.line),
+        borderSide: BorderSide(color: palette.line),
       ),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(AppRadii.control),
-        borderSide: const BorderSide(color: AppColors.accentStrong, width: 1.4),
+        borderSide: BorderSide(color: palette.accentStrong, width: 1.4),
       ),
     ),
     filledButtonTheme: FilledButtonThemeData(
@@ -1079,7 +1265,7 @@ ThemeData buildSignalConsoleTheme() {
         ),
         overlayColor: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.pressed)) {
-            return Colors.white.withValues(alpha: 0.13);
+            return palette.onCta.withValues(alpha: 0.13);
           }
           return null;
         }),
@@ -1091,9 +1277,7 @@ ThemeData buildSignalConsoleTheme() {
         minimumSize: const WidgetStatePropertyAll(
           Size(AppSizes.touchTarget, AppSizes.touchTarget),
         ),
-        side: const WidgetStatePropertyAll(
-          BorderSide(color: AppColors.lineStrong),
-        ),
+        side: WidgetStatePropertyAll(BorderSide(color: palette.lineStrong)),
         shape: WidgetStatePropertyAll(
           RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(AppRadii.control),
@@ -1108,7 +1292,7 @@ ThemeData buildSignalConsoleTheme() {
         ),
         overlayColor: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.pressed)) {
-            return AppColors.accent.withValues(alpha: 0.08);
+            return palette.accent.withValues(alpha: 0.08);
           }
           return null;
         }),
@@ -1122,25 +1306,27 @@ ThemeData buildSignalConsoleTheme() {
         ),
         foregroundColor: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.disabled)) {
-            return AppColors.muted.withValues(alpha: 0.42);
+            return palette.muted.withValues(alpha: 0.42);
           }
-          return AppColors.ink;
+          return palette.ink;
         }),
         overlayColor: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.pressed)) {
-            return AppColors.accent.withValues(alpha: 0.10);
+            return palette.accent.withValues(alpha: 0.10);
           }
           return null;
         }),
       ),
     ),
-    bottomSheetTheme: const BottomSheetThemeData(
-      backgroundColor: AppColors.glassStrong,
+    bottomSheetTheme: BottomSheetThemeData(
+      backgroundColor: palette.surface,
       surfaceTintColor: Colors.transparent,
-      modalBackgroundColor: AppColors.glassStrong,
-      modalBarrierColor: AppColors.scrim,
+      elevation: 0,
+      modalElevation: 0,
+      modalBackgroundColor: palette.surface,
+      modalBarrierColor: palette.scrim,
       showDragHandle: true,
-      dragHandleColor: AppColors.lineStrong,
+      dragHandleColor: palette.lineStrong,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(
           top: Radius.circular(AppRadii.header),
@@ -1148,10 +1334,9 @@ ThemeData buildSignalConsoleTheme() {
       ),
     ),
     popupMenuTheme: PopupMenuThemeData(
-      color: AppColors.glassStrong,
+      color: palette.surface,
       surfaceTintColor: Colors.transparent,
-      elevation: 6,
-      shadowColor: const Color(0x24000000),
+      elevation: 0,
       textStyle: textTheme.bodyMedium,
       labelTextStyle: WidgetStatePropertyAll(textTheme.bodyMedium),
       position: PopupMenuPosition.under,
@@ -1160,17 +1345,19 @@ ThemeData buildSignalConsoleTheme() {
       ),
       menuPadding: const EdgeInsets.symmetric(vertical: 8),
     ),
-    dialogTheme: const DialogThemeData(
-      backgroundColor: AppColors.glassStrong,
+    dialogTheme: DialogThemeData(
+      backgroundColor: palette.surface,
       surfaceTintColor: Colors.transparent,
+      elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.all(Radius.circular(AppRadii.surface)),
       ),
     ),
     snackBarTheme: SnackBarThemeData(
-      backgroundColor: AppColors.ink,
-      contentTextStyle: textTheme.bodyMedium?.copyWith(color: Colors.white),
+      backgroundColor: palette.ink,
+      contentTextStyle: textTheme.bodyMedium?.copyWith(color: palette.paper),
       behavior: SnackBarBehavior.floating,
+      elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(AppRadii.control),
       ),
@@ -1274,7 +1461,10 @@ class TaskRailFrame extends StatelessWidget {
                 decoration: BoxDecoration(
                   color: color,
                   shape: BoxShape.circle,
-                  border: Border.all(color: AppColors.porcelain, width: 2),
+                  border: Border.all(
+                    color: AppPalette.of(context).porcelain,
+                    width: 2,
+                  ),
                 ),
               ),
             ),

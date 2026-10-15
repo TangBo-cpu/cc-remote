@@ -49,6 +49,22 @@ test('local register accepts loopback Host with a valid control token', async ()
   assert.equal(body.ok, true);
 });
 
+test('local register returns 400 when the workspace path does not exist', async () => {
+  const token = await localControlToken();
+  const missing = join(daemon.root, 'missing-project');
+  const response = await fetch(`${daemon.baseUrl}/api/local/projects/register`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-cc-remote-local-token': token,
+    },
+    body: JSON.stringify({ path: missing }),
+  });
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'workspace_not_found' });
+});
+
 test('local register rejects public Host even with a valid control token', async () => {
   const token = await localControlToken();
   const url = new URL(daemon.baseUrl);
@@ -67,6 +83,79 @@ test('local register rejects public Host even with a valid control token', async
 
   assert.equal(response.statusCode, 403);
   assert.deepEqual(JSON.parse(response.body), { error: 'local_only' });
+});
+
+test('desktop control routes reject missing tokens, public hosts, and foreign origins', async () => {
+  for (const [method, path] of [
+    ['GET', '/api/local/status'],
+    ['POST', '/api/local/pairing'],
+    ['POST', '/api/local/shutdown'],
+  ]) {
+    const missingToken = await fetch(daemon.baseUrl + path, { method });
+    assert.equal(missingToken.status, 401);
+    const token = await localControlToken();
+    const url = new URL(daemon.baseUrl);
+    const publicRequest = await rawJsonRequest({
+      hostname: url.hostname,
+      port: Number(url.port),
+      method,
+      path,
+      headers: { Host: daemon.publicHost, 'x-cc-remote-local-token': token },
+    });
+    assert.equal(publicRequest.statusCode, 403);
+    const foreignOrigin = await fetch(daemon.baseUrl + path, {
+      method,
+      headers: { Origin: 'https://attacker.example', 'x-cc-remote-local-token': token },
+    });
+    assert.equal(foreignOrigin.status, 403);
+  }
+});
+
+test('desktop pairing refresh preserves the paired token until another device pairs', async () => {
+  const headers = { 'x-cc-remote-local-token': await localControlToken() };
+  const initial = await fetch(`${daemon.baseUrl}/api/local/status`, { headers });
+  const initialStatus = await initial.json() as { paired: boolean; pairing: { payload: { nonce: string }; modules: boolean[][] } };
+  assert.equal(initialStatus.paired, false);
+  assert.ok(initialStatus.pairing.payload.nonce);
+  assert.ok(initialStatus.pairing.modules.length >= 21);
+  assert.ok(initialStatus.pairing.modules.every(row => row.length === initialStatus.pairing.modules.length));
+
+  const refreshed = await fetch(`${daemon.baseUrl}/api/local/pairing`, { method: 'POST', headers });
+  const { payload } = await refreshed.json() as { payload: { nonce: string; expiresAt: number } };
+  assert.notEqual(payload.nonce, initialStatus.pairing.payload.nonce);
+  const obsolete = await fetch(`${daemon.baseUrl}/api/pair`, {
+    method: 'POST',
+    body: JSON.stringify({ nonce: initialStatus.pairing.payload.nonce }),
+  });
+  assert.equal(obsolete.status, 401);
+
+  const paired = await fetch(`${daemon.baseUrl}/api/pair`, {
+    method: 'POST', body: JSON.stringify({ nonce: payload.nonce }),
+  });
+  const { token } = await paired.json() as { token: string };
+  assert.ok(token);
+  const status = await fetch(`${daemon.baseUrl}/api/local/status`, { headers });
+  assert.deepEqual((await status.json() as { pairing: unknown }).pairing, null);
+
+  await fetch(`${daemon.baseUrl}/api/local/pairing`, { method: 'POST', headers });
+  const stillAuthorized = await fetch(`${daemon.baseUrl}/api/status`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(stillAuthorized.status, 200);
+});
+
+test('desktop shutdown exits without deleting pairing state', async () => {
+  const statePath = join(daemon.root, '.data', 'state.json');
+  const stateBefore = JSON.parse(await readFile(statePath, 'utf8')) as { tokenHash: string };
+  const exited = once(daemon.child, 'exit');
+  const response = await fetch(`${daemon.baseUrl}/api/local/shutdown`, {
+    method: 'POST',
+    headers: { 'x-cc-remote-local-token': await localControlToken() },
+  });
+  assert.equal(response.status, 200);
+  await exited;
+  const stateAfter = JSON.parse(await readFile(statePath, 'utf8')) as { tokenHash: string };
+  assert.equal(stateAfter.tokenHash, stateBefore.tokenHash);
 });
 
 async function localControlToken(): Promise<string> {
@@ -139,6 +228,7 @@ async function findFreePort(): Promise<number> {
 }
 
 function rawJsonRequest(options: {
+  method?: string;
   hostname: string;
   port: number;
   path: string;
@@ -150,7 +240,7 @@ function rawJsonRequest(options: {
       hostname: options.hostname,
       port: options.port,
       path: options.path,
-      method: 'POST',
+      method: options.method || 'POST',
       headers: options.headers,
       agent: false,
     }, response => {

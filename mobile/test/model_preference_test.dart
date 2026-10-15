@@ -32,4 +32,27 @@ void main() {
       );
     },
   );
+
+  test(
+    'Codex model preference is independent of Claude and can be cleared',
+    () async {
+      final claude = ClaudeModelPreferenceStore();
+      final codex = CodexModelPreferenceStore();
+      expect(await codex.load(), isNull);
+      await claude.save(ClaudeModelPreference.opus);
+      await codex.save('gpt-test-codex');
+      expect(await codex.load(), 'gpt-test-codex');
+      expect(await claude.load(), ClaudeModelPreference.opus);
+      await codex.save(null);
+      expect(await codex.load(), isNull);
+      expect(await claude.load(), ClaudeModelPreference.opus);
+    },
+  );
+
+  test('invalid stored Codex model follows the computer', () async {
+    FlutterSecureStorage.setMockInitialValues({
+      CodexModelPreferenceStore.key: 'invalid model\n--flag',
+    });
+    expect(await CodexModelPreferenceStore().load(), isNull);
+  });
 }

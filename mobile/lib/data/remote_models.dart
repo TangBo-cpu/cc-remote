@@ -191,6 +191,11 @@ enum SessionEngine {
   final String wireName;
   final String label;
 
+  String get displayName => switch (this) {
+    SessionEngine.claude => 'Claude Code',
+    SessionEngine.codex => 'Codex',
+  };
+
   static SessionEngine fromWire(Object? value) {
     return values.firstWhere(
       (engine) => engine.wireName == value,
@@ -478,7 +483,7 @@ class RemoteTranscriptSnapshot {
     required this.messages,
     required this.permissionMode,
     required this.pendingPermissions,
-    this.codexSandboxMode = CodexSandboxMode.readOnly,
+    this.codexSandboxMode = CodexSandboxMode.dangerFullAccess,
     this.stopping = false,
     this.runId,
     this.startedAt,
@@ -560,6 +565,7 @@ class TranscriptSnapshot {
   const TranscriptSnapshot({
     required this.messages,
     required this.running,
+    this.sessionId,
     this.modelName,
     this.contextWindow,
     this.remainingContext,
@@ -568,6 +574,7 @@ class TranscriptSnapshot {
   static const schemaVersion = 1;
   final List<TranscriptMessage> messages;
   final bool running;
+  final String? sessionId;
   final String? modelName;
   final int? contextWindow;
   final int? remainingContext;
@@ -575,6 +582,7 @@ class TranscriptSnapshot {
   Map<String, dynamic> toJson() {
     return {
       'version': schemaVersion,
+      'sessionId': sessionId,
       'running': running,
       'modelName': modelName,
       'contextWindow': contextWindow,
@@ -592,6 +600,7 @@ class TranscriptSnapshot {
       throw const FormatException('bad_transcript_snapshot');
     }
     return TranscriptSnapshot(
+      sessionId: json['sessionId'] as String?,
       running: json['running'] == true,
       modelName: json['modelName'] as String?,
       contextWindow: (json['contextWindow'] as num?)?.toInt(),
@@ -616,6 +625,7 @@ class TranscriptMessage {
     this.activityState,
     this.activityTool,
     this.activityDetail,
+    this.activityDurationMs,
   });
 
   factory TranscriptMessage.user(
@@ -633,6 +643,7 @@ class TranscriptMessage {
     required ActivityState state,
     String? tool,
     String? detail,
+    int? durationMs,
   }) => TranscriptMessage(
     MessageRole.activity,
     text,
@@ -641,6 +652,7 @@ class TranscriptMessage {
     activityState: state,
     activityTool: tool,
     activityDetail: detail,
+    activityDurationMs: durationMs,
   );
 
   final MessageRole role;
@@ -651,6 +663,7 @@ class TranscriptMessage {
   final ActivityState? activityState;
   final String? activityTool;
   final String? activityDetail;
+  final int? activityDurationMs;
 
   Map<String, dynamic> toJson() {
     return {
@@ -665,6 +678,7 @@ class TranscriptMessage {
       if (activityState != null) 'activityState': activityState!.name,
       if (activityTool != null) 'activityTool': activityTool,
       if (activityDetail != null) 'activityDetail': activityDetail,
+      if (activityDurationMs != null) 'activityDurationMs': activityDurationMs,
     };
   }
 
@@ -709,6 +723,7 @@ class TranscriptMessage {
       state: state.first,
       tool: json['activityTool'] as String?,
       detail: json['activityDetail'] as String?,
+      durationMs: (json['activityDurationMs'] as num?)?.toInt(),
     );
   }
 }

@@ -4,31 +4,31 @@
 
 Flutter App 是产品主入口。当前实现集中在少量文件中，优先保证状态一致、断线可恢复和真机布局稳定。
 
-当前开发代码已实现 Cool Glass 主界面，视觉规范以根目录 `DESIGN.md` 和 `docs/mobile-ui-app-design.md` 为准。界面改造保持本节描述的协议与状态行为，不把尚无数据来源的文案写成事实。
+当前开发代码使用简洁的浅色 / 深色界面，默认跟随系统；视觉规范以根目录 `DESIGN.md` 和 `docs/mobile-ui-app-design.md` 为准。外观改造保留现有协议与状态行为。
 
 ## 入口与路由
 
-`CcRemoteApp` 创建 Material App 和当前主题。`DemoShell` 持有应用级状态，监听页面前后台变化，并在 `boot`、`pair` 和 `chat` 三个路由之间切换。
+`CcRemoteApp` 使用 `AppearanceController`、`AppearanceScope` 和浅深色 `ThemeData` 创建 Material App。控制器从 Secure Storage 恢复 `ThemeMode`，设置变化即时生效并串行保存，保存失败时恢复原选择。`DemoShell` 持有会话状态，监听页面前后台变化，并在 `boot`、`pair` 和 `chat` 三个路由之间切换；外观切换不替换这个子树。
 
 启动时加载 Secure Storage、通知偏好和本地 transcript。存在已保存 session 时调用 `/api/status`，恢复电脑名、工作区、项目 catalog、活动会话、模型和上下文，再建立 WebSocket。
 
 ## 主要文件
 
-`main.dart` 包含配对、HTTP、WebSocket、项目与会话、transcript、权限模式、主要页面和组件。`signal_console_theme.dart` 包含 Cool Glass 的颜色、字体、圆角、弹层主题、动效和视觉基础部件（含共享 `AppOptionRow`）。`effort_gauge.dart` 实现 Composer 思考强度仪表与系统级模态层。`workspace_drawer.dart` 实现文件树、文件阅读和 Git diff。`attachments.dart` 实现相机、相册、文件选择与 multipart 上传。`notification_service.dart` 封装 Android 本地通知和偏好保存。`reading_font_size.dart` 保存连续阅读字号，默认 `1.0`。
+`main.dart` 包含配对、HTTP、WebSocket、项目与会话、transcript、权限模式、主要页面和组件。`signal_console_theme.dart` 包含 `AppPalette`、浅深色主题、排版、弹层与共享组件。`appearance_preference.dart` 管理外观持久化与系统跟随。`effort_gauge.dart` 实现思考强度仪表与模态层；`workspace_drawer.dart` 实现只读文件树、文件阅读和 Git diff。附件、通知与阅读字号分别由 `attachments.dart`、`notification_service.dart` 和 `reading_font_size.dart` 管理。
 
 ## 页面与组件
 
 `BootstrapScreen` 只显示恢复状态。`PairScreen` 负责相机扫描、紧凑横屏布局和错误恢复。`PairReviewSheet` 在换 token 前确认设备、origin 和二维码有效期。
 
-`ChatScreen` 由 `ConnectionHeader`、可选 `ConsoleStatusStrip`、`TranscriptView` 和 `PromptBar` 组成。`ConnectionHeader` 是分离式紧凑会话头（菜单 + 新建/更多），不在 chrome 内堆连接文案；非 `connected` 相位时在头下方显示 `ConsoleStatusStrip`。模型选择位于输入台。“···”菜单不显示剩余上下文 token，底栏最多保留具有屏读语义的当前模型名。
+`ChatScreen` 采用全高 `Stack` 布局，正文可向上滚动到屏幕最顶部及导航按钮背后。顶部由 `_ChatOverlayLayout` 承载：`ConnectionHeader`（菜单 + 新建/更多）使用独立 `SafeArea`，背板 `_ChatTopBackdrop` 为向下渐隐的单层模糊遮罩，不拦截手势；非 `connected` 相位时在头下方显示 `ConsoleStatusStrip`，断线时显示恢复卡片。`_ChatOverlayLayout` 动态测量遮罩高度并传递给 `TranscriptView.topPadding`，阅读字号缩放不影响导航头与状态卡片。模型选择位于输入台。“···”菜单不显示剩余上下文 token，底栏最多保留具有屏读语义的当前模型名。
 
-`TranscriptView` 展示用户消息、Claude 回复（`AssistantBubbleFrame`：`surfaceElevated` + 细描边，短文本 hug；无标记纯文本用 `Text`，有 Markdown 标记时流式期间即用共享 `MarkdownStyleSheet`）、活动状态、审批卡，以及空状态下的连接中卡 / 离线重连卡 / 已连接快捷芯片。助手 Markdown 链接只接受绝对 `http` / `https` URL，点击后由 `url_launcher` 交给系统浏览器；无效协议保持不可跳转。`MessageBlock` 与附件组件负责历史内容。`ActivityBlock` 合并思考和工具活动，任务结束后清理临时活动。
+`TranscriptView` 展示用户消息、助手回复、活动状态、审批卡和恢复面板。助手正文直接排在页面上，无气泡底色和外围描边；用户消息保留浅灰气泡，搜索命中仍使用临时高亮。初始列表与空状态顶部保留与遮罩高度对齐的 padding；全文搜索跳转通过 `RenderAbstractViewport` 计算并扣除顶部 overlay 遮罩高度，使命中目标停留在导航下方。无标记纯文本用 `Text`，有 Markdown 标记时流式期间即用共享 `MarkdownStyleSheet`。样式缓存按明暗分开，外观改变时重新生成缓存组件。链接只接受绝对 `http` / `https` URL，由系统浏览器打开。代码复制、全文选择和工具折叠继续可用。
 
-`PromptBar` 处理权限模式、附件预览、多行输入、思考强度、模型选择、上下文余量、发送和停止。当前为叠在 transcript 上的 bounded `Liquid Strong` Composer：上方输入，下方工具行依次为圆形附件 `+`、思考强度小仪表、模型胶囊、图标化权限入口、紧凑上下文百分比，以及 `accent` 圆形发送/停止。点击小仪表后页面整体柔焦，只保留悬浮大仪表清晰；沿圆弧滑动吸附低、中、高、超高、最大，点击中心切回自动，松手后写入既有偏好。模型选择器使用共享 `AppOptionRow` sheet 与 Phosphor Fill 身份图标。`+` 只开附件；权限图标点开既有 sheet（含 bypass 二次确认），并保留当前模式的 tooltip / 屏读语义。上下文余量使用无底色浅灰细环，深灰短弧表示已消耗比例，右侧只显示剩余百分比；完整 token 数通过 tooltip / 屏读语义提供，不影响指令建议区高度。输入以 `/` 开头且没有空格时，`CommandSuggestions` 继续按前缀优先规则筛选 daemon 同步的 Claude Code 指令。
+`PromptBar` 使用 32px 圆角、中性玻璃表面和柔和阴影，附件按钮有独立浅灰底座，工具行不使用共同底板。保留附件、思考强度、模型、权限、上下文余量、发送和停止。思考强度模态层保留背景模糊与仪表光层，沿圆弧滑动选择五个手动档位，点击中心回到自动。模型选择器沿用 `AppOptionRow`；权限图标打开既有 sheet 并保留 bypass 二次确认、tooltip 与屏读语义。上下文百分比旁保留细环，完整 token 数在 tooltip 与屏读语义中提供。以 `/` 开头的输入仍按前缀规则筛选 daemon 同步的指令。
 
 `PermissionRequestCard` 为全宽决策面：命令 → 工作目录（`session.workspaceDir` 或 fallback 文案）→ 影响 → 范围 →「仅本次允许」/「拒绝并返回」。
 
-`SessionNavigatorPage` 通过 reduced-motion aware 的 `AppMaterialPageRoute` 进入，正常情况委托 Android predictive back / iOS Cupertino 平台转场，系统减少动态效果时路由时长归零。页面使用白色 `Scaffold`、系统返回、顶部搜索和 38px 视觉圆 / 48px 命中区的新建操作。默认视图展示当前项目会话，保留「所有项目」入口和少量项目快捷项；项目与会话采用纯白画布上的扁平列表，项目行与标题使用同一项目册图标，当前项目以纯蓝渐变选中容器、白色图标和粗体文字强化。项目子视图使用 220ms 横向 shared-axis 淡入、160ms 返回；搜索框在 AppBar 内展开，主体使用轻微缩放淡化，转场后再获取焦点。系统 Back 在子视图先返回会话主页。新建会话时先弹出引擎选择器（Claude / Codex），会话创建后引擎不可更改。搜索使用 300ms 防抖、加载线、匹配片段高亮、项目/角色/匹配数信息和空态/错误态。搜索结果由 daemon 权威 transcript 生成，点击后复用既有会话切换与消息定位契约。`SettingsSheet` 是约 94% 高的 Preference Gallery，聊天背景页复用设置容器，模型选择器使用共享 `AppOptionRow` sheet，`WorkspaceDrawer` 只读显示活动项目文件与 Git diff。所有 bottom sheet / dialog 通过 `appOverlayAnimationStyle` 统一为 220ms 进入 / 160ms 退出，reduced motion 时使用 `AnimationStyle.noAnimation`。
+`SessionNavigatorPage` 使用平台路由与 predictive back，减少动态效果时路由时长归零。当前项目会话、所有项目和全文搜索仍为三个视图；项目与会话使用扁平列表，保留原版 `AppMark.of(id, index)` 彩色会话/项目身份图标与独立蓝色导航强调色（`navigatorAccent`），选中项使用高亮底色与图标提示。新建会话仍先选择 Claude / Codex，引擎创建后不可更改。搜索保留 300ms 防抖、片段高亮、错误重试和命中消息定位。`SettingsSheet` 使用扁平分组，提供外观、模型、字号与通知；外观只有跟随系统、浅色和深色，壁纸与偏好预览已移除。`WorkspaceDrawer` 只读展示活动项目的文件与 Git diff。Bottom sheet / dialog 保留 220ms 进入 / 160ms 退出，减少动态效果时关闭空间转场。
 
 chrome 使用 `lucide_icons_flutter`；会话、项目与模型身份标记使用 `phosphor_icons` Fill。主题不打包自定义字体，UI 与助手正文使用当前手机的系统默认字体，阅读字号默认 100%。思考态使用 `AnimationController` 驱动固定中心的花形帧动画，由 `CustomPainter` 在圆点、四瓣、六瓣和八瓣星芒间生长 / 收缩；系统关闭动画时固定为完整花形。可见计时明确标为「本轮已运行」，屏读 live region 只播报一次「正在思考」，不会随秒数重复播报。普通活动 running 继续使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`，保留 `SignalPressEffect` 等已有原生交互效果。
 
@@ -56,7 +56,7 @@ App 支持 `manual`、`acceptEdits`、`auto`、`dontAsk`、`plan` 和 `bypassPer
 
 如果 daemon 关闭 bypass 能力，选择项禁用。选择 bypass 时必须弹出确认，并持续到用户切换或新建会话。
 
-Codex 会话不使用权限模式，改用三档沙箱模式（只读 / 工作区可写 / 完全访问），由 daemon 下发的 `codexSandboxModes` 驱动选择项；选择 `danger-full-access` 发送一次后自动回落为 `read-only`。Codex 会话的附件仅允许图片，违反时提示「Codex 会话只支持图片附件」。
+Codex 会话不使用 Claude 权限模式，改用三档沙箱模式（只读 / 工作区可写 / 完全访问），由 daemon 下发的 `codexSandboxModes` 驱动选择项。默认使用 `danger-full-access`，选择持续生效，可显式切换为只读或工作区可写。Codex 会话的附件仅允许图片，违反时提示「Codex 会话只支持图片附件」。
 
 ## 附件
 
@@ -72,15 +72,15 @@ Codex 会话不使用权限模式，改用三档沙箱模式（只读 / 工作�
 
 ## 布局要求
 
-主界面使用 SafeArea。Cool Glass 参考画板为 390×844，水平安全边距 20px，顶部会话头约 76px，Composer 视觉尺寸 350×110。视觉图标可为 36px，但语义命中区至少 44px。键盘出现时 transcript 和指令建议让出空间，状态和主动作不能被遮挡。
+主界面聊天视图采用全高 Stack 布局，消除原水平硬裁切，基准尺寸为 390×844，正文水平边距 8px。顶部导航与底部 Composer 悬浮于 transcript 上下两端。Composer 最小高度约 110px，视觉图标可为 36px，实际命中区至少 48px。键盘出现时 transcript 和指令建议让出空间，状态和主动作不能被遮挡。
 
-IME 动画的真实 `viewInsets.bottom` 只用于 `AppBackground` 外层避让；传给聊天子树的 `MediaQuery.viewInsets` 被稳定为“关闭 0 / 打开 1”两态，避免长 transcript、Markdown 与 Composer 随键盘每个高度帧重复 build。`ChatScreen` 不再使用覆盖整页的 `LayoutBuilder`，指令建议通过 `Flexible` 在剩余高度内收缩，Composer 使用独立 `RepaintBoundary`。最终键盘避让距离、底部圆角和阴影切换保持不变。
+IME 动画的真实 `viewInsets.bottom` 只用于 `AppBackground` 外层避让；聊天子树的 inset 稳定为「关闭 0 / 打开 1」两态，避免 transcript、Markdown 与 Composer 随每个高度帧重建。指令建议使用 `Flexible`，Composer 使用独立 `RepaintBoundary`。键盘打开后输入区贴合 IME 并调整底部圆角。
 
 系统大字体、小屏、横屏和键盘场景都有回归测试。中文 UI 使用手机系统默认字体，应用不在 APK 中打包 Noto、LXGW 等正文字体；widget 测试环境的 Ahem 字体只用于布局几何。
 
 ## 测试范围
 
-`mobile/test/widget_test.dart` 覆盖启动、配对、Cool Glass 设置与菜单、当前模型屏读语义、菜单去上下文 token、Composer 上下文余量与权限图标语义、恢复 transcript 自动定位到底部、会话导航与全文搜索跳转、工作区、指令筛选、Composer 44/36px 尺寸、思考仪表滑动 / 自动档 / 屏读调节 / 320px 窄屏、权限模式、审批卡（含工作目录与 fallback）、运行和停止状态、花形思考动画 / 本轮计时 / live region、原生进度指示器、共享恢复面板、减少动态效果、小屏大字体、横屏扫码、离线重连、Markdown 来源链接、回复和活动展示。键盘回归会模拟连续 inset 帧，确认已打开期间消息与 Composer 实例不重复重建。实际测试总数以 `flutter test` 输出为准。
+`mobile/test/widget_test.dart` 覆盖启动、配对、设置、会话搜索、工作区、消息阅读、Composer、思考仪表、权限决策、恢复状态和小屏大字体布局。键盘回归模拟连续 inset 帧，确认已打开期间消息与 Composer 实例不重复重建。`appearance_test.dart` 覆盖外观持久化、保存失败、初始化竞态、系统跟随、文字对比度、设置内切换与会话 / 草稿保留，以及 Markdown 缓存更新。实际测试总数以 `flutter test` 输出为准。
 
 `mobile/test/attachments_test.dart` 覆盖附件上传、限制和错误清理。提交前运行：
 

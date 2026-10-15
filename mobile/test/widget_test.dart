@@ -8,21 +8,33 @@ import 'package:phosphor_icons/phosphor_icons.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 import 'package:cc_remote/main.dart';
 import 'package:cc_remote/app_icon.dart';
 import 'package:cc_remote/attachments.dart';
 import 'package:cc_remote/camera_permission.dart';
-import 'package:cc_remote/chat_background.dart';
 import 'package:cc_remote/data/permission_mode.dart';
 import 'package:cc_remote/data/remote_models.dart';
 import 'package:cc_remote/data/websocket_client.dart';
 import 'package:cc_remote/effort_preference.dart';
 import 'package:cc_remote/notification_service.dart';
 import 'package:cc_remote/model_preference.dart';
+import 'package:cc_remote/noto_icon.dart';
 import 'package:cc_remote/reading_font_size.dart';
 import 'package:cc_remote/signal_console_theme.dart';
 import 'package:cc_remote/workspace_drawer.dart';
+import 'package:cc_remote/workspace_paths.dart';
+import 'package:cc_remote/session_interaction.dart';
+
+bool containsWidgetSpan(InlineSpan span) {
+  if (span is WidgetSpan) return true;
+  if (span is TextSpan) {
+    return span.children?.any(containsWidgetSpan) ?? false;
+  }
+  return false;
+}
 
 Future<void> openSessionMenu(WidgetTester tester) async {
   await tester.tap(find.byTooltip('更多'));
@@ -42,7 +54,7 @@ Future<void> openWorkspaceFromHeader(WidgetTester tester) async {
 }
 
 void main() {
-  test('console theme uses platform fonts and the restrained blue accent', () {
+  test('console theme uses platform fonts and a restrained accent', () {
     expect(AppTypography.fontFamily, isNull);
     expect(AppTypography.assistantFontFamily, isNull);
     final theme = buildSignalConsoleTheme();
@@ -92,7 +104,7 @@ void main() {
                   .decoration
               as BoxDecoration)
           .gradient,
-      AppLiquidGlass.thinPressedGradient,
+      isNull,
     );
     await press.up();
     await tester.pump();
@@ -105,7 +117,7 @@ void main() {
                   .decoration
               as BoxDecoration)
           .gradient,
-      AppLiquidGlass.thinGradient,
+      isNull,
     );
 
     await pumpEffect(scaleOnPress: false);
@@ -211,17 +223,6 @@ void main() {
     expect(await store.load(), isFalse);
   });
 
-  test('chat background preference persists presets', () async {
-    final store = ChatBackgroundPreferenceStore();
-    const preference = ChatBackgroundPreference.preset(
-      ChatBackgroundPreset.mint,
-    );
-
-    await store.save(preference);
-
-    expect(await store.load(), preference);
-  });
-
   test(
     'effort preference persists regular levels but not session-only max',
     () async {
@@ -234,21 +235,6 @@ void main() {
       expect(await store.load(), ClaudeEffortPreference.automatic);
     },
   );
-
-  test('missing custom background image falls back to default', () async {
-    final store = ChatBackgroundPreferenceStore(fileExists: (_) async => false);
-    await store.save(
-      const ChatBackgroundPreference.localImage('missing-background.jpg'),
-    );
-
-    expect(await store.load(), ChatBackgroundPreference.defaultValue);
-    expect(
-      await const FlutterSecureStorage().read(
-        key: ChatBackgroundPreferenceStore.key,
-      ),
-      isNull,
-    );
-  });
 
   test(
     'prompt messages include Claude Code effort and explicit model only',
@@ -443,6 +429,23 @@ void main() {
     expect(unknown!.engine, SessionEngine.claude);
   });
 
+  test('Codex sandbox capabilities keep only supported wire modes', () {
+    expect(CodexSandboxMode.listFromWire(null), isNull);
+    expect(
+      CodexSandboxMode.listFromWire([
+        'workspace-write',
+        'unknown-mode',
+        'read-only',
+        'workspace-write',
+      ]),
+      [CodexSandboxMode.workspaceWrite, CodexSandboxMode.readOnly],
+    );
+    expect(CodexSandboxMode.listFromWire([]), [CodexSandboxMode.readOnly]);
+    expect(CodexSandboxMode.listFromWire(['danger-full-access']), [
+      CodexSandboxMode.dangerFullAccess,
+    ]);
+  });
+
   test('session search result parses snippet highlight metadata', () {
     final result = RemoteSessionSearchResult.tryParse({
       'sessionId': 'session-2',
@@ -558,7 +561,7 @@ void main() {
           matching: find.byType(Icon),
         ),
       ),
-      const Size.square(18),
+      const Size.square(20),
     );
     await tester.tap(find.byKey(const ValueKey('open-project-browser')));
     await tester.pump();
@@ -592,6 +595,296 @@ void main() {
     expect(createdProjectId, 'project-2');
     expect(createdEngine, SessionEngine.codex);
   });
+
+  testWidgets(
+    'session navigator filters sessions locally and resets per project',
+    (tester) async {
+      await tester.binding.setSurfaceSize(const Size(390, 844));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildSignalConsoleTheme(),
+          home: SessionNavigatorPage(
+            projects: const [
+              RemoteProjectSummary(
+                id: 'project-1',
+                name: 'first',
+                path: r'E:\first',
+                sessionCount: 4,
+                running: true,
+              ),
+              RemoteProjectSummary(
+                id: 'project-2',
+                name: 'second',
+                path: r'E:\second',
+                sessionCount: 1,
+                running: false,
+              ),
+            ],
+            sessions: const [
+              RemoteSessionSummary(
+                id: 'session-running',
+                projectId: 'project-1',
+                title: '运行中的会话',
+                engine: SessionEngine.claude,
+                updatedAt: 1,
+                running: true,
+                messageCount: 4,
+              ),
+              RemoteSessionSummary(
+                id: 'session-archived',
+                projectId: 'project-1',
+                title: '已归档的会话',
+                engine: SessionEngine.codex,
+                updatedAt: 2,
+                running: false,
+                messageCount: 5,
+                archived: true,
+              ),
+              RemoteSessionSummary(
+                id: 'session-codex',
+                projectId: 'project-1',
+                title: 'Codex 会话',
+                engine: SessionEngine.codex,
+                updatedAt: 3,
+                running: false,
+                messageCount: 6,
+              ),
+              RemoteSessionSummary(
+                id: 'session-claude',
+                projectId: 'project-1',
+                title: 'Claude 会话',
+                engine: SessionEngine.claude,
+                updatedAt: 4,
+                running: false,
+                messageCount: 7,
+              ),
+              RemoteSessionSummary(
+                id: 'session-other-project',
+                projectId: 'project-2',
+                title: '另一个项目的会话',
+                engine: SessionEngine.claude,
+                updatedAt: 5,
+                running: false,
+                messageCount: 8,
+              ),
+            ],
+            activeProjectId: 'project-1',
+            activeSessionId: 'session-claude',
+            running: false,
+            onSelect: (_) {},
+            onSearchResult: (_) {},
+            onCreate: (_, _) {},
+            onRename: (_, _) async {},
+            onArchive: (_) async {},
+            onDelete: (_) async {},
+            onSearch: (_) async => const [],
+          ),
+        ),
+      );
+
+      expect(
+        tester
+            .widget<ChoiceChip>(
+              find.byKey(const ValueKey('session-filter-all')),
+            )
+            .selected,
+        isTrue,
+      );
+      expect(
+        find.byKey(const ValueKey('session-session-running')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('session-session-archived')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('session-session-codex')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('session-session-claude')),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('session-filter-running')));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('session-session-running')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('session-session-claude')),
+        findsNothing,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('session-filter-archived')));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('session-session-archived')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('session-session-running')),
+        findsNothing,
+      );
+
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('session-filter-codex')),
+      );
+      await tester.tap(find.byKey(const ValueKey('session-filter-codex')));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('session-session-codex')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('session-session-archived')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('session-session-claude')),
+        findsNothing,
+      );
+
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('session-filter-claude')),
+      );
+      await tester.tap(find.byKey(const ValueKey('session-filter-claude')));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('session-session-claude')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('session-session-running')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('session-session-codex')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('session-session-archived')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const ValueKey('open-project-browser')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('project-project-2')));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<ChoiceChip>(
+              find.byKey(const ValueKey('session-filter-all')),
+            )
+            .selected,
+        isTrue,
+      );
+      expect(
+        find.byKey(const ValueKey('session-session-other-project')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  for (final brightness in Brightness.values) {
+    testWidgets(
+      'session filter clears empty results on a narrow phone in ${brightness.name}',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(320, 568));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: buildSignalConsoleTheme(brightness),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(context).copyWith(
+                textScaler: const TextScaler.linear(2),
+                disableAnimations: true,
+              ),
+              child: child!,
+            ),
+            home: SessionNavigatorPage(
+              projects: const [
+                RemoteProjectSummary(
+                  id: 'project-1',
+                  name: 'first',
+                  path: r'E:\first',
+                  sessionCount: 1,
+                  running: false,
+                ),
+              ],
+              sessions: const [
+                RemoteSessionSummary(
+                  id: 'session-claude',
+                  projectId: 'project-1',
+                  title: 'Claude 会话',
+                  engine: SessionEngine.claude,
+                  updatedAt: 1,
+                  running: false,
+                  messageCount: 2,
+                ),
+              ],
+              activeProjectId: 'project-1',
+              activeSessionId: 'session-claude',
+              running: false,
+              onSelect: (_) {},
+              onSearchResult: (_) {},
+              onCreate: (_, _) {},
+              onRename: (_, _) async {},
+              onArchive: (_) async {},
+              onDelete: (_) async {},
+              onSearch: (_) async => const [],
+            ),
+          ),
+        );
+
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('session-filter-codex')),
+        );
+        await tester.tap(find.byKey(const ValueKey('session-filter-codex')));
+        await tester.pump();
+        expect(find.text('没有符合条件的会话'), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey('session-filter-clear')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('session-session-claude')),
+          findsNothing,
+        );
+
+        expect(
+          find.byKey(const ValueKey('session-empty-create')),
+          findsNothing,
+        );
+        expect(tester.takeException(), isNull);
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('session-filter-clear')),
+        );
+        await tester.tap(find.byKey(const ValueKey('session-filter-clear')));
+        await tester.pump();
+        expect(
+          find.byKey(const ValueKey('session-session-claude')),
+          findsOneWidget,
+        );
+        expect(
+          tester
+              .widget<ChoiceChip>(
+                find.byKey(const ValueKey('session-filter-all')),
+              )
+              .selected,
+          isTrue,
+        );
+        expect(tester.takeException(), isNull);
+        final animation = tester
+            .widget<ChoiceChip>(
+              find.byKey(const ValueKey('session-filter-all')),
+            )
+            .chipAnimationStyle!;
+        expect(animation.selectAnimation!.duration, Duration.zero);
+        expect(animation.avatarDrawerAnimation!.duration, Duration.zero);
+      },
+    );
+  }
 
   testWidgets('session search debounces, highlights and opens a result', (
     tester,
@@ -769,10 +1062,11 @@ void main() {
       tester
           .widget<ListTile>(find.byKey(const ValueKey('session-session-2')))
           .onTap,
-      isNull,
+      isNotNull,
     );
     expect(find.byKey(const ValueKey('session-menu-session-2')), findsNothing);
-    expect(selected, isFalse);
+    await tester.tap(find.byKey(const ValueKey('session-session-2')));
+    expect(selected, isTrue);
     expect(created, isFalse);
   });
 
@@ -1028,9 +1322,7 @@ void main() {
     expect(find.byTooltip('访问权限：自动判断'), findsOneWidget);
   });
 
-  testWidgets('startup uses a cool generative field while pairing stays warm', (
-    tester,
-  ) async {
+  testWidgets('startup and pairing use plain neutral surfaces', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
         theme: buildSignalConsoleTheme(),
@@ -1038,19 +1330,15 @@ void main() {
       ),
     );
 
-    expect(find.byKey(const ValueKey('bootstrap-signal')), findsOneWidget);
-    expect(find.text('SEED'), findsOneWidget);
+    expect(find.byKey(const ValueKey('boot')), findsOneWidget);
+    expect(find.text('CC Remote'), findsOneWidget);
     expect(find.text('正在读取连接信息'), findsOneWidget);
     expect(find.byType(LinearProgressIndicator), findsNothing);
     expect(find.byIcon(LucideIcons.terminal), findsNothing);
-    final bootstrapOverlay = tester
-        .widget<AnnotatedRegion<SystemUiOverlayStyle>>(
-          find.byKey(const ValueKey('boot')),
-        );
-    expect(
-      bootstrapOverlay.value.systemNavigationBarColor,
-      const Color(0xFFF5F6F7),
+    final bootstrap = tester.widget<ColoredBox>(
+      find.byKey(const ValueKey('boot')),
     );
+    expect(bootstrap.color, AppColors.paper);
 
     await tester.pumpWidget(
       MaterialApp(
@@ -1093,7 +1381,7 @@ void main() {
     }
   });
 
-  testWidgets('startup signal honors reduced motion', (tester) async {
+  testWidgets('startup remains static with reduced motion', (tester) async {
     await tester.pumpWidget(
       MaterialApp(
         theme: buildSignalConsoleTheme(),
@@ -1101,7 +1389,7 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(tester.hasRunningAnimations, isTrue);
+    expect(tester.hasRunningAnimations, isFalse);
 
     await tester.pumpWidget(
       MaterialApp(
@@ -1115,7 +1403,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(tester.hasRunningAnimations, isFalse);
-    expect(find.byKey(const ValueKey('bootstrap-signal')), findsOneWidget);
+    expect(find.byKey(const ValueKey('boot')), findsOneWidget);
   });
 
   testWidgets('modal surfaces honor reduced motion', (tester) async {
@@ -1214,7 +1502,7 @@ void main() {
     );
     final settingsDecoration =
         tester.widget<Container>(settingsSurface).decoration! as BoxDecoration;
-    expect(settingsDecoration.gradient, AppLiquidGlass.strongGradient);
+    expect(settingsDecoration.gradient, isNull);
     expect(
       find.descendant(
         of: settingsSurface,
@@ -1225,7 +1513,7 @@ void main() {
     expect(tester.testTextInput.isVisible, isFalse);
     expect(
       find.byKey(const ValueKey('settings-preference-preview')),
-      findsOneWidget,
+      findsNothing,
     );
     expect(find.text('后台通知'), findsOneWidget);
     expect(find.text('开启新对话'), findsNothing);
@@ -1277,6 +1565,21 @@ void main() {
     await tester.tap(find.text('连接这台电脑'));
     await tester.pumpAndSettle();
 
+    final modelButton = find.byKey(const ValueKey('composer-model-button'));
+    expect(tester.getSize(modelButton), const Size.square(AppSizes.touchTarget));
+    expect(
+      find.descendant(of: modelButton, matching: find.byType(Text)),
+      findsNothing,
+    );
+    final modelIcon = tester.widget<NotoIcon>(
+      find.descendant(of: modelButton, matching: find.byType(NotoIcon)),
+    );
+    expect(modelIcon.glyph, NotoGlyph.brain);
+    final modelSurface = tester.widget<SignalAnimatedSurface>(
+      find.byKey(const ValueKey('composer-model-visual')),
+    );
+    expect((modelSurface.decoration as BoxDecoration).shape, BoxShape.circle);
+
     await tester.tap(find.byKey(const ValueKey('composer-model-button')));
     await tester.pumpAndSettle();
     expect(find.text('选择模型'), findsOneWidget);
@@ -1285,7 +1588,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('model-option-sonnet')));
     await tester.pumpAndSettle();
 
-    expect(find.text('Sonnet'), findsOneWidget);
+    expect(find.byTooltip('选择模型：Sonnet'), findsOneWidget);
     expect(
       await ClaudeModelPreferenceStore().load(),
       ClaudeModelPreference.sonnet,
@@ -1329,6 +1632,39 @@ void main() {
     );
     expect(find.byKey(const ValueKey('model-option-follow')), findsOneWidget);
     expect(find.byKey(const ValueKey('model-option-fable')), findsOneWidget);
+
+    final selectedOption = tester.widget<Material>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('model-option-opus')),
+            matching: find.byType(Material),
+          )
+          .first,
+    );
+    expect(selectedOption.color, AppPalette.light.accentSoft);
+
+    final unselectedOption = tester.widget<Material>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('model-option-follow')),
+            matching: find.byType(Material),
+          )
+          .first,
+    );
+    expect(unselectedOption.color, Colors.transparent);
+    // The Cherry Studio recipe drops the 40pt icon seat for a bare 32pt avatar,
+    // so the row no longer paints a control-filled container behind the icon.
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('model-option-follow')),
+        matching: find.byWidgetPredicate(
+          (widget) =>
+              widget is SizedBox && widget.width == 32 && widget.height == 32,
+        ),
+      ),
+      findsOneWidget,
+    );
+
     expect(tester.takeException(), isNull);
 
     await tester.tapAt(const Offset(8, 8));
@@ -1350,6 +1686,114 @@ void main() {
       find.byKey(const ValueKey('project-icon-demo-cc-remote')),
       findsOneWidget,
     );
+  });
+
+  testWidgets('creating a session applies the HTTP catalog without a WS push', (
+    tester,
+  ) async {
+    var createRequests = 0;
+    final client = MockClient((request) async {
+      createRequests += 1;
+      expect(request.method, 'POST');
+      expect(request.url.path, '/api/projects/demo-mobile/sessions');
+      expect(jsonDecode(request.body), {'engine': 'codex'});
+      return http.Response(
+        jsonEncode({
+          'ok': true,
+          'projectId': 'demo-mobile',
+          'sessionId': 'created-session',
+          'catalog': {
+            'activeProjectId': 'demo-mobile',
+            'activeSessionId': 'created-session',
+            'projects': [
+              {
+                'id': 'demo-mobile',
+                'name': 'mobile',
+                'path': '/workspace/cc-remote/mobile',
+                'sessionCount': 1,
+              },
+            ],
+            'sessions': [
+              {
+                'id': 'created-session',
+                'projectId': 'demo-mobile',
+                'title': '新会话',
+                'engine': 'codex',
+                'messageCount': 0,
+              },
+            ],
+          },
+        }),
+        201,
+        headers: {'content-type': 'application/json; charset=utf-8'},
+      );
+    });
+    await http.runWithClient(() async {
+      await tester.pumpWidget(
+        const CcRemoteApp(enableCamera: false, demoMode: true),
+      );
+      await tester.pump(const Duration(seconds: 1));
+      await tester.tap(find.text('连接这台电脑'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('项目与会话'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('session-demo-session-glass')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('玻璃控制面已经落地。'), findsOneWidget);
+
+      await tester.tap(find.byTooltip('项目与会话'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('open-project-browser')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('project-demo-mobile')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('create-session')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('session-engine-codex')));
+      await tester.pumpAndSettle();
+
+      expect(createRequests, 1);
+      expect(find.text('新建会话失败，请重试'), findsNothing);
+      expect(find.text('玻璃控制面已经落地。'), findsNothing);
+      expect(
+        tester.widget<ChatScreen>(find.byType(ChatScreen)).engine,
+        SessionEngine.codex,
+      );
+      final savedSession = await TokenStore().load();
+      expect(savedSession?.workspaceDir, '/workspace/cc-remote/mobile');
+      expect(savedSession?.token, 'demo');
+      expect((await TranscriptStore().load())?.messages, isEmpty);
+      await tester.tap(find.byTooltip('项目与会话'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('session-created-session')),
+        findsOneWidget,
+      );
+      expect(find.text('当前 · Codex · 0 条消息'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('session-page-back')));
+      await tester.pumpAndSettle();
+      expect(find.byType(PromptBar), findsOneWidget);
+    }, () => client);
+  });
+
+  testWidgets('demo session list can switch to another session locally', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('项目与会话'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('session-demo-session-glass')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('session-peek-dock')), findsNothing);
+    expect(find.byType(PromptBar), findsOneWidget);
+    expect(find.text('玻璃控制面已经落地。'), findsOneWidget);
   });
 
   testWidgets('the first prompt waits for the stored model preference', (
@@ -1516,173 +1960,6 @@ void main() {
     expect(cameraPermission.requestCount, 0);
   });
 
-  testWidgets('chat background can use a preset, local image and reset', (
-    tester,
-  ) async {
-    tester.view.physicalSize = const Size(393, 640);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-    const imagePath = r'C:\app\chat_background\wall.png';
-    final imageService = FakeChatBackgroundImageService(imagePath);
-    final store = ChatBackgroundPreferenceStore(fileExists: (_) async => true);
-
-    await tester.pumpWidget(
-      CcRemoteApp(
-        enableCamera: false,
-        demoMode: true,
-        chatBackgroundPreferenceStore: store,
-        chatBackgroundImageService: imageService,
-      ),
-    );
-    await tester.pump(const Duration(seconds: 1));
-    await tester.tap(find.text('连接这台电脑'));
-    await tester.pumpAndSettle();
-    await openSettingsFromHeader(tester);
-
-    expect(find.text('聊天背景'), findsOneWidget);
-    expect(find.text('默认纸感'), findsOneWidget);
-    await tester.ensureVisible(
-      find.byKey(const ValueKey('chat-background-setting')),
-    );
-    await tester.tap(find.byKey(const ValueKey('chat-background-setting')));
-    await tester.pump();
-    expect(find.byKey(const ValueKey('settings-page')), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('settings-background-page')),
-      findsOneWidget,
-    );
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('settings-background-surface')),
-      findsOneWidget,
-    );
-    expect(find.byType(BottomSheet), findsOneWidget);
-
-    await tester.tap(find.text('亚麻'));
-    await tester.pumpAndSettle();
-    expect(
-      tester.widget<AppBackground>(find.byType(AppBackground)).chatBackground,
-      const ChatBackgroundPreference.preset(ChatBackgroundPreset.mint),
-    );
-    expect((await store.load()).preset, ChatBackgroundPreset.mint);
-
-    await tester.ensureVisible(
-      find.byKey(const ValueKey('pick-chat-background-image')),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('pick-chat-background-image')));
-    await tester.pumpAndSettle();
-    expect(imageService.pickCount, 1);
-    expect((await store.load()).imagePath, imagePath);
-    expect(
-      find.byKey(const ValueKey('custom-chat-background-image')),
-      findsWidgets,
-    );
-
-    final opacityBefore = (await store.load()).overlayOpacity;
-    await tester.ensureVisible(
-      find.byKey(const ValueKey('chat-background-opacity-slider')),
-    );
-    await tester.pumpAndSettle();
-    await tester.drag(
-      find.byKey(const ValueKey('chat-background-opacity-slider')),
-      const Offset(80, 0),
-    );
-    await tester.pumpAndSettle();
-    expect((await store.load()).overlayOpacity, isNot(opacityBefore));
-
-    await tester.ensureVisible(
-      find.byKey(const ValueKey('reset-chat-background')),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('reset-chat-background')));
-    await tester.pumpAndSettle();
-    expect(await store.load(), ChatBackgroundPreference.defaultValue);
-    expect(imageService.deletedPaths, contains(imagePath));
-    expect(
-      tester.widget<AppBackground>(find.byType(AppBackground)).chatBackground,
-      ChatBackgroundPreference.defaultValue,
-    );
-
-    await tester.binding.handlePopRoute();
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('settings-surface')), findsOneWidget);
-    expect(find.byType(BottomSheet), findsOneWidget);
-  });
-
-  testWidgets('saved chat background is only applied to the chat route', (
-    tester,
-  ) async {
-    final store = ChatBackgroundPreferenceStore();
-    const preference = ChatBackgroundPreference.preset(
-      ChatBackgroundPreset.sunrise,
-    );
-    await store.save(preference);
-
-    await tester.pumpWidget(
-      CcRemoteApp(
-        enableCamera: false,
-        demoMode: true,
-        chatBackgroundPreferenceStore: store,
-      ),
-    );
-    await tester.pump(const Duration(seconds: 1));
-
-    expect(find.text('扫描电脑终端里的二维码'), findsOneWidget);
-    expect(
-      tester.widget<AppBackground>(find.byType(AppBackground)).chatBackground,
-      ChatBackgroundPreference.defaultValue,
-    );
-
-    await tester.tap(find.text('连接这台电脑'));
-    await tester.pumpAndSettle();
-
-    expect(
-      tester.widget<AppBackground>(find.byType(AppBackground)).chatBackground,
-      preference,
-    );
-  });
-
-  testWidgets('a late background load cannot overwrite a user selection', (
-    tester,
-  ) async {
-    final store = DelayedChatBackgroundPreferenceStore();
-
-    await tester.pumpWidget(
-      CcRemoteApp(
-        enableCamera: false,
-        demoMode: true,
-        chatBackgroundPreferenceStore: store,
-      ),
-    );
-    await tester.pump(const Duration(seconds: 1));
-    await tester.tap(find.text('连接这台电脑'));
-    await tester.pumpAndSettle();
-    await openSettingsFromHeader(tester);
-    await tester.ensureVisible(
-      find.byKey(const ValueKey('chat-background-setting')),
-    );
-    await tester.tap(find.byKey(const ValueKey('chat-background-setting')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('亚麻'));
-    await tester.pumpAndSettle();
-
-    store.completeLoad(
-      const ChatBackgroundPreference.preset(ChatBackgroundPreset.sunrise),
-    );
-    await tester.pumpAndSettle();
-
-    expect(
-      tester.widget<AppBackground>(find.byType(AppBackground)).chatBackground,
-      const ChatBackgroundPreference.preset(ChatBackgroundPreset.mint),
-    );
-    expect(
-      store.savedPreference,
-      const ChatBackgroundPreference.preset(ChatBackgroundPreset.mint),
-    );
-  });
-
   testWidgets('settings remain scrollable on a short screen with large text', (
     tester,
   ) async {
@@ -1709,15 +1986,12 @@ void main() {
               workspaceDir: 'cc-remote',
             ),
             notificationsEnabled: true,
-            chatBackground: ChatBackgroundPreference.defaultValue,
             currentModel: 'claude-opus-4-8',
             selectedModel: ClaudeModelPreference.followComputer,
             readingFontScale: kReadingFontScaleDefault,
             onReconnect: () {},
             onNotificationsChanged: (value) async => value,
             onModelChanged: (_) async {},
-            onChatBackgroundChanged: (preference) async => preference,
-            onPickChatBackgroundImage: (_) async => null,
             onReadingFontScaleChanged: (scale, {bool persist = true}) async {},
             onLogout: () {},
           ),
@@ -1732,7 +2006,7 @@ void main() {
     );
     expect(
       find.byKey(const ValueKey('settings-preference-preview')),
-      findsOneWidget,
+      findsNothing,
     );
     final settingsSurface = find.byKey(const ValueKey('settings-surface'));
     expect(
@@ -1769,15 +2043,12 @@ void main() {
           body: SettingsSheet(
             session: null,
             notificationsEnabled: true,
-            chatBackground: ChatBackgroundPreference.defaultValue,
             currentModel: null,
             selectedModel: ClaudeModelPreference.followComputer,
             readingFontScale: kReadingFontScaleDefault,
             onReconnect: () {},
             onNotificationsChanged: (_) async => throw StateError('save'),
             onModelChanged: (_) async {},
-            onChatBackgroundChanged: (preference) async => preference,
-            onPickChatBackgroundImage: (_) async => null,
             onReadingFontScaleChanged: (scale, {bool persist = true}) async {},
             onLogout: () {},
           ),
@@ -1902,11 +2173,11 @@ void main() {
       composerDecoration.borderRadius,
       const BorderRadius.vertical(top: Radius.circular(AppRadii.composerFloat)),
     );
-    expect(composerDecoration.boxShadow, isEmpty);
+    expect(composerDecoration.boxShadow, isNull);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('keyboard resize keeps the static glass background stationary', (
+  testWidgets('keyboard resize keeps the plain background stationary', (
     tester,
   ) async {
     Widget buildScreen(double keyboardInset) {
@@ -1926,10 +2197,7 @@ void main() {
 
     await tester.pumpWidget(buildScreen(0));
     final backgroundBefore = tester.widget<DecoratedBox>(
-      find.descendant(
-        of: find.byKey(const ValueKey('chat-background-layer')),
-        matching: find.byType(DecoratedBox),
-      ),
+      find.byKey(const ValueKey('chat-background-layer')),
     );
     final contentHeightBefore = tester
         .getSize(find.byKey(const ValueKey('keyboard-content')))
@@ -1939,25 +2207,19 @@ void main() {
 
     final beforeDecoration = backgroundBefore.decoration as BoxDecoration;
     final backgroundAfter = tester.widget<DecoratedBox>(
-      find.descendant(
-        of: find.byKey(const ValueKey('chat-background-layer')),
-        matching: find.byType(DecoratedBox),
-      ),
+      find.byKey(const ValueKey('chat-background-layer')),
     );
     final afterDecoration = backgroundAfter.decoration as BoxDecoration;
-    expect(beforeDecoration.gradient, afterDecoration.gradient);
-    expect((afterDecoration.gradient! as LinearGradient).colors, const [
-      AppColors.bgTop,
-      AppColors.bgMid,
-      AppColors.bgBottom,
-    ]);
+    expect(beforeDecoration.color, afterDecoration.color);
+    expect(afterDecoration.gradient, isNull);
+    expect(afterDecoration.color, AppColors.paper);
     expect(
       tester.getSize(find.byKey(const ValueKey('keyboard-content'))).height,
       contentHeightBefore - 300,
     );
   });
 
-  testWidgets('app sheet surfaces use thick glass material', (tester) async {
+  testWidgets('app sheet surfaces use opaque neutral fills', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(body: AppSheetSurface(child: Text('content'))),
@@ -1967,9 +2229,8 @@ void main() {
     expect(find.byType(BackdropFilter), findsNothing);
     final surface = tester.widget<Container>(find.byType(Container).first);
     final decoration = surface.decoration! as BoxDecoration;
-    expect(decoration.gradient, AppLiquidGlass.strongGradient);
-    expect(decoration.border, isNull);
-    expect(decoration.boxShadow, isNotNull);
+    expect(decoration.gradient, isNull);
+    expect(decoration.color, AppColors.surface);
     expect(decoration.boxShadow, isNotEmpty);
   });
 
@@ -2118,6 +2379,244 @@ void main() {
     expect(find.byKey(const ValueKey('workspace-browser-page')), findsNothing);
     expect(find.byKey(const ValueKey('workspace-diff')), findsOneWidget);
     expect(find.textContaining("workspace_drawer.dart"), findsOneWidget);
+  });
+
+  testWidgets('demo send shows a local workspace change echo', (tester) async {
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), 'ping');
+    await tester.pump();
+    await tester.tap(find.byTooltip('发送'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('workspace-change-echo')), findsOneWidget);
+    expect(find.text('改了 2 个文件'), findsOneWidget);
+    expect(find.text('看 diff · 仅桌面工作区'), findsOneWidget);
+
+    final snapshot = await TranscriptStore().load();
+    expect(snapshot, isNotNull);
+    expect(snapshot!.messages.map((message) => message.text), [
+      'ping',
+      '演示模式：真实对话需要连接 daemon WebSocket。',
+    ]);
+
+    await tester.ensureVisible(find.text('改了 2 个文件'));
+    await tester.tap(find.text('改了 2 个文件'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('workspace-changes')), findsOneWidget);
+
+    await tester.tap(find.byTooltip('关闭'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('新对话'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('workspace-change-echo')), findsNothing);
+  });
+
+  testWidgets('workspace drawer opens initialPath as a change diff', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: WorkspaceDrawer(
+          origin: Uri.parse('https://example.test'),
+          token: 'test',
+          workspaceName: 'cc-remote',
+          demoMode: true,
+          initialTab: 1,
+          initialPath: 'src/daemon.ts',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('workspace-document-page')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('workspace-diff')), findsOneWidget);
+    expect(find.textContaining('daemon.ts'), findsWidgets);
+  });
+
+  testWidgets('tapping an activity path opens the workspace portal', (
+    tester,
+  ) async {
+    String? opened;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: WorkspacePortal(
+            workspaceDir: 'cc-remote',
+            onOpenPath: (path) => opened = path,
+            child: TranscriptView(
+              messages: [
+                TranscriptMessage.user('看文件'),
+                TranscriptMessage.activity(
+                  '读取文件',
+                  id: 'read-1',
+                  kind: ActivityKind.tool,
+                  state: ActivityState.done,
+                  tool: 'Read',
+                  detail: 'src/daemon.ts',
+                ),
+              ],
+              pendingPermissions: const [],
+              respondingPermissionIds: const {},
+              connected: true,
+              onFillPrompt: (_) {},
+              onReconnect: () {},
+              onPermissionAllow: (_) {},
+              onPermissionDeny: (_) {},
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('process-history-toggle')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-read-1')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('src/daemon.ts').last);
+    expect(opened, 'src/daemon.ts');
+  });
+
+  Future<void> pumpAssistantMessage(
+    WidgetTester tester, {
+    required String text,
+    ValueChanged<String>? onOpenPath,
+  }) {
+    return tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: WorkspacePortal(
+            onOpenPath: onOpenPath ?? (_) {},
+            child: MessageBlock(message: TranscriptMessage.assistant(text)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  testWidgets('unlabeled fenced code is a single code card', (tester) async {
+    await pumpAssistantMessage(tester, text: '```\nsrc/daemon.ts\n```');
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('code-block-card')), findsOneWidget);
+    expect(find.byType(WorkspacePathText), findsNothing);
+  });
+
+  testWidgets('markdown inline code path opens the workspace portal', (
+    tester,
+  ) async {
+    String? opened;
+    await pumpAssistantMessage(
+      tester,
+      text: 'see `src/daemon.ts` now',
+      onOpenPath: (path) => opened = path,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('src/daemon.ts'));
+    expect(opened, 'src/daemon.ts');
+  });
+
+  testWidgets('markdown bold path opens the workspace portal', (tester) async {
+    String? opened;
+    await pumpAssistantMessage(
+      tester,
+      text: 'updated **src/daemon.ts**',
+      onOpenPath: (path) => opened = path,
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('src/daemon.ts'));
+    expect(opened, 'src/daemon.ts');
+  });
+
+  testWidgets('permission summary path opens the workspace portal', (
+    tester,
+  ) async {
+    String? opened;
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: WorkspacePortal(
+            onOpenPath: (path) => opened = path,
+            child: PermissionRequestCard(
+              request: const RemotePermissionRequest(
+                requestId: 'permission-path',
+                toolName: 'Read',
+                detail: 'src/daemon.ts',
+              ),
+              responding: false,
+              connected: true,
+              onAllow: () {},
+              onDeny: () {},
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('src/daemon.ts'));
+    expect(opened, 'src/daemon.ts');
+  });
+
+  testWidgets('workspace drawer opens initialPath as a file when unchanged', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: WorkspaceDrawer(
+          origin: Uri.parse('https://example.test'),
+          token: 'test',
+          workspaceName: 'cc-remote',
+          demoMode: true,
+          initialPath: 'README.md',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('workspace-document-page')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('workspace-document-file')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('workspace-diff')), findsNothing);
+  });
+
+  testWidgets('workspace drawer still opens initialPath if snapshot fails', (
+    tester,
+  ) async {
+    final api = FailingSnapshotWorkspaceApi();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: WorkspaceDrawer(
+          origin: Uri.parse('https://example.test'),
+          token: 'test',
+          workspaceName: 'review',
+          api: api,
+          initialPath: 'README.md',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('workspace-document-file')),
+      findsOneWidget,
+    );
   });
 
   testWidgets(
@@ -2429,12 +2928,16 @@ void main() {
     expect(find.text('自动'), findsOneWidget);
   });
 
-  testWidgets('Codex composer exposes only three sandbox modes', (
+  testWidgets('Codex composer exposes advertised sandbox modes', (
     tester,
   ) async {
     final controller = TextEditingController();
     addTearDown(controller.dispose);
     CodexSandboxMode? selected;
+    const advertisedModes = [
+      CodexSandboxMode.readOnly,
+      CodexSandboxMode.workspaceWrite,
+    ];
 
     await tester.pumpWidget(
       MaterialApp(
@@ -2449,6 +2952,7 @@ void main() {
             permissionMode: PermissionMode.manual,
             allowBypassPermissions: false,
             codexSandboxMode: CodexSandboxMode.readOnly,
+            codexSandboxModes: advertisedModes,
             onPermissionModeSelected: (_) {},
             onCodexSandboxModeSelected: (mode) => selected = mode,
             onCommandSelected: (_) {},
@@ -2463,12 +2967,16 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('permission-mode-chip')));
     await tester.pumpAndSettle();
 
-    for (final mode in CodexSandboxMode.values) {
+    for (final mode in advertisedModes) {
       expect(
         find.byKey(ValueKey('codex-sandbox-${mode.wireName}')),
         findsOneWidget,
       );
     }
+    expect(
+      find.byKey(const ValueKey('codex-sandbox-danger-full-access')),
+      findsNothing,
+    );
     expect(find.byKey(const ValueKey('permission-mode-manual')), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('codex-sandbox-read-only')));
@@ -2726,38 +3234,37 @@ void main() {
     expect(activity!.state, ActivityState.stopped);
   });
 
-  test(
-    'completed replies remove current tool activity from the transcript',
-    () {
-      final messages = [
-        TranscriptMessage.user('上一轮'),
-        TranscriptMessage.assistant('上一轮答案'),
-        TranscriptMessage.user('检查项目'),
-        TranscriptMessage.activity(
-          '思考完成',
-          id: 'thinking',
-          kind: ActivityKind.thinking,
-          state: ActivityState.done,
-        ),
-        TranscriptMessage.activity(
-          '已读取文件',
-          id: 'tool-1',
-          kind: ActivityKind.tool,
-          state: ActivityState.done,
-        ),
-        TranscriptMessage.assistant('当前答案'),
-      ];
+  test('completed replies keep thinking and tool process history', () {
+    final messages = [
+      TranscriptMessage.user('上一轮'),
+      TranscriptMessage.assistant('上一轮答案'),
+      TranscriptMessage.user('检查项目'),
+      TranscriptMessage.activity(
+        '思考完成',
+        id: 'thinking',
+        kind: ActivityKind.thinking,
+        state: ActivityState.done,
+      ),
+      TranscriptMessage.activity(
+        '已读取文件',
+        id: 'tool-1',
+        kind: ActivityKind.tool,
+        state: ActivityState.done,
+      ),
+      TranscriptMessage.assistant('当前答案'),
+    ];
 
-      removeCurrentTurnActivities(messages);
+    removeCurrentTurnActivities(messages);
 
-      expect(messages.map((message) => message.text), [
-        '上一轮',
-        '上一轮答案',
-        '检查项目',
-        '当前答案',
-      ]);
-    },
-  );
+    expect(messages.map((message) => message.text), [
+      '上一轮',
+      '上一轮答案',
+      '检查项目',
+      '思考完成',
+      '已读取文件',
+      '当前答案',
+    ]);
+  });
 
   test('sending a prompt immediately adds a thinking activity', () {
     final messages = <TranscriptMessage>[];
@@ -2769,6 +3276,28 @@ void main() {
     expect(messages.first.text, '检查项目');
     expect(messages.last.activityKind, ActivityKind.thinking);
     expect(messages.last.activityState, ActivityState.running);
+  });
+
+  test('console inputHint adapts to session engine', () {
+    final claudePresentation = ConsolePresentation.resolve(
+      connected: true,
+      offline: false,
+      running: false,
+      stopping: false,
+      uploading: false,
+      engine: SessionEngine.claude,
+    );
+    expect(claudePresentation.inputHint, '输入要发给 Claude Code 的内容');
+
+    final codexPresentation = ConsolePresentation.resolve(
+      connected: true,
+      offline: false,
+      running: false,
+      stopping: false,
+      uploading: false,
+      engine: SessionEngine.codex,
+    );
+    expect(codexPresentation.inputHint, '输入要发给 Codex 的内容');
   });
 
   test('console presentation prioritizes offline over stale run facts', () {
@@ -2785,6 +3314,24 @@ void main() {
     expect(presentation.showsReconnect, isTrue);
     expect(presentation.showsStop, isFalse);
     expect(presentation.canCompose, isFalse);
+    expect(presentation.canDraft, isFalse);
+    expect(presentation.canQueue, isFalse);
+  });
+
+  test('running console keeps stop but allows drafting the next prompt', () {
+    final presentation = ConsolePresentation.resolve(
+      connected: true,
+      offline: false,
+      running: true,
+      stopping: false,
+      uploading: false,
+    );
+
+    expect(presentation.canCompose, isFalse);
+    expect(presentation.canDraft, isTrue);
+    expect(presentation.canQueue, isTrue);
+    expect(presentation.showsStop, isTrue);
+    expect(presentation.inputHint, '下一句可以先写着，点排队发送');
   });
 
   test('status strip defers recovery states to the shared panel', () {
@@ -3059,14 +3606,8 @@ void main() {
     );
     expect(newConversation.onPressed, isNull);
     expect(find.byType(LinearProgressIndicator), findsNothing);
-    expect(find.byType(BackdropGroup), findsOneWidget);
-    expect(
-      find.descendant(
-        of: find.byType(BackdropGroup),
-        matching: find.byType(BackdropFilter),
-      ),
-      findsNWidgets(3),
-    );
+    expect(find.byType(BackdropGroup), findsNothing);
+    expect(find.byType(BackdropFilter), findsNothing);
   });
 
   testWidgets('minimal header omits redundant identity and status copy', (
@@ -3105,6 +3646,42 @@ void main() {
     expect(find.textContaining('My PC'), findsNothing);
     expect(find.textContaining('已连接'), findsNothing);
     expect(find.textContaining('已停止'), findsNothing);
+    expect(find.byKey(const ValueKey('session-activity-pill')), findsNothing);
+  });
+
+  testWidgets('header renders dynamic activity pill when active', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: ConnectionHeader(
+            session: SavedSession(
+              origin: Uri.parse('https://cc-remote.example.com'),
+              token: 'demo',
+              deviceName: 'My PC',
+              workspaceDir: 'cc-remote',
+            ),
+            running: true,
+            connected: true,
+            offline: false,
+            modelName: 'claude-opus-4-8',
+            contextWindow: 200000,
+            remainingContext: 174919,
+            onReconnect: () {},
+            onOpenSettings: () {},
+            onNewConversation: () {},
+            onOpenSessions: () {},
+            onOpenWorkspace: () {},
+            uploadingAttachments: false,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('session-activity-pill')), findsOneWidget);
+    expect(find.text('运行中'), findsOneWidget);
   });
 
   testWidgets('stopping state disables the stop action and shows progress', (
@@ -3200,6 +3777,18 @@ void main() {
     await tester.pump(AppMotion.fast);
     expect(identical(actionElement, tester.element(action)), isTrue);
     expect(find.byKey(const ValueKey('composer-primary-stop')), findsOneWidget);
+    final stopVisual = tester.widget<Container>(
+      find.byKey(const ValueKey('composer-primary-visual')),
+    );
+    final stopDecoration = stopVisual.decoration! as BoxDecoration;
+    expect(stopDecoration.color, AppColors.stopGlass);
+    expect(stopDecoration.border, isNotNull);
+    expect(stopDecoration.boxShadow, isNotEmpty);
+    final stopIcon = tester.widget<Icon>(
+      find.byKey(const ValueKey('composer-primary-stop')),
+    );
+    expect(stopIcon.icon, PhosphorIconsFill.square);
+    expect(stopIcon.size, 14);
 
     rebuild(() => stopping = true);
     await tester.pump(AppMotion.fast);
@@ -3497,6 +4086,94 @@ void main() {
     expect(createdConversation, isFalse);
   });
 
+  testWidgets('streaming Markdown is parsed only after the turn completes', (
+    tester,
+  ) async {
+    var isStreaming = true;
+
+    Widget buildReply() => MaterialApp(
+      home: Scaffold(
+        body: MessageBlock(
+          message: TranscriptMessage.assistant('```dart\nvoid main() {}\n```'),
+          isStreaming: isStreaming,
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(buildReply());
+    expect(find.byKey(const ValueKey('code-block-card')), findsNothing);
+
+    isStreaming = false;
+    await tester.pumpWidget(buildReply());
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('code-block-card')), findsOneWidget);
+  });
+
+  testWidgets('stream text refreshes only the transcript subtree', (
+    tester,
+  ) async {
+    final messages = <TranscriptMessage>[
+      TranscriptMessage.user('上一条任务'),
+      TranscriptMessage.assistant('**prior**'),
+      TranscriptMessage.user('检查项目'),
+    ];
+    final transcriptRevision = ValueNotifier(0);
+    final promptController = TextEditingController();
+    addTearDown(transcriptRevision.dispose);
+    addTearDown(promptController.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: ChatScreen(
+            session: SavedSession(
+              origin: Uri.parse('https://cc-remote.example.com'),
+              token: 'demo',
+              deviceName: 'My PC',
+            ),
+            running: true,
+            connected: true,
+            offline: false,
+            modelName: null,
+            contextWindow: null,
+            remainingContext: null,
+            messages: messages,
+            transcriptRevisionListenable: transcriptRevision,
+            commands: const [],
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: false,
+            pendingPermissions: const [],
+            respondingPermissionIds: const {},
+            promptController: promptController,
+            onFillPrompt: (_) {},
+            onReconnect: () {},
+            onOpenSettings: () {},
+            onOpenModelPicker: () {},
+            onNewConversation: () {},
+            onOpenSessions: () {},
+            onOpenWorkspace: () {},
+            onPermissionModeSelected: (_) {},
+            onPermissionAllow: (_) {},
+            onPermissionDeny: (_) {},
+            onSend: () {},
+            onStop: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byType(MarkdownBody), findsOneWidget);
+    final header = tester.widget(find.byType(ConnectionHeader));
+    messages.add(TranscriptMessage.assistant('**streaming**'));
+    transcriptRevision.value++;
+    await tester.pump();
+
+    expect(find.text('**streaming**'), findsOneWidget);
+    expect(find.byType(MarkdownBody), findsOneWidget);
+    expect(tester.widget(find.byType(ConnectionHeader)), same(header));
+  });
+
   testWidgets('conversation bubbles stay distinct on light backgrounds', (
     tester,
   ) async {
@@ -3565,7 +4242,7 @@ void main() {
     expect(markdown.builders.containsKey('pre'), isTrue);
     final bubble = tester.widget<DecoratedBox>(assistant.first);
     final decoration = bubble.decoration as BoxDecoration;
-    expect(decoration.color, AppColors.surfaceElevated);
+    expect(decoration.color, AppColors.assistantBubble);
     expect(decoration.borderRadius, BorderRadius.circular(AppRadii.bubble));
     expect(decoration.border, Border.all(color: AppColors.bubbleOutline));
     expect(
@@ -3580,45 +4257,112 @@ void main() {
     expect(userDecoration.color, AppColors.userBubble);
     expect(userDecoration.border, Border.all(color: AppColors.bubbleOutline));
     expect(userDecoration.borderRadius, BorderRadius.circular(AppRadii.bubble));
+    expect(AppColors.assistantBubble.a, 1.0);
+    expect(AppColors.userBubble.a, 1.0);
   });
 
-  testWidgets('short assistant replies hug instead of stretching full width', (
+  testWidgets('reply layout keeps balanced gutters across message states', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    final markdownText =
+        '## 检查结果\n\n'
+        '这是一条需要换行的回复，正文、列表和代码块应该使用同一条阅读边界。\n\n'
+        '- 保持两侧留白\n- 长内容可以横向滚动\n\n'
+        '> 引用内容保留内距。\n\n'
+        '```dart\nfinal value = "${'long value ' * 12}";\n```\n\n'
+        '| 项目 | 结果 |\n| --- | --- |\n'
+        '| ${'wide table cell ' * 8} | 通过 |';
 
-    await tester.pumpWidget(
-      const MaterialApp(
-        home: Scaffold(
-          body: SizedBox(
-            width: 390,
-            child: Column(
-              children: [
-                MessageBlock(
-                  message: TranscriptMessage(MessageRole.assistant, '好'),
+    for (final width in [320.0, 390.0, 1024.0]) {
+      tester.view.physicalSize = Size(width, 844);
+      final contentWidth = (width > 760 ? 760.0 : width) - 40;
+      final gutter = (width - contentWidth) / 2;
+      for (final brightness in Brightness.values) {
+        for (final scale in [1.0, 2.0]) {
+          for (final reply in [
+            (text: '好', streaming: false),
+            (text: markdownText, streaming: true),
+            (text: markdownText, streaming: false),
+          ]) {
+            await tester.pumpWidget(
+              MaterialApp(
+                key: ValueKey((width, brightness, scale, reply)),
+                theme: buildSignalConsoleTheme(brightness),
+                builder: (context, child) => MediaQuery(
+                  data: MediaQuery.of(context).copyWith(
+                    textScaler: TextScaler.linear(scale),
+                    disableAnimations: true,
+                  ),
+                  child: child!,
                 ),
-                MessageBlock(
-                  message: TranscriptMessage(
-                    MessageRole.assistant,
-                    '这是一条需要换行的长回复，用来确认上限仍是列宽而不是被强制拉满。',
+                home: Scaffold(
+                  body: ChatScreen(
+                    session: null,
+                    activeSessionId: 'layout',
+                    running: reply.streaming,
+                    connected: true,
+                    offline: false,
+                    modelName: null,
+                    contextWindow: null,
+                    remainingContext: null,
+                    messages: [TranscriptMessage.assistant(reply.text)],
+                    commands: const [],
+                    permissionMode: PermissionMode.manual,
+                    allowBypassPermissions: false,
+                    pendingPermissions: const [],
+                    respondingPermissionIds: const {},
+                    promptController: controller,
+                    onFillPrompt: (_) {},
+                    onReconnect: () {},
+                    onOpenSettings: () {},
+                    onOpenModelPicker: () {},
+                    onNewConversation: () {},
+                    onOpenSessions: () {},
+                    onOpenWorkspace: () {},
+                    onPermissionModeSelected: (_) {},
+                    onPermissionAllow: (_) {},
+                    onPermissionDeny: (_) {},
+                    onSend: () {},
+                    onStop: () {},
                   ),
                 ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+              ),
+            );
+            await tester.pumpAndSettle();
 
-    final bubbles = find.byKey(const ValueKey('assistant-message'));
-    final shortWidth = tester.getSize(bubbles.at(0)).width;
-    final longWidth = tester.getSize(bubbles.at(1)).width;
-    expect(shortWidth, lessThan(120));
-    expect(shortWidth, lessThan(longWidth));
-    expect(longWidth, lessThan(390));
+            final frame = tester.getRect(
+              find.byKey(const ValueKey('assistant-message')),
+            );
+            expect(frame.left, closeTo(gutter, 0.01));
+            expect(width - frame.right, closeTo(gutter, 0.01));
+            expect(frame.width, closeTo(contentWidth, 0.01));
+            if (!reply.streaming && reply.text == markdownText) {
+              final code = tester.getRect(
+                find.byKey(const ValueKey('code-block-card')),
+              );
+              expect(code.left, closeTo(frame.left, 0.01));
+              expect(code.right, closeTo(frame.right, 0.01));
+              final tableViewport = tester.getRect(
+                find
+                    .ancestor(
+                      of: find.byType(Table),
+                      matching: find.byType(SingleChildScrollView),
+                    )
+                    .first,
+              );
+              expect(tableViewport.left, greaterThanOrEqualTo(frame.left));
+              expect(tableViewport.right, lessThanOrEqualTo(frame.right));
+            }
+            expect(tester.takeException(), isNull);
+          }
+        }
+      }
+    }
   });
 
   test('search source links accept only absolute web URLs', () {
@@ -3784,8 +4528,8 @@ void main() {
       find.byKey(const ValueKey('composer')),
     );
     final decoration = composer.decoration;
-    expect(decoration.gradient, AppLiquidGlass.strongBackdropGradient);
-    expect(decoration.border, isNull);
+    expect(decoration.gradient, isNull);
+    expect(decoration.border, isNotNull);
     expect(
       decoration.borderRadius,
       BorderRadius.circular(AppRadii.composerFloat),
@@ -3796,7 +4540,7 @@ void main() {
         of: find.byKey(const ValueKey('composer')),
         matching: find.byType(BackdropFilter),
       ),
-      findsOneWidget,
+      findsNothing,
     );
 
     await tester.showKeyboard(find.byType(TextField));
@@ -3805,7 +4549,7 @@ void main() {
         .widget<SignalLiquidGlass>(find.byKey(const ValueKey('composer')))
         .decoration;
     final focusedBorder = focusedDecoration.border! as Border;
-    expect(focusedBorder.top.color, AppColors.liquidFocus);
+    expect(focusedBorder.top.color, AppPalette.light.liquidFocus);
     expect(focusedBorder.top.width, 2);
   });
 
@@ -3819,15 +4563,15 @@ void main() {
       state: ActivityState.running,
     );
 
-    expect(transcriptGapBetween(user, assistant), 9);
-    expect(transcriptGapBetween(user, activity), 9);
+    expect(transcriptGapBetween(user, assistant), 12);
+    expect(transcriptGapBetween(user, activity), 12);
     expect(transcriptGapBetween(activity, assistant), 4);
     expect(transcriptGapBetween(assistant, activity), 12);
-    expect(transcriptGapBetween(assistant, user), 14);
+    expect(transcriptGapBetween(assistant, user), 20);
     expect(transcriptGapBetween(assistant, assistant), 6);
   });
 
-  testWidgets('thinking activity shows muted inline status and elapsed time', (
+  testWidgets('thinking activity shows a shimmering text disclosure', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -3840,6 +4584,7 @@ void main() {
               id: 'thinking',
               kind: ActivityKind.thinking,
               state: ActivityState.running,
+              detail: '先检查状态。',
             ),
           ),
         ),
@@ -3847,53 +4592,78 @@ void main() {
     );
 
     expect(find.byKey(const ValueKey('thinking-bubble')), findsOneWidget);
-    expect(find.byKey(const ValueKey('thinking-icon')), findsOneWidget);
-    expect(find.byKey(const ValueKey('thinking-signal')), findsNothing);
-    expect(find.text('思考中 · 本轮已运行 12 秒'), findsOneWidget);
-    final liveStatus = tester.getSemantics(find.bySemanticsLabel('正在思考'));
+    expect(find.text('思考中'), findsOneWidget);
+    expect(find.byType(ShaderMask), findsOneWidget);
+    expect(find.text('先检查状态。', findRichText: true), findsNothing);
+    final liveStatus = tester.getSemantics(
+      find.bySemanticsLabel('思考中，本轮已运行 12 秒'),
+    );
     expect(liveStatus.getSemanticsData().flagsCollection.isLiveRegion, isTrue);
-    final elapsedStatus = tester.getSemantics(
-      find.bySemanticsLabel('本轮已运行 12 秒'),
-    );
-    expect(
-      elapsedStatus.getSemanticsData().flagsCollection.isLiveRegion,
-      isFalse,
-    );
-    final glyph = find.byKey(const ValueKey('thinking-icon'));
-    final initialPainter = tester.widget<CustomPaint>(glyph).painter;
-    await tester.pump(const Duration(milliseconds: 450));
-    final grownPainter = tester.widget<CustomPaint>(glyph).painter;
-    expect(identical(grownPainter, initialPainter), isFalse);
-
-    await tester.pump(const Duration(milliseconds: 550));
-    expect(find.text('思考中 · 本轮已运行 13 秒'), findsOneWidget);
-    expect(find.bySemanticsLabel('正在思考'), findsOneWidget);
-    expect(find.bySemanticsLabel('本轮已运行 13 秒'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+    await tester.pump(const Duration(milliseconds: 220));
+    expect(find.text('先检查状态。', findRichText: true), findsOneWidget);
+    expect(tester.takeException(), isNull);
   });
 
-  testWidgets('thinking bloom stays still when animations are disabled', (
+  testWidgets('thinking shimmer stays still when animations are disabled', (
     tester,
   ) async {
     await tester.pumpWidget(
-      const MaterialApp(
+      MaterialApp(
         home: MediaQuery(
-          data: MediaQueryData(disableAnimations: true),
-          child: Scaffold(body: ThinkingIndicator()),
+          data: const MediaQueryData(disableAnimations: true),
+          child: Scaffold(
+            body: ThinkingHistoryBlock(
+              message: TranscriptMessage.activity(
+                '正在思考',
+                id: 'thinking',
+                kind: ActivityKind.thinking,
+                state: ActivityState.running,
+              ),
+            ),
+          ),
         ),
       ),
     );
 
-    final glyph = find.byKey(const ValueKey('thinking-icon'));
-    final initialPainter = tester.widget<CustomPaint>(glyph).painter;
-    await tester.pump(const Duration(milliseconds: 600));
-    final settledPainter = tester.widget<CustomPaint>(glyph).painter;
-
-    expect(identical(settledPainter, initialPainter), isTrue);
+    expect(find.text('思考中'), findsOneWidget);
+    expect(find.byType(ShaderMask), findsNothing);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
   });
 
-  testWidgets('completed thinking activity is not rendered', (tester) async {
+  testWidgets('expanded reasoning receives streamed Markdown without a preview', (
+    tester,
+  ) async {
+    Widget buildReasoning(String detail) => MaterialApp(
+      home: Scaffold(
+        body: ThinkingHistoryBlock(
+          message: TranscriptMessage.activity(
+            '正在思考',
+            id: 'thinking',
+            kind: ActivityKind.thinking,
+            state: ActivityState.running,
+            detail: detail,
+          ),
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(buildReasoning('第一句。'));
+    expect(find.text('第一句。', findRichText: true), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+    await tester.pump(const Duration(milliseconds: 220));
+    await tester.pumpWidget(buildReasoning('第一句。第二句。'));
+    expect(find.text('第一句。第二句。', findRichText: true), findsOneWidget);
+    expect(find.byKey(const ValueKey('thinking-history-content')), findsOneWidget);
+  });
+
+  testWidgets('completed thinking activity stays as collapsible history', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
+        theme: buildSignalConsoleTheme(),
         home: Scaffold(
           body: MessageBlock(
             message: TranscriptMessage.activity(
@@ -3901,14 +4671,35 @@ void main() {
               id: 'thinking-done',
               kind: ActivityKind.thinking,
               state: ActivityState.done,
+              detail: '先检查状态。再整理结果。',
+              durationMs: 4200,
             ),
           ),
         ),
       ),
     );
 
-    expect(find.byKey(const ValueKey('thinking-bubble')), findsNothing);
-    expect(find.text('思考完成'), findsNothing);
+    expect(find.byKey(const ValueKey('thinking-bubble')), findsOneWidget);
+    expect(find.text('已深度思考'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('thinking-history-content')),
+      findsNothing,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('thinking-history-content')),
+      findsOneWidget,
+    );
+    expect(find.text('先检查状态。再整理结果。', findRichText: true), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('thinking-history-content')),
+      findsNothing,
+    );
   });
 
   testWidgets('consecutive tool activities merge into one timeline card', (
@@ -3964,21 +4755,92 @@ void main() {
     );
 
     expect(find.byType(ActivityTimelineCard), findsOneWidget);
-    expect(find.text('显示之前 1 步'), findsOneWidget);
-    expect(find.text('读取文件'), findsNothing);
-    expect(find.text('搜索代码'), findsOneWidget);
-    expect(find.text('运行测试'), findsOneWidget);
+    expect(find.text('运行命令'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-step-toggle-t1')), findsNothing);
+    expect(find.byKey(const ValueKey('activity-step-toggle-t2')), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-step-toggle-t3')), findsOneWidget);
 
-    await tester.tap(find.byKey(const ValueKey('activity-timeline-expand')));
-    await tester.pump();
-    expect(find.text('显示之前 1 步'), findsNothing);
-    expect(find.text('读取文件'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pump(const Duration(milliseconds: 220));
+    expect(find.byKey(const ValueKey('activity-step-toggle-t1')), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-step-toggle-t2')), findsOneWidget);
 
-    await tester.tap(find.text('搜索代码'));
-    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-t2')));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsOneWidget);
     expect(find.byKey(const ValueKey('activity-detail-t2')), findsOneWidget);
     expect(find.text('needle pattern'), findsOneWidget);
   });
+
+  testWidgets(
+    'skill activity renders its name and opens a detail sheet',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildSignalConsoleTheme(),
+          home: Scaffold(
+            body: TranscriptView(
+              messages: [
+                TranscriptMessage.user('搜索绍兴市中心美食'),
+                TranscriptMessage.activity(
+                  '已调用技能',
+                  id: 'skill-1',
+                  kind: ActivityKind.tool,
+                  state: ActivityState.done,
+                  tool: 'Skill',
+                  detail: 'agent-reach',
+                ),
+                TranscriptMessage.assistant('找到以下推荐'),
+              ],
+              session: null,
+              activeSessionId: null,
+              runStartedAt: null,
+              running: false,
+              connected: true,
+              offline: false,
+              pendingPermissions: const [],
+              respondingPermissionIds: const {},
+              onFillPrompt: (_) {},
+              onPermissionAllow: (_) {},
+              onPermissionDeny: (_) {},
+              onReconnect: () {},
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byType(ActivityTimelineCard), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('process-history-toggle')));
+      await tester.pumpAndSettle();
+      expect(find.byType(ActivityTimelineCard), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+      await tester.pumpAndSettle();
+      expect(find.text('使用技能 · agent-reach'), findsOneWidget);
+      expect(find.text('已调用技能'), findsOneWidget);
+      expect(find.text('agent-reach'), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('activity-step-toggle-skill-1')),
+          matching: find.byType(SmartIcon),
+        ),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('activity-step-toggle-skill-1')));
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('tool-activity-sheet')),
+          matching: find.text('agent-reach'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('activity-detail-skill-1')),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('code blocks render language header with working copy button', (
     tester,
@@ -4019,13 +4881,60 @@ void main() {
       find.byKey(const ValueKey('code-block-card')),
     );
     final cardDecoration = card.decoration as BoxDecoration;
-    expect(cardDecoration.border, isNull);
+    expect(
+      cardDecoration.border,
+      Border.all(color: AppPalette.light.line, width: 0.8),
+    );
     expect(cardDecoration.color, AppColors.control);
 
     await tester.tap(find.byKey(const ValueKey('code-copy-button')));
     await tester.pump();
     expect(copiedText, 'void main() {}');
     expect(find.text('已复制'), findsOneWidget);
+  });
+
+  testWidgets('assistant replies can be selected and copied in full', (
+    tester,
+  ) async {
+    String? copiedText;
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          copiedText =
+              (call.arguments as Map<Object?, Object?>)['text'] as String?;
+        }
+        return null;
+      },
+    );
+
+    await pumpAssistantMessage(tester, text: '先改 daemon 启动参数');
+    expect(find.byType(AssistantSelectionArea), findsOneWidget);
+    expect(find.byType(SelectionArea), findsOneWidget);
+
+    await tester.longPress(find.text('先改 daemon 启动参数'));
+    await tester.pumpAndSettle();
+    expect(find.text('复制全部'), findsOneWidget);
+
+    await tester.tap(find.text('复制全部'));
+    await tester.pumpAndSettle();
+    expect(copiedText, '先改 daemon 启动参数');
+  });
+
+  testWidgets('markdown assistant replies stay inside a selection area', (
+    tester,
+  ) async {
+    await pumpAssistantMessage(tester, text: '- 先跑测试\n- 再看 `src/daemon.ts`');
+    await tester.pumpAndSettle();
+    expect(find.byType(MarkdownBody), findsOneWidget);
+    expect(find.byType(AssistantSelectionArea), findsOneWidget);
+    expect(find.textContaining('先跑测试'), findsOneWidget);
   });
 
   testWidgets('blank assistant messages are not rendered', (tester) async {
@@ -4260,15 +5169,19 @@ void main() {
       ),
     );
 
-    expect(find.text('正在读取文件'), findsOneWidget);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
-    expect(find.text('mobile/lib/main.dart'), findsOneWidget);
+    expect(find.text('读取文件'), findsOneWidget);
+    expect(find.text('mobile/lib/main.dart'), findsNothing);
 
-    await tester.tap(find.text('正在读取文件'));
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pump(const Duration(milliseconds: 220));
+    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool-1')));
     await tester.pump(const Duration(milliseconds: 300));
-
-    // Expanded body keeps the path as plain Text (no SelectableText layer).
-    expect(find.text('mobile/lib/main.dart'), findsWidgets);
+    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsOneWidget);
+    expect(find.text('mobile/lib/main.dart'), findsOneWidget);
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
+    expect(find.text('mobile/lib/main.dart'), findsNothing);
   });
 
   testWidgets('offline recovery panel keeps one reconnect action', (
@@ -4498,6 +5411,53 @@ void main() {
     expect(find.text(r'E:\work\cc-remote'), findsOneWidget);
   });
 
+  testWidgets('long workspace paths do not overlap following assistant text', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(393, 640);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    const path = r'D:\Projects\EMBEDDED\项目笔记\学习路线.md';
+    const following = '按你库里的习惯把 YAML、callout 和清单格式写一页可勾选的路线。';
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: WorkspacePortal(
+            workspaceDir: r'D:\Projects\EMBEDDED',
+            onOpenPath: (_) {},
+            child: MessageBlock(
+              message: TranscriptMessage.assistant(
+                '已写入当前目录：\n**$path**\n$following',
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    for (final element in tester.allElements) {
+      final widget = element.widget;
+      if (widget is Text && widget.textSpan != null) {
+        expect(
+          containsWidgetSpan(widget.textSpan!),
+          isFalse,
+          reason: 'workspace paths must stay in the parent text layout',
+        );
+      }
+      if (widget is RichText) {
+        expect(
+          containsWidgetSpan(widget.text),
+          isFalse,
+          reason: 'workspace paths must stay in the parent text layout',
+        );
+      }
+    }
+  });
+
   testWidgets('permission card falls back when workspace path is missing', (
     tester,
   ) async {
@@ -4639,6 +5599,221 @@ void main() {
   test('network timeout gets a useful pairing error', () {
     expect(errorText(TimeoutException('slow')), '连接超时，请检查电脑端和隧道');
   });
+
+  testWidgets('running composer stays editable and queues the next prompt', (
+    tester,
+  ) async {
+    final controller = TextEditingController(text: '下一轮跑测试');
+    addTearDown(controller.dispose);
+    var sendCount = 0;
+    var stopCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: PromptBar(
+            controller: controller,
+            commands: const [],
+            running: true,
+            connected: true,
+            offline: false,
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: false,
+            onPermissionModeSelected: (_) {},
+            onCommandSelected: (_) {},
+            onReconnect: () {},
+            onSend: () => sendCount += 1,
+            onStop: () => stopCount += 1,
+          ),
+        ),
+      ),
+    );
+
+    expect(tester.widget<TextField>(find.byType(TextField)).enabled, isTrue);
+    expect(find.byKey(const ValueKey('composer-primary-stop')), findsOneWidget);
+    expect(find.byKey(const ValueKey('composer-queue-action')), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('composer-queue-action')));
+    expect(sendCount, 1);
+    expect(stopCount, 0);
+
+    await tester.tap(find.byKey(const ValueKey('composer-primary-action')));
+    expect(stopCount, 1);
+  });
+
+  testWidgets('queued prompt chip can be cancelled', (tester) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    var cancelled = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: PromptBar(
+            controller: controller,
+            commands: const [],
+            running: true,
+            connected: true,
+            offline: false,
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: false,
+            queuedPreview: '排队发送：下一轮跑测试',
+            onCancelQueue: () => cancelled = true,
+            onPermissionModeSelected: (_) {},
+            onCommandSelected: (_) {},
+            onReconnect: () {},
+            onSend: () {},
+            onStop: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('composer-queued-chip')), findsOneWidget);
+    expect(tester.widget<TextField>(find.byType(TextField)).enabled, isFalse);
+    expect(find.byKey(const ValueKey('composer-queue-action')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('composer-queued-cancel')));
+    expect(cancelled, isTrue);
+  });
+
+  testWidgets('peeking another session is read-only and can return', (
+    tester,
+  ) async {
+    final controller = TextEditingController();
+    addTearDown(controller.dispose);
+    var returned = false;
+    var stopped = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: AppBackground(
+          child: ChatScreen(
+            session: SavedSession(
+              origin: Uri.parse('https://cc-remote.example.com'),
+              token: 'demo',
+              deviceName: 'My PC',
+              workspaceDir: 'cc-remote',
+            ),
+            activeSessionId: 'session-1',
+            running: true,
+            connected: true,
+            offline: false,
+            modelName: 'claude-opus-4-8',
+            contextWindow: 200000,
+            remainingContext: 174919,
+            messages: [TranscriptMessage.user('正在跑当前任务')],
+            commands: const [],
+            permissionMode: PermissionMode.manual,
+            allowBypassPermissions: false,
+            pendingPermissions: const [],
+            respondingPermissionIds: const {},
+            promptController: controller,
+            peek: const SessionPeekView(
+              sessionId: 'session-2',
+              title: '玻璃控制面',
+              messages: [
+                TranscriptMessage(MessageRole.user, '把控制面改成玻璃'),
+                TranscriptMessage(MessageRole.assistant, '玻璃控制面已经落地。'),
+              ],
+              liveRunning: true,
+            ),
+            onExitPeek: () => returned = true,
+            onFillPrompt: (_) {},
+            onReconnect: () {},
+            onOpenSettings: () {},
+            onOpenModelPicker: () {},
+            onNewConversation: () {},
+            onOpenSessions: () {},
+            onOpenWorkspace: () {},
+            onPermissionModeSelected: (_) {},
+            onPermissionAllow: (_) {},
+            onPermissionDeny: (_) {},
+            onSend: () {},
+            onStop: () => stopped = true,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('session-peek-dock')), findsOneWidget);
+    expect(find.byType(PromptBar), findsNothing);
+    expect(find.text('玻璃控制面已经落地。'), findsOneWidget);
+    expect(find.text('正在跑当前任务'), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('session-peek-stop')));
+    expect(stopped, isTrue);
+    await tester.tap(find.byKey(const ValueKey('session-peek-return')));
+    expect(returned, isTrue);
+  });
+
+  testWidgets(
+    'peek loading shows a placeholder instead of the live transcript',
+    (tester) async {
+      final controller = TextEditingController();
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildSignalConsoleTheme(),
+          home: AppBackground(
+            child: ChatScreen(
+              session: SavedSession(
+                origin: Uri.parse('https://cc-remote.example.com'),
+                token: 'demo',
+                deviceName: 'My PC',
+                workspaceDir: 'cc-remote',
+              ),
+              activeSessionId: 'session-1',
+              running: true,
+              connected: true,
+              offline: false,
+              modelName: 'claude-opus-4-8',
+              contextWindow: 200000,
+              remainingContext: 174919,
+              messages: [TranscriptMessage.user('正在跑当前任务')],
+              commands: const [],
+              permissionMode: PermissionMode.manual,
+              allowBypassPermissions: false,
+              pendingPermissions: const [],
+              respondingPermissionIds: const {},
+              promptController: controller,
+              peek: const SessionPeekView(
+                sessionId: 'session-2',
+                title: '玻璃控制面',
+                messages: [TranscriptMessage(MessageRole.system, '正在读取会话…')],
+                loading: true,
+                liveRunning: true,
+              ),
+              onFillPrompt: (_) {},
+              onReconnect: () {},
+              onOpenSettings: () {},
+              onOpenModelPicker: () {},
+              onNewConversation: () {},
+              onOpenSessions: () {},
+              onOpenWorkspace: () {},
+              onPermissionModeSelected: (_) {},
+              onPermissionAllow: (_) {},
+              onPermissionDeny: (_) {},
+              onSend: () {},
+              onStop: () {},
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byKey(const ValueKey('session-peek-dock')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('session-peek-loading')),
+        findsOneWidget,
+      );
+      expect(find.text('正在读取会话…'), findsOneWidget);
+      expect(find.text('正在跑当前任务'), findsNothing);
+      expect(find.byType(PromptBar), findsNothing);
+    },
+  );
 }
 
 class ReviewWorkspaceApi extends WorkspaceApi {
@@ -4673,6 +5848,21 @@ class ReviewWorkspaceApi extends WorkspaceApi {
   void close() {
     closed = true;
     super.close();
+  }
+}
+
+class FailingSnapshotWorkspaceApi extends WorkspaceApi {
+  FailingSnapshotWorkspaceApi()
+    : super(origin: Uri.parse('https://example.test'), token: 'test');
+
+  @override
+  Future<WorkspaceSnapshot> snapshot() async {
+    throw StateError('workspace_failed');
+  }
+
+  @override
+  Future<WorkspaceDocument> file(String path) async {
+    return WorkspaceDocument.file(path, 'hello\n', truncated: false);
   }
 }
 
@@ -4739,43 +5929,6 @@ class FakeCameraPermissionService implements CameraPermissionService {
 
   @override
   Future<bool> shouldRequestOnLaunch() async => requestOnLaunch;
-}
-
-class FakeChatBackgroundImageService implements ChatBackgroundImageService {
-  FakeChatBackgroundImageService(this.path);
-
-  final String path;
-  final List<String?> deletedPaths = [];
-  int pickCount = 0;
-
-  @override
-  Future<String?> pickAndStore() async {
-    pickCount += 1;
-    return path;
-  }
-
-  @override
-  Future<void> deleteStoredImage(String? path) async {
-    deletedPaths.add(path);
-  }
-}
-
-class DelayedChatBackgroundPreferenceStore
-    extends ChatBackgroundPreferenceStore {
-  final Completer<ChatBackgroundPreference> loadCompleter = Completer();
-  ChatBackgroundPreference? savedPreference;
-
-  @override
-  Future<ChatBackgroundPreference> load() => loadCompleter.future;
-
-  @override
-  Future<void> save(ChatBackgroundPreference preference) async {
-    savedPreference = preference;
-  }
-
-  void completeLoad(ChatBackgroundPreference preference) {
-    loadCompleter.complete(preference);
-  }
 }
 
 class DelayedClaudeModelPreferenceStore extends ClaudeModelPreferenceStore {

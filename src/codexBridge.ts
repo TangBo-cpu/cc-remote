@@ -17,12 +17,29 @@ export type CodexBridgeOptions = {
   workspaceDir: string;
 };
 
+export type CodexModelOption = {
+  model: string;
+  displayName: string;
+  description: string;
+  isDefault: boolean;
+};
+
+export type CodexSkillOption = {
+  name: string;
+  description: string;
+  path: string;
+};
+
+const nativeCommands = ['compact', 'review'] as const;
+type NativeCommand = typeof nativeCommands[number];
+
 type CurrentRun = {
   process?: CodexProcess;
   stopped: boolean;
   settled: boolean;
   sessionId?: string;
   turnId?: string;
+  nativeCommand?: NativeCommand;
   sawDelta: boolean;
   stderr: string;
   options: EngineRunOptions;
@@ -50,6 +67,7 @@ type CodexProcess = {
 export class CodexBridge implements EngineBridge {
   private current: CurrentRun | null = null;
   private process: CodexProcess | null = null;
+  private initializing: Promise<CodexProcess> | null = null;
 
   constructor(private readonly options: CodexBridgeOptions) {}
 
@@ -59,6 +77,68 @@ export class CodexBridge implements EngineBridge {
 
   respondToPermission(_requestId: string, _decision: 'allow' | 'deny'): boolean {
     return false;
+  }
+
+  async listModels(): Promise<CodexModelOption[]> {
+    const state = await this.ensureProcess();
+    const models = new Map<string, CodexModelOption>();
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const result = await this.request(state, 'model/list', {
+        limit: 100,
+        ...(cursor ? { cursor } : {}),
+      }, 15_000);
+      if (!isRecord(result) || !Array.isArray(result.data)) {
+        throw new Error('invalid_codex_model_catalog');
+      }
+      for (const item of result.data) {
+        if (!isRecord(item) || item.hidden === true || typeof item.model !== 'string') continue;
+        const model = normalizeEngineModel(item.model);
+        if (!model) continue;
+        models.set(model, {
+          model,
+          displayName: typeof item.displayName === 'string' ? item.displayName : model,
+          description: typeof item.description === 'string' ? item.description : '',
+          isDefault: item.isDefault === true,
+        });
+      }
+      cursor = typeof result.nextCursor === 'string' && result.nextCursor ? result.nextCursor : undefined;
+      if (cursor && cursors.has(cursor)) throw new Error('invalid_codex_model_cursor');
+      if (cursor) cursors.add(cursor);
+    } while (cursor);
+    return [...models.values()];
+  }
+
+  async listSkills(): Promise<CodexSkillOption[]> {
+    const state = await this.ensureProcess();
+    const result = await this.request(state, 'skills/list', {
+      cwds: [this.options.workspaceDir],
+      forceReload: true,
+    }, 15_000);
+    if (!isRecord(result) || !Array.isArray(result.data)) {
+      throw new Error('invalid_codex_skill_catalog');
+    }
+    const skills = new Map<string, CodexSkillOption>();
+    for (const entry of result.data) {
+      if (!isRecord(entry) || !Array.isArray(entry.skills)) continue;
+      for (const item of entry.skills) {
+        if (!isRecord(item) || item.enabled === false
+          || typeof item.name !== 'string' || typeof item.path !== 'string') continue;
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(item.name)) continue;
+        skills.set(item.name, {
+          name: item.name,
+          path: item.path,
+          description: typeof item.description === 'string' ? item.description : '',
+        });
+      }
+    }
+    return [...skills.values()];
+  }
+
+  async listCommands(): Promise<string[]> {
+    const skills = await this.listSkills();
+    return [...new Set([...nativeCommands, ...skills.map(skill => skill.name)])];
   }
 
   async run(options: EngineRunOptions): Promise<EngineRunResult> {
@@ -81,14 +161,59 @@ export class CodexBridge implements EngineBridge {
     };
     this.current = run;
     try {
+      const command = options.prompt.match(/^\/([A-Za-z0-9][A-Za-z0-9._-]{0,127})(?:\s|$)/);
+      const nativeCommand = nativeCommands.find(name => name === command?.[1]);
+      const argumentsText = command ? options.prompt.slice(command[1].length + 1).trim() : '';
+      if (nativeCommand && options.imagePaths?.length) {
+        throw new Error('Codex 原生命令不接受图片附件，请单独发送命令。');
+      }
+      if (nativeCommand === 'compact' && argumentsText) {
+        throw new Error('/compact 不接受参数，请单独发送 /compact。');
+      }
       const processState = await this.ensureProcess();
       run.process = processState;
-      const threadId = await this.ensureThread(processState, options, model, sandbox);
+      if (run.stopped || run.settled) return await completed;
+      if (nativeCommand === 'compact' && !options.sessionId && !processState.threadId) {
+        throw new Error('当前会话还没有 Codex 上下文，请先发送一条消息。');
+      }
+      const skill = command && !nativeCommand
+        ? (await this.listSkills()).find(item => item.name === command[1])
+        : undefined;
+      if (command && !nativeCommand && !skill) throw new Error('codex_command_not_found');
+      if (run.stopped || run.settled) return await completed;
+      const thread = await this.ensureThread(processState, options, model, sandbox);
+      if (run.stopped || run.settled) return await completed;
+      if (thread.model) {
+        options.onEvent({ type: 'thread.started', thread });
+      }
+      const threadId = thread.id;
       if (threadId !== run.sessionId) {
         run.sessionId = threadId;
         options.onSessionId(threadId);
       }
-      const input: Array<Record<string, unknown>> = [{ type: 'text', text: options.prompt }];
+      run.nativeCommand = nativeCommand;
+      if (nativeCommand === 'compact') {
+        await this.request(processState, 'thread/compact/start', { threadId }, 15_000);
+        return await completed;
+      }
+      if (nativeCommand === 'review') {
+        const result = await this.request(processState, 'review/start', {
+          threadId,
+          target: argumentsText
+            ? { type: 'custom', instructions: argumentsText }
+            : { type: 'uncommittedChanges' },
+          delivery: 'inline',
+        }, 15_000);
+        const turn = isRecord(result) && isRecord(result.turn) ? result.turn : undefined;
+        if (!turn || typeof turn.id !== 'string') throw new Error('codex_review_start_failed');
+        run.turnId = turn.id;
+        return await completed;
+      }
+      const input: Array<Record<string, unknown>> = [{
+        type: 'text',
+        text: skill ? options.prompt.replace(/^\//, '$') : options.prompt,
+      }];
+      if (skill) input.push({ type: 'skill', name: skill.name, path: skill.path });
       for (const path of [...new Set(options.imagePaths ?? [])]) {
         if (path.trim()) input.push({ type: 'localImage', path });
       }
@@ -137,6 +262,17 @@ export class CodexBridge implements EngineBridge {
   }
 
   private async ensureProcess(): Promise<CodexProcess> {
+    if (this.initializing) return this.initializing;
+    const pending = this.startProcess();
+    this.initializing = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.initializing === pending) this.initializing = null;
+    }
+  }
+
+  private async startProcess(): Promise<CodexProcess> {
     const existing = this.process;
     if (existing && !existing.closed) return existing;
 
@@ -218,13 +354,13 @@ export class CodexBridge implements EngineBridge {
     options: EngineRunOptions,
     model: string | undefined,
     sandbox: ReturnType<typeof normalizeCodexSandboxMode>,
-  ): Promise<string> {
+  ): Promise<{ id: string; model?: string }> {
     const additionalDirectories = [...new Set(options.additionalDirectories ?? [])]
       .filter(directory => directory.trim());
     const threadKey = JSON.stringify({ model, sandbox, additionalDirectories });
     const requestedThreadId = options.sessionId ?? state.threadId;
     if (state.threadId === requestedThreadId && state.threadKey === threadKey) {
-      return state.threadId!;
+      return { id: state.threadId! };
     }
 
     const params = {
@@ -243,20 +379,37 @@ export class CodexBridge implements EngineBridge {
     if (!thread || typeof thread.id !== 'string') throw new Error('codex_thread_start_failed');
     state.threadId = thread.id;
     state.threadKey = threadKey;
-    return thread.id;
+    const resultModel = isRecord(result) && typeof result.model === 'string'
+      ? result.model
+      : undefined;
+    return {
+      id: thread.id,
+      ...(typeof thread.model === 'string'
+        ? { model: thread.model }
+        : resultModel ? { model: resultModel } : {}),
+    };
   }
 
-  private request(state: CodexProcess, method: string, params: unknown): Promise<unknown> {
+  private request(state: CodexProcess, method: string, params: unknown, timeoutMs?: number): Promise<unknown> {
     if (state.closed || state.child.stdin.destroyed) {
       return Promise.reject(new Error('codex_app_server_not_running'));
     }
     const id = String(++state.nextRequestId);
     return new Promise((resolve, reject) => {
-      state.pending.set(id, { resolve, reject });
+      const timer = timeoutMs ? setTimeout(() => {
+        state.pending.delete(id);
+        reject(new Error(`codex_request_timeout: ${method}`));
+      }, timeoutMs) : undefined;
+      timer?.unref();
+      state.pending.set(id, {
+        resolve: result => { if (timer) clearTimeout(timer); resolve(result); },
+        reject: error => { if (timer) clearTimeout(timer); reject(error); },
+      });
       try {
         state.child.stdin.write(JSON.stringify({ id, method, params }) + '\n');
       } catch (error) {
         state.pending.delete(id);
+        if (timer) clearTimeout(timer);
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
@@ -304,9 +457,17 @@ export class CodexBridge implements EngineBridge {
     };
     const run = this.current;
     if (!run || run.process !== state || run.settled) return;
+    const foundSessionId = extractCodexThreadId(event);
+    if (foundSessionId && run.sessionId && foundSessionId !== run.sessionId) return;
+    if (run.nativeCommand && !run.turnId && event.type === 'turn.started' && isRecord(event.turn)
+      && typeof event.turn.id === 'string') run.turnId = event.turn.id;
+    if (run.turnId) {
+      const eventTurnId = typeof event.turnId === 'string' ? event.turnId
+        : isRecord(event.turn) && typeof event.turn.id === 'string' ? event.turn.id : undefined;
+      if (eventTurnId && eventTurnId !== run.turnId) return;
+    }
     run.options.onEvent(event);
 
-    const foundSessionId = extractCodexThreadId(event);
     if (foundSessionId && foundSessionId !== run.sessionId) {
       run.sessionId = foundSessionId;
       state.threadId = foundSessionId;
@@ -325,6 +486,9 @@ export class CodexBridge implements EngineBridge {
     if (event.type === 'turn.completed' && isRecord(event.turn)) {
       const status = event.turn.status;
       if (status === 'interrupted') run.stopped = true;
+      if (run.nativeCommand === 'compact' && status === 'completed' && !run.stopped) {
+        run.options.onText('上下文压缩完成。');
+      }
       this.finishRun(run, status === 'failed' ? 1 : 0, eventError);
     }
   }
@@ -390,6 +554,9 @@ export function extractCodexActivities(event: unknown): EngineActivity[] {
 
 export function extractCodexSessionInfo(event: unknown): EngineSessionInfo | null {
   if (!isRecord(event)) return null;
+  const model = isRecord(event.thread) && typeof event.thread.model === 'string'
+    ? event.thread.model
+    : typeof event.model === 'string' ? event.model : undefined;
   if (event.type === 'thread.tokenUsage.updated' && isRecord(event.tokenUsage)) {
     // total accumulates across the whole thread, so it races past the context
     // window within a few turns; last is the most recent model request, which
@@ -401,6 +568,7 @@ export function extractCodexSessionInfo(event: unknown): EngineSessionInfo | nul
       || tokenValue(usage.inputTokens) + tokenValue(usage.outputTokens);
     const contextWindow = optionalTokenValue(event.tokenUsage.modelContextWindow);
     return {
+      ...(model ? { model } : {}),
       usedTokens,
       ...(contextWindow === undefined
         ? {}
@@ -410,7 +578,9 @@ export function extractCodexSessionInfo(event: unknown): EngineSessionInfo | nul
           }),
     };
   }
-  if (event.type !== 'turn.completed' || !isRecord(event.usage)) return null;
+  if (event.type !== 'turn.completed' || !isRecord(event.usage)) {
+    return model ? { model } : null;
+  }
   const usage = event.usage;
   const inputTokens = tokenValue(usage.input_tokens ?? usage.inputTokens);
   const outputTokens = tokenValue(usage.output_tokens ?? usage.outputTokens);
@@ -419,13 +589,14 @@ export function extractCodexSessionInfo(event: unknown): EngineSessionInfo | nul
   );
   const usedTokens = inputTokens + outputTokens;
   return {
+    ...(model ? { model } : {}),
     usedTokens,
     ...(contextWindow === undefined
       ? {}
       : {
           contextWindow,
           remainingTokens: Math.max(0, contextWindow - usedTokens),
-        }),
+      }),
   };
 }
 
@@ -447,6 +618,9 @@ function extractCodexText(event: unknown): string {
     return event.delta;
   }
   if (event.type !== 'item.completed' || !isRecord(event.item)) return '';
+  if (event.item.type === 'exitedReviewMode' && typeof event.item.review === 'string') {
+    return event.item.review;
+  }
   return (event.item.type === 'agent_message' || event.item.type === 'agentMessage')
     && typeof event.item.text === 'string'
     ? event.item.text
@@ -480,6 +654,7 @@ function extractCodexError(event: unknown): string | undefined {
 function codexToolName(item: Record<string, unknown>): string | undefined {
   if (item.type === 'command_execution' || item.type === 'commandExecution') return 'Shell';
   if (item.type === 'file_change' || item.type === 'fileChange') return 'FileChange';
+  if (item.type === 'contextCompaction') return 'Compact';
   if (item.type === 'mcp_tool_call' || item.type === 'mcpToolCall') {
     const server = stringValue(item.server);
     const tool = stringValue(item.tool) ?? stringValue(item.name);

@@ -62,6 +62,7 @@ class EffortGaugeIcon extends StatelessWidget {
       child: CustomPaint(
         size: const Size(25, 21),
         painter: _EffortGaugePainter(
+          palette: AppPalette.of(context),
           level: _manualIndex(effort).toDouble(),
           automatic: effort == ClaudeEffortPreference.automatic,
           enabled: enabled,
@@ -127,6 +128,7 @@ class _EffortGaugeOverlayState extends State<_EffortGaugeOverlay> {
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
+    final palette = AppPalette.of(context);
     final size = media.size;
     final compact = size.width < 350;
     final gaugeSize = compact ? const Size(160, 126) : const Size(184, 142);
@@ -165,16 +167,16 @@ class _EffortGaugeOverlayState extends State<_EffortGaugeOverlay> {
                       filter: ui.ImageFilter.blur(sigmaX: 4, sigmaY: 4),
                       child: DecoratedBox(
                         decoration: BoxDecoration(
-                          color: AppColors.surfaceElevated.withValues(
+                          color: palette.surfaceElevated.withValues(
                             alpha: 0.12,
                           ),
                           gradient: RadialGradient(
                             center: const Alignment(0.40, 0.34),
                             radius: 1.08,
                             colors: [
-                              AppColors.surfaceElevated.withValues(alpha: 0.02),
-                              AppColors.paper.withValues(alpha: 0.08),
-                              AppColors.composerControlFill.withValues(
+                              palette.surfaceElevated.withValues(alpha: 0.02),
+                              palette.paper.withValues(alpha: 0.08),
+                              palette.composerControlFill.withValues(
                                 alpha: 0.20,
                               ),
                             ],
@@ -198,13 +200,14 @@ class _EffortGaugeOverlayState extends State<_EffortGaugeOverlay> {
                   ),
                 ),
                 child: Column(
+                  key: const ValueKey('effort-gauge-surface'),
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
                       current.label,
                       key: const ValueKey('effort-gauge-label'),
-                      style: const TextStyle(
-                        color: AppColors.ink,
+                      style: TextStyle(
+                        color: palette.ink,
                         fontSize: 19,
                         fontWeight: FontWeight.w700,
                         height: 1.15,
@@ -239,7 +242,7 @@ class _EffortGaugeOverlayState extends State<_EffortGaugeOverlay> {
                             borderRadius: BorderRadius.circular(24),
                             border: showFocusHighlight
                                 ? Border.all(
-                                    color: AppColors.accentStrong,
+                                    color: palette.accentStrong,
                                     width: 2,
                                   )
                                 : null,
@@ -299,6 +302,7 @@ class _EffortGaugeOverlayState extends State<_EffortGaugeOverlay> {
                                   child: CustomPaint(
                                     size: gaugeSize,
                                     painter: _EffortGaugePainter(
+                                      palette: palette,
                                       level: value,
                                       automatic:
                                           current ==
@@ -326,6 +330,7 @@ class _EffortGaugeOverlayState extends State<_EffortGaugeOverlay> {
 
 class _EffortGaugePainter extends CustomPainter {
   const _EffortGaugePainter({
+    required this.palette,
     required this.level,
     required this.automatic,
     required this.enabled,
@@ -335,6 +340,7 @@ class _EffortGaugePainter extends CustomPainter {
   static const startAngle = math.pi * 10 / 9;
   static const sweepAngle = math.pi * 7 / 9;
 
+  final AppPalette palette;
   final double level;
   final bool automatic;
   final bool enabled;
@@ -352,13 +358,11 @@ class _EffortGaugePainter extends CustomPainter {
     final rect = Rect.fromCircle(center: hub, radius: radius);
     final trackColor = enabled
         ? compact
-              ? AppColors.inactiveLight
-              : Color.lerp(AppColors.inactiveLight, AppColors.inactive, 0.22)!
-        : AppColors.line;
-    final activeColor = enabled
-        ? AppColors.accentStrong
-        : AppColors.inactiveLight;
-    final inkColor = enabled ? AppColors.ink : AppColors.inactive;
+              ? palette.inactiveLight
+              : Color.lerp(palette.inactiveLight, palette.inactive, 0.22)!
+        : palette.line;
+    final activeColor = enabled ? palette.accentStrong : palette.inactiveLight;
+    final inkColor = enabled ? palette.ink : palette.inactive;
     final strokeWidth = compact ? 2.8 : 7.0;
     final dotRadius = compact ? 1.25 : 5.2;
 
@@ -373,23 +377,20 @@ class _EffortGaugePainter extends CustomPainter {
         Paint()
           ..shader = RadialGradient(
             colors: [
-              AppColors.surfaceElevated.withValues(alpha: 0.82),
-              AppColors.surfaceElevated.withValues(alpha: 0.38),
-              AppColors.surfaceElevated.withValues(alpha: 0),
+              palette.surfaceElevated.withValues(alpha: 0.82),
+              palette.surfaceElevated.withValues(alpha: 0.38),
+              palette.surfaceElevated.withValues(alpha: 0),
             ],
             stops: const [0, 0.54, 1],
           ).createShader(haloRect),
       );
-    }
-
-    if (!compact) {
       canvas.drawArc(
         rect.shift(const Offset(0, 1.2)),
         startAngle,
         sweepAngle,
         false,
         Paint()
-          ..color = AppColors.ink.withValues(alpha: 0.10)
+          ..color = palette.ink.withValues(alpha: 0.10)
           ..style = PaintingStyle.stroke
           ..strokeWidth = strokeWidth + 1.4
           ..strokeCap = StrokeCap.round
@@ -397,12 +398,17 @@ class _EffortGaugePainter extends CustomPainter {
       );
     }
 
-    final track = Paint()
-      ..color = trackColor
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = strokeWidth
-      ..strokeCap = StrokeCap.round;
-    canvas.drawArc(rect, startAngle, sweepAngle, false, track);
+    canvas.drawArc(
+      rect,
+      startAngle,
+      sweepAngle,
+      false,
+      Paint()
+        ..color = trackColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = strokeWidth
+        ..strokeCap = StrokeCap.round,
+    );
 
     final normalized = (level / (_manualEfforts.length - 1)).clamp(0.0, 1.0);
     if (!automatic) {
@@ -420,12 +426,17 @@ class _EffortGaugePainter extends CustomPainter {
             ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4),
         );
       }
-      final active = Paint()
-        ..color = activeColor
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = strokeWidth
-        ..strokeCap = StrokeCap.round;
-      canvas.drawArc(rect, startAngle, sweepAngle * normalized, false, active);
+      canvas.drawArc(
+        rect,
+        startAngle,
+        sweepAngle * normalized,
+        false,
+        Paint()
+          ..color = activeColor
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = strokeWidth
+          ..strokeCap = StrokeCap.round,
+      );
     }
 
     if (!compact) {
@@ -438,18 +449,18 @@ class _EffortGaugePainter extends CustomPainter {
           point + const Offset(0, 1.2),
           dotRadius + 1.8,
           Paint()
-            ..color = AppColors.ink.withValues(alpha: 0.13)
+            ..color = palette.ink.withValues(alpha: 0.13)
             ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5),
         );
         canvas.drawCircle(
           point,
           dotRadius + 1.5,
-          Paint()..color = active ? AppColors.surfaceElevated : trackColor,
+          Paint()..color = active ? palette.surface : trackColor,
         );
         canvas.drawCircle(
           point,
           active ? dotRadius : dotRadius - 1.5,
-          Paint()..color = active ? activeColor : AppColors.surfaceElevated,
+          Paint()..color = active ? activeColor : palette.surface,
         );
       }
     }
@@ -478,41 +489,39 @@ class _EffortGaugePainter extends CustomPainter {
       canvas.drawPath(
         needle.shift(const Offset(0, 1.5)),
         Paint()
-          ..color = AppColors.ink.withValues(alpha: 0.22)
+          ..color = palette.ink.withValues(alpha: 0.22)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.2),
       );
-    }
-    canvas.drawPath(needle, Paint()..color = inkColor);
-
-    if (!compact) {
       canvas.drawCircle(
         hub + const Offset(0, 2),
         12.8,
         Paint()
-          ..color = AppColors.ink.withValues(alpha: 0.18)
+          ..color = palette.ink.withValues(alpha: 0.18)
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
       );
     }
+    canvas.drawPath(needle, Paint()..color = inkColor);
     canvas.drawCircle(hub, compact ? 4.8 : 11.5, Paint()..color = inkColor);
     canvas.drawCircle(
       hub,
       compact ? 2.0 : 4.4,
-      Paint()..color = compact ? AppColors.surfaceElevated : trackColor,
+      Paint()..color = compact ? palette.surface : trackColor,
     );
+
     if (!compact) {
       canvas.drawCircle(
         hub - const Offset(1.5, 1.5),
         1.6,
-        Paint()..color = AppColors.surfaceElevated.withValues(alpha: 0.72),
+        Paint()..color = palette.surfaceElevated.withValues(alpha: 0.72),
       );
     }
 
     if (automatic && !compact) {
       final text = TextPainter(
-        text: const TextSpan(
+        text: TextSpan(
           text: 'A',
           style: TextStyle(
-            color: AppColors.ink,
+            color: palette.ink,
             fontSize: 10,
             fontWeight: FontWeight.w700,
           ),
@@ -525,7 +534,8 @@ class _EffortGaugePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _EffortGaugePainter oldDelegate) {
-    return oldDelegate.level != level ||
+    return oldDelegate.palette != palette ||
+        oldDelegate.level != level ||
         oldDelegate.automatic != automatic ||
         oldDelegate.enabled != enabled ||
         oldDelegate.compact != compact;

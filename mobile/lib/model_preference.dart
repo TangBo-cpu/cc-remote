@@ -60,3 +60,34 @@ String modelPreferenceOptionDescription(ClaudeModelPreference preference) {
     ClaudeModelPreference.fable => '使用电脑端支持的 Fable 模型覆盖项',
   };
 }
+
+class CodexModelPreferenceStore {
+  CodexModelPreferenceStore({FlutterSecureStorage? storage})
+    : storage = storage ?? const FlutterSecureStorage();
+
+  static const key = 'cc_remote_codex_model_preference';
+  final FlutterSecureStorage storage;
+
+  Future<String?> load() async {
+    try {
+      return normalizeCodexModel(await storage.read(key: key));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> save(String? model) {
+    final value = normalizeCodexModel(model);
+    if (value == null) return storage.delete(key: key);
+    return storage.write(key: key, value: value);
+  }
+}
+
+String? normalizeCodexModel(String? value) {
+  final model = value?.trim();
+  if (model == null ||
+      !RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$').hasMatch(model)) {
+    return null;
+  }
+  return model;
+}

@@ -61,14 +61,17 @@ try {
       throw "CC Remote is running, but the local control token is missing."
     }
     $localControl = Get-Content -Raw $localControlPath | ConvertFrom-Json
+    $localControl = Get-Content -Raw $localControlPath | ConvertFrom-Json
     $headers = @{ "X-CC-Remote-Local-Token" = $localControl.token }
-    $body = @{ path = $WorkspaceDir } | ConvertTo-Json
+    # Windows PowerShell 5.1 encodes a JSON *string* body as Latin-1, turning
+    # non-ASCII workspace paths into "????" and causing a 500 from the daemon.
+    $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes((@{ path = $WorkspaceDir } | ConvertTo-Json))
     $result = Invoke-RestMethod `
       -Uri $registerUrl `
       -Method Post `
       -Headers $headers `
-      -ContentType "application/json" `
-      -Body $body `
+      -ContentType "application/json; charset=utf-8" `
+      -Body $bodyBytes `
       -TimeoutSec 10
     Write-Host "CC Remote is already running."
     Write-Host "Active workspace: $WorkspaceDir"

@@ -1,16 +1,3 @@
-/*
-THESIS: CC Remote uses quiet system glass for controls and navigation, never as
-content decoration or a card wall.
-OWN-WORLD: static ice-gray ground, neutral translucent materials, graphite
-labels, one restrained blue accent, and pure-black/white depth rings.
-STORY: users immediately read connection and task state, then act through a
-small set of familiar floating controls without losing transcript context.
-FIRST VIEWPORT: split header controls float above the transcript; the reading
-surface stays calm; a thick rounded composer anchors the bottom action.
-FORM: Pale System Glass, grounded direction 6, seed 63e4c41a.
-FINISH: unreviewed and undocumented is unfinished; this build ends with the
-finish review, the verdict, DESIGN.md, and every shipping raster carrying its provenance.
-*/
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -19,6 +6,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:phosphor_icons/phosphor_icons.dart';
@@ -28,9 +16,13 @@ import 'package:markdown/markdown.dart' as md;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'activity_disclosure.dart';
+import 'assistant_citations.dart';
 import 'attachments.dart';
 import 'camera_permission.dart';
-import 'chat_background.dart';
+import 'conversation_option_sheet.dart';
+import 'codex_model_picker.dart';
+import 'appearance_preference.dart';
 import 'data/api_client.dart';
 import 'data/permission_mode.dart';
 import 'data/remote_models.dart';
@@ -38,10 +30,17 @@ import 'data/websocket_client.dart';
 import 'effort_gauge.dart';
 import 'effort_preference.dart';
 import 'model_preference.dart';
+import 'noto_icon.dart';
 import 'notification_service.dart';
 import 'reading_font_size.dart';
 import 'signal_console_theme.dart';
 import 'workspace_drawer.dart';
+import 'workspace_paths.dart';
+import 'session_interaction.dart';
+import 'thinking_block.dart';
+import 'tool_activity_sheet.dart';
+
+export 'thinking_block.dart';
 
 void main() {
   const isPreview = bool.fromEnvironment('CC_REMOTE_PREVIEW');
@@ -71,25 +70,27 @@ class CcRemoteApp extends StatefulWidget {
     super.key,
     this.enableCamera = true,
     this.demoMode = false,
+    this.wsClient,
+    this.apiClient,
     this.notificationService,
     this.notificationPreferenceStore,
     this.modelPreferenceStore,
     this.effortPreferenceStore,
-    this.chatBackgroundPreferenceStore,
+    this.appearancePreferenceStore,
     this.readingFontSizePreferenceStore,
-    this.chatBackgroundImageService,
     this.cameraPermissionService,
   });
 
   final bool enableCamera;
   final bool demoMode;
+  final RemoteWebSocketClient? wsClient;
+  final RemoteApiClient? apiClient;
   final BackgroundNotificationService? notificationService;
   final NotificationPreferenceStore? notificationPreferenceStore;
   final ClaudeModelPreferenceStore? modelPreferenceStore;
   final ClaudeEffortPreferenceStore? effortPreferenceStore;
-  final ChatBackgroundPreferenceStore? chatBackgroundPreferenceStore;
+  final AppearancePreferenceStore? appearancePreferenceStore;
   final ReadingFontSizePreferenceStore? readingFontSizePreferenceStore;
-  final ChatBackgroundImageService? chatBackgroundImageService;
   final CameraPermissionService? cameraPermissionService;
 
   @override
@@ -102,6 +103,7 @@ class _CcRemoteAppState extends State<CcRemoteApp> {
     kReadingFontScaleDefault,
   );
   int readingFontSizeRevision = 0;
+  late final AppearanceController appearance;
 
   @override
   void initState() {
@@ -110,11 +112,16 @@ class _CcRemoteAppState extends State<CcRemoteApp> {
         widget.readingFontSizePreferenceStore ??
         ReadingFontSizePreferenceStore();
     unawaited(initializeReadingFontSize());
+    appearance = AppearanceController(
+      widget.appearancePreferenceStore ?? AppearancePreferenceStore(),
+    );
+    unawaited(appearance.initialize());
   }
 
   @override
   void dispose() {
     readingFontScale.dispose();
+    appearance.dispose();
     super.dispose();
   }
 
@@ -135,22 +142,31 @@ class _CcRemoteAppState extends State<CcRemoteApp> {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'CC Remote',
-      debugShowCheckedModeBanner: false,
-      theme: buildSignalConsoleTheme(),
-      home: DemoShell(
-        enableCamera: widget.enableCamera,
-        demoMode: widget.demoMode,
-        notificationService: widget.notificationService,
-        notificationPreferenceStore: widget.notificationPreferenceStore,
-        modelPreferenceStore: widget.modelPreferenceStore,
-        effortPreferenceStore: widget.effortPreferenceStore,
-        chatBackgroundPreferenceStore: widget.chatBackgroundPreferenceStore,
-        chatBackgroundImageService: widget.chatBackgroundImageService,
-        cameraPermissionService: widget.cameraPermissionService,
-        readingFontScaleListenable: readingFontScale,
-        onReadingFontScaleChanged: setReadingFontScale,
+    return AppearanceScope(
+      controller: appearance,
+      child: ListenableBuilder(
+        listenable: appearance,
+        builder: (context, _) => MaterialApp(
+          title: 'CC Remote',
+          debugShowCheckedModeBanner: false,
+          theme: buildSignalConsoleTheme(),
+          darkTheme: buildSignalConsoleTheme(Brightness.dark),
+          themeMode: appearance.value,
+          themeAnimationDuration: Duration.zero,
+          home: DemoShell(
+            enableCamera: widget.enableCamera,
+            demoMode: widget.demoMode,
+            wsClient: widget.wsClient,
+            apiClient: widget.apiClient,
+            notificationService: widget.notificationService,
+            notificationPreferenceStore: widget.notificationPreferenceStore,
+            modelPreferenceStore: widget.modelPreferenceStore,
+            effortPreferenceStore: widget.effortPreferenceStore,
+            cameraPermissionService: widget.cameraPermissionService,
+            readingFontScaleListenable: readingFontScale,
+            onReadingFontScaleChanged: setReadingFontScale,
+          ),
+        ),
       ),
     );
   }
@@ -161,12 +177,12 @@ class DemoShell extends StatefulWidget {
     super.key,
     required this.enableCamera,
     required this.demoMode,
+    this.wsClient,
+    this.apiClient,
     this.notificationService,
     this.notificationPreferenceStore,
     this.modelPreferenceStore,
     this.effortPreferenceStore,
-    this.chatBackgroundPreferenceStore,
-    this.chatBackgroundImageService,
     this.cameraPermissionService,
     ValueListenable<double>? readingFontScaleListenable,
     Future<void> Function(double scale, {bool persist})?
@@ -179,12 +195,12 @@ class DemoShell extends StatefulWidget {
 
   final bool enableCamera;
   final bool demoMode;
+  final RemoteWebSocketClient? wsClient;
+  final RemoteApiClient? apiClient;
   final BackgroundNotificationService? notificationService;
   final NotificationPreferenceStore? notificationPreferenceStore;
   final ClaudeModelPreferenceStore? modelPreferenceStore;
   final ClaudeEffortPreferenceStore? effortPreferenceStore;
-  final ChatBackgroundPreferenceStore? chatBackgroundPreferenceStore;
-  final ChatBackgroundImageService? chatBackgroundImageService;
   final CameraPermissionService? cameraPermissionService;
   final ValueListenable<double> readingFontScaleListenable;
   final Future<void> Function(double scale, {bool persist})
@@ -279,30 +295,39 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   String? activeSessionId;
   String? activeRunId;
   DateTime? runStartedAt;
+  WorkspaceChangeEcho? workspaceChangeEcho;
+  int workspaceEchoGeneration = 0;
   int remoteTranscriptRevision = 0;
   bool allowBypassPermissions = false;
+  List<CodexSandboxMode> codexSandboxModes = CodexSandboxMode.supportedModes;
   bool notificationsEnabled = true;
   bool notificationsReady = false;
   bool currentRunFailed = false;
   bool uploadingAttachments = false;
   ClaudeModelPreference selectedModel = ClaudeModelPreference.followComputer;
+  String? selectedCodexModel;
+  final codexModelPreferenceStore = CodexModelPreferenceStore();
   ClaudeEffortPreference selectedEffort = ClaudeEffortPreference.automatic;
-  CodexSandboxMode selectedCodexSandboxMode = CodexSandboxMode.readOnly;
-  CodexSandboxMode activeCodexSandboxMode = CodexSandboxMode.readOnly;
-  ChatBackgroundPreference chatBackground =
-      ChatBackgroundPreference.defaultValue;
+  CodexSandboxMode selectedCodexSandboxMode = CodexSandboxMode.dangerFullAccess;
+  CodexSandboxMode activeCodexSandboxMode = CodexSandboxMode.dangerFullAccess;
   PermissionMode selectedPermissionMode = PermissionMode.auto;
   PermissionMode activePermissionMode = PermissionMode.auto;
   SavedSession? session;
-  final RemoteWebSocketClient wsClient = RemoteWebSocketClient();
+  late final RemoteWebSocketClient wsClient =
+      widget.wsClient ?? RemoteWebSocketClient();
   final TokenStore tokenStore = TokenStore();
   final TranscriptStore transcriptStore = TranscriptStore();
-  final RemoteApiClient apiClient = RemoteApiClient();
+  late final RemoteApiClient apiClient = widget.apiClient ?? RemoteApiClient();
   final TextEditingController promptController = TextEditingController();
   final AttachmentPicker attachmentPicker = AttachmentPicker();
   final List<TranscriptMessage> messages = [];
+  final ValueNotifier<int> transcriptRevision = ValueNotifier(0);
   final List<AttachmentDraft> pendingAttachments = [];
   final List<String> commands = [];
+  bool commandsLoading = false;
+  bool commandsFailed = false;
+  String? commandsSessionId;
+  int commandCatalogGeneration = 0;
   final List<RemoteProjectSummary> projects = [];
   final List<RemoteSessionSummary> remoteSessions = [];
   final List<RemotePermissionRequest> pendingPermissions = [];
@@ -311,6 +336,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   Future<void>? refreshConnectionInFlight;
   bool refreshConnectionForcesReconnect = false;
   int connectionRefreshGeneration = 0;
+  bool _recoveringUnauthorizedSession = false;
   DateTime? appBackgroundedAt;
   // ponytail: batch stream paint/persist; tighten if first glyph feels late
   static const streamTextBatchInterval = Duration(milliseconds: 80);
@@ -323,7 +349,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   int modelPreferenceRevision = 0;
   late final Future<void> effortPreferenceInitialization;
   int effortPreferenceRevision = 0;
-  int chatBackgroundRevision = 0;
   int transcriptJumpGeneration = 0;
   TranscriptJumpRequest? transcriptJumpRequest;
   late final BackgroundNotificationService notificationService;
@@ -331,10 +356,16 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   late final BackgroundNotificationController notificationController;
   late final ClaudeModelPreferenceStore modelPreferenceStore;
   late final ClaudeEffortPreferenceStore effortPreferenceStore;
-  late final ChatBackgroundPreferenceStore chatBackgroundPreferenceStore;
-  late final ChatBackgroundImageService chatBackgroundImageService;
   late final CameraPermissionService cameraPermissionService;
   String? pendingNotificationSessionId;
+  QueuedPrompt? queuedPrompt;
+  int peekGeneration = 0;
+  String? viewingSessionId;
+  String? peekTitle;
+  List<TranscriptMessage> peekMessages = [];
+  bool peekLoading = false;
+  bool peekFailed = false;
+  int liveMessageCountAtPeek = 0;
 
   Object? get ws => wsClient.channel;
   SessionEngine get activeSessionEngine {
@@ -355,22 +386,18 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         widget.modelPreferenceStore ?? ClaudeModelPreferenceStore();
     effortPreferenceStore =
         widget.effortPreferenceStore ?? ClaudeEffortPreferenceStore();
-    chatBackgroundPreferenceStore =
-        widget.chatBackgroundPreferenceStore ?? ChatBackgroundPreferenceStore();
-    chatBackgroundImageService =
-        widget.chatBackgroundImageService ?? LocalChatBackgroundImageService();
     cameraPermissionService =
         widget.cameraPermissionService ?? const SystemCameraPermissionService();
     notificationController = BackgroundNotificationController(
       service: notificationService,
     );
     WidgetsBinding.instance.addObserver(this);
+    promptController.addListener(handlePromptChanged);
     unawaited(initializePermissions());
     modelPreferenceInitialization = initializeModelPreference();
     unawaited(modelPreferenceInitialization);
     effortPreferenceInitialization = initializeEffortPreference();
     unawaited(effortPreferenceInitialization);
-    unawaited(initializeChatBackground());
     bootstrap();
   }
 
@@ -382,6 +409,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     closeWs();
     apiClient.close();
     promptController.dispose();
+    transcriptRevision.dispose();
     super.dispose();
   }
 
@@ -410,7 +438,19 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
     unawaited(cancelNotifications());
     openPendingNotificationSession();
-    unawaited(refreshConnection(forceReconnect: forceReconnect));
+    // Preserve healthy sockets and handshakes already started by auto-recovery.
+    unawaited(
+      wsClient
+          .ensureConnected(
+            retryNow: true,
+            probeTimeout: RemoteWebSocketClient.resumeProbeTimeout,
+            reconnectNowOnProbeFailure: true,
+          )
+          .then((_) async {
+            if (!mounted || wsClient.isAuthenticated) return;
+            await refreshConnection(forceReconnect: forceReconnect);
+          }),
+    );
   }
 
   Future<void> initializeNotifications() async {
@@ -472,8 +512,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   Future<void> initializeModelPreference() async {
     final revision = modelPreferenceRevision;
     final preference = await modelPreferenceStore.load();
+    final codexPreference = await codexModelPreferenceStore.load();
     if (!mounted || revision != modelPreferenceRevision) return;
-    setState(() => selectedModel = preference);
+    setState(() {
+      selectedModel = preference;
+      selectedCodexModel = codexPreference;
+    });
   }
 
   Future<void> setModelPreference(ClaudeModelPreference preference) async {
@@ -483,6 +527,31 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   Future<void> openModelPicker(BuildContext context) async {
+    await modelPreferenceInitialization;
+    if (!context.mounted) return;
+    if (activeSessionEngine == SessionEngine.codex) {
+      final sessionId = activeSessionId;
+      final next = await showCodexModelPicker(
+        context,
+        selected: selectedCodexModel,
+        loadModels: loadCodexModels,
+      );
+      if (next == null || !context.mounted || activeSessionId != sessionId) {
+        return;
+      }
+      try {
+        await codexModelPreferenceStore.save(next);
+        if (mounted) {
+          setState(() => selectedCodexModel = normalizeCodexModel(next));
+        }
+      } catch (_) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('模型设置保存失败，请重试')));
+      }
+      return;
+    }
     final next = await showClaudeModelPicker(context, selected: selectedModel);
     if (next == null || next == selectedModel || !context.mounted) return;
     try {
@@ -492,6 +561,103 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text('模型设置保存失败，请重试')));
+    }
+  }
+
+  Future<List<CodexModelOption>> loadCodexModels() async {
+    final saved = session;
+    final sessionId = activeSessionId;
+    if (saved == null || sessionId == null || widget.demoMode) {
+      throw const FormatException('model_catalog_unavailable');
+    }
+    final response = await apiClient.get(
+      saved.origin,
+      '/api/models?sessionId=${Uri.encodeQueryComponent(sessionId)}',
+      token: saved.token,
+      timeout: const Duration(seconds: 35),
+    );
+    if (response.statusCode != 200 ||
+        !mounted ||
+        session?.origin != saved.origin ||
+        session?.token != saved.token ||
+        activeSessionId != sessionId) {
+      throw const FormatException('model_catalog_unavailable');
+    }
+    final data = jsonDecode(response.body);
+    if (data is! Map ||
+        data['sessionId'] != sessionId ||
+        data['engine'] != 'codex') {
+      throw const FormatException('invalid_model_catalog');
+    }
+    return CodexModelOption.fromWire(data['models']);
+  }
+
+  void resetCommandCatalog() {
+    commandCatalogGeneration++;
+    commandsSessionId = null;
+    commandsLoading = false;
+    commandsFailed = false;
+  }
+
+  void handlePromptChanged() {
+    if (commandQuery(promptController.text) != null &&
+        commandsSessionId != activeSessionId) {
+      unawaited(refreshCommandCatalog());
+    }
+  }
+
+  Future<void> refreshCommandCatalog() async {
+    final saved = session;
+    final sessionId = activeSessionId;
+    if (saved == null || sessionId == null || widget.demoMode) return;
+    final generation = ++commandCatalogGeneration;
+    setState(() {
+      commandsSessionId = sessionId;
+      commandsLoading = true;
+      commandsFailed = false;
+    });
+    try {
+      final response = await apiClient.get(
+        saved.origin,
+        '/api/commands?sessionId=${Uri.encodeQueryComponent(sessionId)}',
+        token: saved.token,
+        timeout: const Duration(seconds: 35),
+      );
+      if (!mounted ||
+          generation != commandCatalogGeneration ||
+          session?.origin != saved.origin ||
+          session?.token != saved.token ||
+          activeSessionId != sessionId) {
+        return;
+      }
+      if (response.statusCode != 200) {
+        throw const FormatException('commands_unavailable');
+      }
+      final data = jsonDecode(response.body);
+      if (data is! Map ||
+          data['sessionId'] != sessionId ||
+          data['engine'] != activeSessionEngine.wireName ||
+          data['commands'] is! List) {
+        throw const FormatException('invalid_command_catalog');
+      }
+      setState(() {
+        commands
+          ..clear()
+          ..addAll((data['commands'] as List).whereType<String>());
+        commandsLoading = false;
+      });
+    } catch (_) {
+      if (!mounted ||
+          generation != commandCatalogGeneration ||
+          session?.origin != saved.origin ||
+          session?.token != saved.token ||
+          activeSessionId != sessionId) {
+        return;
+      }
+      setState(() {
+        commandsLoading = false;
+        commandsFailed = true;
+      });
     }
   }
 
@@ -521,13 +687,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     selectedEffort = ClaudeEffortPreference.automatic;
   }
 
-  Future<void> initializeChatBackground() async {
-    final revision = chatBackgroundRevision;
-    final preference = await chatBackgroundPreferenceStore.load();
-    if (!mounted || revision != chatBackgroundRevision) return;
-    setState(() => chatBackground = preference);
-  }
-
   Future<void> requestInitialCameraPermission() async {
     if (!widget.enableCamera || widget.demoMode) return;
     try {
@@ -535,43 +694,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         await cameraPermissionService.request();
       }
     } catch (_) {}
-  }
-
-  Future<ChatBackgroundPreference> setChatBackground(
-    ChatBackgroundPreference preference,
-  ) async {
-    chatBackgroundRevision += 1;
-    final previous = chatBackground;
-    await chatBackgroundPreferenceStore.save(preference);
-    if (mounted) setState(() => chatBackground = preference);
-    if (previous.imagePath != null &&
-        previous.imagePath != preference.imagePath) {
-      await deleteChatBackgroundImage(previous.imagePath);
-    }
-    return preference;
-  }
-
-  Future<void> deleteChatBackgroundImage(String? path) async {
-    try {
-      await chatBackgroundImageService.deleteStoredImage(path);
-    } catch (_) {}
-  }
-
-  Future<ChatBackgroundPreference?> pickChatBackgroundImage(
-    double overlayOpacity,
-  ) async {
-    final path = await chatBackgroundImageService.pickAndStore();
-    if (path == null) return null;
-    final preference = ChatBackgroundPreference.localImage(
-      path,
-      overlayOpacity: overlayOpacity,
-    );
-    try {
-      return await setChatBackground(preference);
-    } catch (_) {
-      await deleteChatBackgroundImage(path);
-      rethrow;
-    }
   }
 
   void handleNotificationTap(String? payload) {
@@ -582,11 +704,16 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   void openPendingNotificationSession() {
     final sessionId = pendingNotificationSessionId;
-    if (sessionId == null || route != ShellRoute.chat || !wsReady || running) {
+    if (sessionId == null || route != ShellRoute.chat) return;
+    if (uploadingAttachments) return;
+    pendingNotificationSessionId = null;
+    if (sessionId == activeSessionId) {
+      if (viewingSessionId != null) {
+        setState(clearSessionPeek);
+      }
       return;
     }
-    pendingNotificationSessionId = null;
-    if (sessionId == activeSessionId) return;
+    if (!wsReady && !running) return;
     selectRemoteSession(sessionId);
   }
 
@@ -647,9 +774,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   Future<void> persistTranscriptSnapshot() {
     final snapshot = TranscriptSnapshot(
-      messages: messages
-          .where((message) => message.role != MessageRole.activity)
-          .toList(),
+      sessionId: activeSessionId,
+      messages: List<TranscriptMessage>.of(messages),
       running: running,
       modelName: modelName,
       contextWindow: contextWindow,
@@ -665,14 +791,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   Future<void> restoreTranscriptSnapshot() async {
     final snapshot = await transcriptStore.load();
     if (snapshot == null || !mounted) return;
+    // Bootstrap no longer waits for this read, so a host snapshot can land
+    // first; that state is authoritative and must not be overwritten.
+    if (remoteTranscriptRevision > 0) return;
     setState(() {
+      activeSessionId = snapshot.sessionId;
       messages
         ..clear()
-        ..addAll(
-          snapshot.messages.where(
-            (message) => message.role != MessageRole.activity,
-          ),
-        );
+        ..addAll(snapshot.messages);
       running = snapshot.running;
       stopping = false;
       modelName = snapshot.modelName;
@@ -743,7 +869,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       if (!forceReconnect || refreshConnectionForcesReconnect) {
         return inFlight;
       }
-      // Soft probe is already running; ensure a forced reconnect follows it.
+      // An immediate retry request follows an in-flight soft refresh.
       late final Future<void> forced;
       forced = inFlight
           .then((_) {
@@ -780,7 +906,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
     final generation = connectionRefreshGeneration;
     final keepLiveSocket = shouldPreserveLiveWebSocket(
-      forceReconnect: forceReconnect,
+      forceReconnect: false,
       wsReady: wsReady,
       remoteOffline: remoteOffline,
       hasChannel: wsClient.channel != null,
@@ -791,6 +917,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         remoteOffline = false;
       });
     }
+    if (wsClient.isActive) {
+      unawaited(wsClient.ensureConnected(retryNow: forceReconnect));
+    } else {
+      connectWs(current);
+    }
 
     try {
       final status = await fetchStatus(current);
@@ -799,16 +930,18 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           generation != connectionRefreshGeneration) {
         return;
       }
+      final hasLiveSocket = wsClient.isAuthenticated;
       final restored = current.copyWith(
         deviceName: status.deviceName,
-        workspaceDir: status.workspaceDir,
+        workspaceDir: hasLiveSocket
+            ? current.workspaceDir
+            : status.workspaceDir,
       );
       setState(() {
         session = restored;
         remoteOffline = false;
-        // Live WS is authoritative for run/model; soft resume only refreshes
-        // catalog/device metadata so a delayed /api/status cannot clobber it.
-        if (!keepLiveSocket) {
+        // A delayed HTTP response must not overwrite newer WebSocket state.
+        if (!hasLiveSocket) {
           running = status.running;
           stopping = status.running && status.stopping;
           activeRunId = status.running ? status.runId : null;
@@ -819,13 +952,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             remainingContext = status.remainingContext;
           }
           if (!status.running) removeInterruptedRunNotice();
+          applyCatalog(status.catalog);
         }
-        applyCatalog(status.catalog);
       });
       persistTranscriptSnapshotLater();
-      if (!forceReconnect && wsClient.channel != null) return;
-      if (generation != connectionRefreshGeneration) return;
-      connectWs(restored);
     } catch (err) {
       if (!mounted ||
           session != current ||
@@ -836,16 +966,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         await recoverUnauthorizedSession();
         return;
       }
-      if (!forceReconnect && wsClient.channel != null) {
-        // Soft probe: leave auto-reconnect / live socket alone.
-        return;
-      }
+      if (wsClient.isAuthenticated) return;
       setState(() {
         remoteOffline = true;
       });
       persistTranscriptSnapshotLater();
-      if (generation != connectionRefreshGeneration) return;
-      connectWs(current);
     }
   }
 
@@ -868,58 +993,75 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     }
 
     updateBootstrapPhase(BootstrapPhase.restoringSession);
-    await restoreTranscriptSnapshot();
+    // Load the cached transcript without blocking the handshake: secure
+    // storage reads for long sessions must not delay the first connect.
+    final transcriptRestored = restoreTranscriptSnapshot();
     if (!mounted) return;
-
     updateBootstrapPhase(BootstrapPhase.contactingHost);
+    setState(() {
+      session = saved;
+      route = ShellRoute.chat;
+      wsReady = false;
+      remoteOffline = false;
+    });
+    connectWs(saved);
+
     try {
       final status = await fetchStatus(saved);
-      if (!mounted) return;
-      final restored = saved.copyWith(
+      // Merge the cached transcript before applying status so a late disk
+      // read cannot overwrite fresher host state.
+      await transcriptRestored;
+      if (!mounted ||
+          route != ShellRoute.chat ||
+          session == null ||
+          _recoveringUnauthorizedSession) {
+        return;
+      }
+      final current = session!;
+      final hasLiveSocket = wsClient.isAuthenticated;
+      final restored = current.copyWith(
         deviceName: status.deviceName,
-        workspaceDir: status.workspaceDir,
+        workspaceDir: hasLiveSocket
+            ? current.workspaceDir
+            : status.workspaceDir,
       );
       setState(() {
         session = restored;
-        route = ShellRoute.chat;
         remoteOffline = false;
-        running = status.running;
-        stopping = status.running && status.stopping;
-        activeRunId = status.running ? status.runId : null;
-        runStartedAt = status.running ? status.startedAt : null;
-        if (status.hasSessionInfo) {
-          modelName = status.modelName;
-          contextWindow = status.contextWindow;
-          remainingContext = status.remainingContext;
+        if (!hasLiveSocket) {
+          running = status.running;
+          stopping = status.running && status.stopping;
+          activeRunId = status.running ? status.runId : null;
+          runStartedAt = status.running ? status.startedAt : null;
+          if (status.hasSessionInfo) {
+            modelName = status.modelName;
+            contextWindow = status.contextWindow;
+            remainingContext = status.remainingContext;
+          }
+          applyCatalog(status.catalog);
+          if (!status.running) removeInterruptedRunNotice();
         }
-        applyCatalog(status.catalog);
-        if (!status.running) removeInterruptedRunNotice();
       });
       persistTranscriptSnapshotLater();
-      connectWs(restored);
     } catch (err) {
-      if (!mounted) return;
-      if (err is UnauthorizedSession) {
-        updateBootstrapPhase(BootstrapPhase.preparingPairing);
-        await tokenStore.clear();
-        await clearTranscriptStore();
-        if (!mounted) return;
-        setState(() {
-          pairError = '无法恢复连接，请重新扫码';
-          route = ShellRoute.pair;
-          running = false;
-          stopping = false;
-          messages.clear();
-        });
+      await transcriptRestored;
+      if (!mounted ||
+          route != ShellRoute.chat ||
+          session == null ||
+          _recoveringUnauthorizedSession) {
         return;
       }
-      setState(() {
-        session = saved;
-        route = ShellRoute.chat;
-        wsReady = false;
-        remoteOffline = true;
-        stopping = false;
-      });
+      if (err is UnauthorizedSession) {
+        await recoverUnauthorizedSession();
+        return;
+      }
+      if (!wsClient.isAuthenticated) {
+        setState(() {
+          wsReady = false;
+          remoteOffline = true;
+          stopping = false;
+        });
+      }
       persistTranscriptSnapshotLater();
     }
   }
@@ -1036,7 +1178,16 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   void handleWsConnectionState(RemoteConnectionSnapshot snapshot) {
     reconnectSnapshot = snapshot;
     if (!mounted || route != ShellRoute.chat) return;
-    setState(() => reconnectSnapshot = snapshot);
+    setState(() {
+      reconnectSnapshot = snapshot;
+      if (snapshot.phase == RemoteConnectionPhase.connecting) {
+        respondingPermissionIds.clear();
+      }
+      if (snapshot.phase == RemoteConnectionPhase.connected) {
+        wsReady = true;
+        remoteOffline = false;
+      }
+    });
   }
 
   void reconnectNow() {
@@ -1068,44 +1219,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     switch (decoded['type']) {
       case 'catalog':
         final catalog = RemoteProjectCatalog.tryParse(decoded);
+
         if (catalog == null) return;
-        setState(() {
-          final changedSession =
-              activeSessionId != null &&
-              activeSessionId != catalog.activeSessionId;
-          activeProjectId = catalog.activeProjectId;
-          activeSessionId = catalog.activeSessionId;
-          if (changedSession) {
-            uploadingAttachments = false;
-            stopping = false;
-            pendingAttachments.clear();
-            remoteTranscriptRevision = 0;
-            activeRunId = null;
-            runStartedAt = null;
-            clearStreamTextBatch(apply: false);
-            messages.clear();
-            pendingPermissions.clear();
-            respondingPermissionIds.clear();
-            modelName = null;
-            contextWindow = null;
-            remainingContext = null;
-            selectedPermissionMode = PermissionMode.auto;
-            activePermissionMode = PermissionMode.auto;
-          }
-          projects
-            ..clear()
-            ..addAll(catalog.projects);
-          remoteSessions
-            ..clear()
-            ..addAll(catalog.sessions);
-          final project = catalog.activeProject;
-          if (project != null && session != null) {
-            session = session!.copyWith(workspaceDir: project.path);
-          }
-        });
+        setState(() => applyCatalog(catalog));
         if (session != null) unawaited(tokenStore.save(session!));
         openPendingNotificationSession();
       case 'status':
+        final wasRunning = running;
         setState(() {
           wsReady = decoded['authenticated'] == true;
           remoteOffline = false;
@@ -1123,6 +1243,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         });
         openPendingNotificationSession();
         persistTranscriptSnapshotLater();
+        if (wasRunning && !running) releaseQueuedPromptIfTurnIdle();
+
       case 'prompt_accepted':
         return;
       case 'transcript_snapshot':
@@ -1135,6 +1257,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             )) {
           return;
         }
+        final wasRunning = running;
         clearStreamTextBatch(apply: false);
         setState(() {
           remoteTranscriptRevision = snapshot.revision;
@@ -1152,7 +1275,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           activePermissionMode = snapshot.permissionMode;
           selectedPermissionMode = snapshot.permissionMode;
           activeCodexSandboxMode = snapshot.codexSandboxMode;
-          selectedCodexSandboxMode = snapshot.codexSandboxMode;
+          selectedCodexSandboxMode =
+              codexSandboxModes.contains(snapshot.codexSandboxMode)
+              ? snapshot.codexSandboxMode
+              : codexSandboxModes.first;
           pendingPermissions
             ..clear()
             ..addAll(snapshot.pendingPermissions);
@@ -1163,9 +1289,20 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           );
         });
         persistTranscriptSnapshotLater();
+        if (wasRunning && !running) releaseQueuedPromptIfTurnIdle();
+        if (viewingSessionId != null && pendingPermissions.isNotEmpty) {
+          setState(clearSessionPeek);
+        }
+
       case 'permission_capabilities':
         setState(() {
           allowBypassPermissions = decoded['allowBypassPermissions'] == true;
+          codexSandboxModes =
+              CodexSandboxMode.listFromWire(decoded['codexSandboxModes']) ??
+              CodexSandboxMode.supportedModes;
+          if (!codexSandboxModes.contains(selectedCodexSandboxMode)) {
+            selectedCodexSandboxMode = codexSandboxModes.first;
+          }
           if (!allowBypassPermissions &&
               selectedPermissionMode == PermissionMode.bypassPermissions) {
             selectedPermissionMode = PermissionMode.auto;
@@ -1175,6 +1312,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         final request = RemotePermissionRequest.tryParse(decoded);
         if (request == null) return;
         setState(() {
+          if (viewingSessionId != null) clearSessionPeek();
+
           final index = pendingPermissions.indexWhere(
             (item) => item.requestId == request.requestId,
           );
@@ -1209,12 +1348,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         final requestId = decoded['requestId'];
         if (requestId is! String) return;
         setState(() {
+          if (viewingSessionId != null) clearSessionPeek();
           pendingPermissions.removeWhere(
             (request) => request.requestId == requestId,
           );
           respondingPermissionIds.remove(requestId);
           messages.add(TranscriptMessage.system('这个审批请求已失效'));
         });
+
         persistTranscriptSnapshotLater();
       case 'text':
         queueAssistantText(decoded['text'] as String? ?? '');
@@ -1225,6 +1366,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           commands
             ..clear()
             ..addAll(items.whereType<String>());
+          commandsSessionId = decoded['loaded'] == false
+              ? null
+              : activeSessionId;
+          commandsLoading = decoded['loading'] == true;
+          commandsFailed = decoded['error'] != null;
         });
       case 'session_info':
         setState(() {
@@ -1266,6 +1412,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           );
         }
         persistTranscriptSnapshotNow();
+        unawaited(refreshWorkspaceChangeEcho());
+        releaseQueuedPromptAfterTurn('done');
+
       case 'stopped':
         flushStreamTextBatch();
         setState(() {
@@ -1286,6 +1435,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           title: '任务已停止',
         );
         persistTranscriptSnapshotNow();
+        unawaited(refreshWorkspaceChangeEcho());
+        releaseQueuedPromptAfterTurn('stopped');
+
       case 'error':
         final errorMessage = decoded['message']?.toString() ?? '未知错误';
         flushStreamTextBatch();
@@ -1308,40 +1460,53 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           detail: errorMessage,
         );
         persistTranscriptSnapshotNow();
+        unawaited(refreshWorkspaceChangeEcho());
+        releaseQueuedPromptAfterTurn('error');
     }
   }
 
   Future<void> recoverUnauthorizedSession() async {
-    connectionRefreshGeneration += 1;
-    refreshConnectionInFlight = null;
-    refreshConnectionForcesReconnect = false;
-    closeWs();
-    await tokenStore.clear();
-    await clearTranscriptStore();
-    if (!mounted) return;
-    setState(() {
-      session = null;
-      route = ShellRoute.pair;
-      pairError = '无法恢复连接，请重新扫码';
-      remoteOffline = false;
-      running = false;
-      stopping = false;
-      clearStreamTextBatch(apply: false);
-      messages.clear();
-      commands.clear();
-      projects.clear();
-      remoteSessions.clear();
-      activeProjectId = null;
-      activeSessionId = null;
-      activeRunId = null;
-      runStartedAt = null;
-      remoteTranscriptRevision = 0;
-      allowBypassPermissions = false;
-      selectedPermissionMode = PermissionMode.auto;
-      activePermissionMode = PermissionMode.auto;
-      pendingPermissions.clear();
-      respondingPermissionIds.clear();
-    });
+    if (_recoveringUnauthorizedSession) return;
+    _recoveringUnauthorizedSession = true;
+    try {
+      connectionRefreshGeneration += 1;
+      refreshConnectionInFlight = null;
+      refreshConnectionForcesReconnect = false;
+      closeWs();
+      await tokenStore.clear();
+      await clearTranscriptStore();
+      if (!mounted) return;
+      setState(() {
+        session = null;
+        route = ShellRoute.pair;
+        pairError = '无法恢复连接，请重新扫码';
+        remoteOffline = false;
+        running = false;
+        stopping = false;
+        clearStreamTextBatch(apply: false);
+        clearWorkspaceChangeEcho();
+        clearSessionPeek();
+        queuedPrompt = null;
+
+        messages.clear();
+        commands.clear();
+        resetCommandCatalog();
+        projects.clear();
+        remoteSessions.clear();
+        activeProjectId = null;
+        activeSessionId = null;
+        activeRunId = null;
+        runStartedAt = null;
+        remoteTranscriptRevision = 0;
+        allowBypassPermissions = false;
+        selectedPermissionMode = PermissionMode.auto;
+        activePermissionMode = PermissionMode.auto;
+        pendingPermissions.clear();
+        respondingPermissionIds.clear();
+      });
+    } finally {
+      _recoveringUnauthorizedSession = false;
+    }
   }
 
   void handleWsClosed(String _) {
@@ -1350,6 +1515,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     setState(() {
       wsReady = false;
       remoteOffline = true;
+      respondingPermissionIds.clear();
       if (running) {
         if (!messages.any(
           (item) =>
@@ -1423,35 +1589,33 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   void appendAssistantText(String text, {bool persist = true}) {
     if (text.isEmpty) return;
+    if (!mounted) return;
     final lastIsAssistant =
         messages.isNotEmpty && messages.last.role == MessageRole.assistant;
     // Prefix-only whitespace must not open a bubble or finish thinking yet.
     if (!lastIsAssistant && text.trim().isEmpty) {
       return;
     }
-    setState(() {
-      if (!lastIsAssistant) {
-        final start =
-            messages.lastIndexWhere(
-              (message) => message.role == MessageRole.user,
-            ) +
-            1;
-        finishRunningActivities(
-          messages,
-          ActivityState.done,
-          start: start,
-          kind: ActivityKind.thinking,
-        );
-      }
-      if (lastIsAssistant) {
-        final lastIndex = messages.length - 1;
-        final merged = messages[lastIndex].text + text;
-        if (merged.trim().isEmpty) return;
-        messages[lastIndex] = TranscriptMessage.assistant(merged);
-      } else {
-        messages.add(TranscriptMessage.assistant(text));
-      }
-    });
+    if (lastIsAssistant) {
+      final lastIndex = messages.length - 1;
+      final merged = messages[lastIndex].text + text;
+      if (merged.trim().isEmpty) return;
+      messages[lastIndex] = TranscriptMessage.assistant(merged);
+    } else {
+      final start =
+          messages.lastIndexWhere(
+            (message) => message.role == MessageRole.user,
+          ) +
+          1;
+      finishRunningActivities(
+        messages,
+        ActivityState.done,
+        start: start,
+        kind: ActivityKind.thinking,
+      );
+      messages.add(TranscriptMessage.assistant(text));
+    }
+    transcriptRevision.value++;
     if (persist) persistTranscriptSnapshotLater();
   }
 
@@ -1464,7 +1628,27 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       modelPreferenceInitialization,
       effortPreferenceInitialization,
     ]);
-    if (!mounted || running || uploadingAttachments) return;
+    if (!mounted || uploadingAttachments) return;
+    if (viewingSessionId != null) return;
+    if (running) {
+      if (queuedPrompt != null) return;
+      final sessionId = activeSessionId;
+      if (sessionId == null) return;
+      setState(() {
+        queuedPrompt = QueuedPrompt(
+          sessionId: sessionId,
+          text: text,
+          attachments: List<AttachmentDraft>.from(pendingAttachments),
+          permissionMode: selectedPermissionMode,
+          codexSandboxMode: selectedCodexSandboxMode,
+        );
+        promptController.clear();
+        pendingAttachments.clear();
+      });
+      HapticFeedback.selectionClick();
+      return;
+    }
+
     final engine = activeSessionEngine;
 
     if (widget.demoMode) {
@@ -1473,11 +1657,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         pendingAttachments.clear();
         running = false;
         stopping = false;
+        clearWorkspaceChangeEcho();
         messages
           ..add(TranscriptMessage.user(text))
           ..add(TranscriptMessage.assistant('演示模式：真实对话需要连接 daemon WebSocket。'));
       });
       persistTranscriptSnapshotLater();
+      unawaited(refreshWorkspaceChangeEcho());
       return;
     }
 
@@ -1550,6 +1736,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         permissionMode: permissionMode,
         sessionId: currentSessionId,
         model: selectedModel,
+        codexModel: selectedCodexModel,
         effort: selectedEffort,
         engine: engine,
         codexSandboxMode: codexSandboxMode,
@@ -1570,20 +1757,19 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       uploadingAttachments = false;
       running = true;
       stopping = false;
+      clearWorkspaceChangeEcho();
       runStartedAt = DateTime.now();
       currentRunFailed = false;
       activePermissionMode = permissionMode;
       activeCodexSandboxMode = codexSandboxMode;
       beginPrompt(messages, text, attachments: uploaded);
-      if (codexSandboxMode == CodexSandboxMode.dangerFullAccess) {
-        selectedCodexSandboxMode = CodexSandboxMode.readOnly;
-      }
     });
     persistTranscriptSnapshotLater();
   }
 
   Future<void> chooseAttachments() async {
-    if (running || uploadingAttachments) return;
+    if (uploadingAttachments || queuedPrompt != null) return;
+
     if (pendingAttachments.length >= maxAttachmentsPerPrompt) {
       showAttachmentError(const AttachmentException('too_many_attachments'));
       return;
@@ -1665,7 +1851,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   void removePendingAttachment(AttachmentDraft attachment) {
-    if (uploadingAttachments) return;
+    if (uploadingAttachments || queuedPrompt != null) return;
     setState(() => pendingAttachments.remove(attachment));
   }
 
@@ -1761,6 +1947,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         messages.add(TranscriptMessage.system('已停止'));
       });
       persistTranscriptSnapshotLater();
+      unawaited(refreshWorkspaceChangeEcho());
+      releaseQueuedPromptAfterTurn('stopped');
+
       return;
     }
 
@@ -1795,6 +1984,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         remainingContext = null;
         clearStreamTextBatch(apply: false);
         transcriptJumpRequest = null;
+        clearWorkspaceChangeEcho();
+        clearSessionPeek();
+        queuedPrompt = null;
+
         messages
           ..clear()
           ..add(TranscriptMessage.system('已开启新对话'));
@@ -1843,6 +2036,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         remainingContext = null;
         clearStreamTextBatch(apply: false);
         transcriptJumpRequest = null;
+        clearWorkspaceChangeEcho();
+        clearSessionPeek();
+        queuedPrompt = null;
+
         messages.clear();
         pendingAttachments.clear();
         uploadingAttachments = false;
@@ -1862,6 +2059,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   void fillPrompt(String text) {
+    if (queuedPrompt != null || viewingSessionId != null) return;
     promptController.text = text;
     promptController.selection = TextSelection.collapsed(offset: text.length);
   }
@@ -1883,8 +2081,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remainingContext = null;
       clearStreamTextBatch(apply: false);
       transcriptJumpRequest = null;
+      clearWorkspaceChangeEcho();
+      clearSessionPeek();
+      queuedPrompt = null;
+
       messages.clear();
       commands.clear();
+      resetCommandCatalog();
       projects.clear();
       remoteSessions.clear();
       activeProjectId = null;
@@ -1941,6 +2144,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   void openWorkspace() {
+    openWorkspaceAt();
+  }
+
+  void openWorkspaceAt({int tab = 0, String? path}) {
     final current = session;
     if (current == null) return;
     showWorkspaceDrawer(
@@ -1949,13 +2156,72 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       token: current.token,
       workspaceName: current.workspaceName,
       demoMode: widget.demoMode,
+      initialTab: tab,
+      initialPath: path,
     );
+  }
+
+  void openWorkspacePath(String path) {
+    openWorkspaceAt(path: path);
+  }
+
+  void openWorkspaceChanges() {
+    final path = workspaceChangeEcho?.focusPath;
+    if (path != null) {
+      openWorkspaceAt(tab: 1, path: path);
+      return;
+    }
+    openWorkspaceAt(tab: 1);
+  }
+
+  void clearWorkspaceChangeEcho() {
+    workspaceEchoGeneration += 1;
+    workspaceChangeEcho = null;
+  }
+
+  Future<void> refreshWorkspaceChangeEcho() async {
+    final current = session;
+    if (current == null) return;
+    final generation = ++workspaceEchoGeneration;
+    final api = WorkspaceApi(
+      origin: current.origin,
+      token: current.token,
+      demoMode: widget.demoMode,
+    );
+    try {
+      final snapshot = await api.snapshot();
+      if (!mounted || generation != workspaceEchoGeneration) return;
+      final changes = [
+        for (final change in snapshot.changes)
+          if (change.path.trim().isNotEmpty) change.path,
+      ];
+      setState(() {
+        workspaceChangeEcho = changes.isEmpty
+            ? null
+            : WorkspaceChangeEcho(
+                changeCount: changes.length,
+                paths: changes,
+                branch: snapshot.branch,
+              );
+      });
+    } catch (_) {
+      if (!mounted || generation != workspaceEchoGeneration) return;
+    } finally {
+      api.close();
+    }
   }
 
   void applyCatalog(RemoteProjectCatalog? catalog) {
     if (catalog == null) return;
     final changedSession =
-        activeSessionId != null && activeSessionId != catalog.activeSessionId;
+        activeSessionId != catalog.activeSessionId &&
+        (activeSessionId != null || messages.isNotEmpty);
+    final clearEcho = workspaceEchoShouldClear(
+      currentSessionId: activeSessionId,
+      nextSessionId: catalog.activeSessionId,
+      currentWorkspaceDir: session?.workspaceDir,
+      nextWorkspaceDir: catalog.activeProject?.path,
+    );
     activeProjectId = catalog.activeProjectId;
     activeSessionId = catalog.activeSessionId;
     if (changedSession) {
@@ -1969,6 +2235,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remoteTranscriptRevision = 0;
       clearStreamTextBatch(apply: false);
       messages.clear();
+      commands.clear();
+      resetCommandCatalog();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) handlePromptChanged();
+      });
       pendingPermissions.clear();
       respondingPermissionIds.clear();
       modelName = null;
@@ -1976,6 +2247,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remainingContext = null;
       selectedPermissionMode = PermissionMode.auto;
       activePermissionMode = PermissionMode.auto;
+      clearSessionPeek();
+      queuedPrompt = null;
+    }
+    if (clearEcho) {
+      clearWorkspaceChangeEcho();
     }
     projects
       ..clear()
@@ -2043,6 +2319,156 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         .toList();
   }
 
+  SessionPeekView? currentSessionPeek() {
+    final sessionId = viewingSessionId;
+    if (sessionId == null) return null;
+    return SessionPeekView(
+      sessionId: sessionId,
+      title: peekTitle ?? '会话',
+      messages: peekMessages,
+      loading: peekLoading,
+      failed: peekFailed,
+      liveRunning: running,
+      hasLiveUpdate: messages.length > liveMessageCountAtPeek,
+      queuedPreview: queuedPrompt?.preview,
+    );
+  }
+
+  void clearSessionPeek() {
+    peekGeneration += 1;
+    viewingSessionId = null;
+    peekTitle = null;
+    peekMessages = [];
+    peekLoading = false;
+    peekFailed = false;
+  }
+
+  void restoreQueuedPrompt() {
+    final queued = queuedPrompt;
+    if (queued == null) return;
+    queuedPrompt = null;
+    if (promptController.text.trim().isEmpty && pendingAttachments.isEmpty) {
+      promptController.text = queued.text;
+      promptController.selection = TextSelection.collapsed(
+        offset: queued.text.length,
+      );
+      pendingAttachments.addAll(queued.attachments);
+      selectedPermissionMode = queued.permissionMode;
+      selectedCodexSandboxMode = queued.codexSandboxMode;
+    }
+  }
+
+  void releaseQueuedPromptIfTurnIdle() {
+    if (queuedPrompt == null || running || uploadingAttachments) return;
+    setState(restoreQueuedPrompt);
+  }
+
+  void releaseQueuedPromptAfterTurn(String endType) {
+    if (queuedPrompt == null) return;
+    if (queuedPromptReleaseForTurn(endType) == QueuedPromptRelease.send) {
+      unawaited(flushQueuedPromptSend());
+      return;
+    }
+    setState(restoreQueuedPrompt);
+  }
+
+  Future<void> flushQueuedPromptSend() async {
+    final queued = queuedPrompt;
+    if (queued == null) return;
+    queuedPrompt = null;
+    if (viewingSessionId != null) {
+      setState(clearSessionPeek);
+    }
+    if (!mounted ||
+        !shouldFlushQueuedPrompt(
+          running: running,
+          uploading: uploadingAttachments,
+          queuedSessionId: queued.sessionId,
+          activeSessionId: activeSessionId,
+        )) {
+      queuedPrompt = queued;
+      return;
+    }
+    setState(() {
+      promptController.text = queued.text;
+      promptController.selection = TextSelection.collapsed(
+        offset: queued.text.length,
+      );
+      pendingAttachments
+        ..clear()
+        ..addAll(queued.attachments);
+      selectedPermissionMode = queued.permissionMode;
+      selectedCodexSandboxMode = queued.codexSandboxMode;
+    });
+    await sendPrompt();
+  }
+
+  Future<void> openSessionPeek(
+    RemoteSessionSummary target, {
+    TranscriptJumpRequest? jump,
+  }) async {
+    final generation = ++peekGeneration;
+    setState(() {
+      viewingSessionId = target.id;
+      peekTitle = target.title;
+      peekMessages = [TranscriptMessage.system('正在读取会话…')];
+
+      peekLoading = true;
+      peekFailed = false;
+      liveMessageCountAtPeek = messages.length;
+      transcriptJumpRequest = jump;
+    });
+    try {
+      final payload = widget.demoMode
+          ? SessionPeekPayload(
+              sessionId: target.id,
+              projectId: target.projectId,
+              title: target.title,
+              messages: demoSessionPeekMessages(target.id),
+            )
+          : await fetchSessionPeek(target.id);
+      if (!mounted || generation != peekGeneration) return;
+      if (payload == null) {
+        setState(() {
+          peekLoading = false;
+          peekFailed = true;
+        });
+        return;
+      }
+      setState(() {
+        peekTitle = payload.title;
+        peekMessages = payload.messages;
+        peekLoading = false;
+        peekFailed = false;
+      });
+    } catch (_) {
+      if (!mounted || generation != peekGeneration) return;
+      setState(() {
+        peekLoading = false;
+        peekFailed = true;
+      });
+    }
+  }
+
+  Future<SessionPeekPayload?> fetchSessionPeek(String sessionId) async {
+    final current = session;
+    if (current == null) return null;
+    final res = await apiClient.get(
+      current.origin,
+      '/api/sessions/${Uri.encodeComponent(sessionId)}',
+      token: current.token,
+      timeout: networkTimeout,
+    );
+    if (res.statusCode == 401) {
+      await recoverUnauthorizedSession();
+      return null;
+    }
+    if (res.statusCode != 200) return null;
+    final body = jsonDecode(res.body);
+    if (body is! Map<String, dynamic>) return null;
+    return SessionPeekPayload.tryParse(body);
+  }
+
   void selectRemoteSession(String sessionId) {
     selectRemoteSessionWithJump(sessionId);
   }
@@ -2058,6 +2484,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             snippet: result.snippet,
           );
     if (result.sessionId == activeSessionId && jump == null) {
+      if (viewingSessionId != null) {
+        selectRemoteSessionWithJump(result.sessionId);
+        return;
+      }
       ScaffoldMessenger.maybeOf(
         context,
       )?.showSnackBar(const SnackBar(content: Text('当前已在这个会话')));
@@ -2071,11 +2501,15 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     TranscriptJumpRequest? jump,
   }) {
     if (sessionId == activeSessionId) {
-      if (jump == null) return false;
-      setState(() => transcriptJumpRequest = jump);
+      final wasPeeking = viewingSessionId != null;
+      if (!wasPeeking && jump == null) return false;
+      setState(() {
+        if (wasPeeking) clearSessionPeek();
+        if (jump != null) transcriptJumpRequest = jump;
+      });
       return true;
     }
-    if (running || uploadingAttachments || !wsReady) return false;
+    if (uploadingAttachments) return false;
     RemoteSessionSummary? target;
     for (final item in remoteSessions) {
       if (item.id == sessionId) {
@@ -2084,12 +2518,59 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       }
     }
     if (target == null || target.archived) return false;
+    final intent = sessionOpenIntent(
+      targetSessionId: sessionId,
+      activeSessionId: activeSessionId,
+      running: running,
+      uploading: uploadingAttachments,
+      wsReady: wsReady,
+      archived: target.archived,
+    );
+    if (intent == SessionOpenIntent.peek) {
+      if (pendingPermissions.isNotEmpty) return false;
+      unawaited(openSessionPeek(target, jump: jump));
+      return true;
+    }
+    if (intent != SessionOpenIntent.switchActive) return false;
+    if (widget.demoMode) {
+      final selected = target;
+      setState(() {
+        clearSessionPeek();
+        transcriptJumpRequest = jump;
+        if (selectedEffort == ClaudeEffortPreference.max) {
+          resetSessionOnlyEffort();
+        }
+        activeSessionId = selected.id;
+        activeProjectId = selected.projectId;
+        queuedPrompt = null;
+        pendingAttachments.clear();
+        pendingPermissions.clear();
+        respondingPermissionIds.clear();
+        uploadingAttachments = false;
+        stopping = false;
+        remoteTranscriptRevision = 0;
+        clearStreamTextBatch(apply: false);
+        clearWorkspaceChangeEcho();
+        messages
+          ..clear()
+          ..addAll(demoSessionPeekMessages(selected.id));
+        for (final project in projects) {
+          if (project.id == selected.projectId && session != null) {
+            session = session!.copyWith(workspaceDir: project.path);
+            break;
+          }
+        }
+      });
+      persistTranscriptSnapshotLater();
+      return true;
+    }
     final sent = wsClient.send({
       'type': 'select_session',
       'sessionId': sessionId,
     });
     if (!sent) return false;
     setState(() {
+      clearSessionPeek();
       transcriptJumpRequest = jump;
       if (selectedEffort == ClaudeEffortPreference.max) {
         resetSessionOnlyEffort();
@@ -2121,6 +2602,21 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       );
       if (res.statusCode == 401) throw const UnauthorizedSession();
       if (res.statusCode != 201) throw StateError('create_session_failed');
+      if (!mounted || session != current) return;
+      final body = jsonDecode(res.body);
+      final rawCatalog = body is Map<String, dynamic> ? body['catalog'] : null;
+      final catalog = rawCatalog is Map<String, dynamic>
+          ? RemoteProjectCatalog.tryParse(rawCatalog)
+          : null;
+      if (catalog == null) {
+        throw const FormatException('bad_create_session_response');
+      }
+      setState(() {
+        resetSessionOnlyEffort();
+        applyCatalog(catalog);
+      });
+      if (session != null) await tokenStore.save(session!);
+      persistTranscriptSnapshotLater();
     } on UnauthorizedSession {
       await recoverUnauthorizedSession();
     } catch (_) {
@@ -2273,6 +2769,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         remainingContext = null;
         messages.clear();
         commands.clear();
+        resetCommandCatalog();
         remoteTranscriptRevision = 0;
         allowBypassPermissions = false;
         selectedPermissionMode = PermissionMode.auto;
@@ -2315,16 +2812,22 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         reconnectSnapshot: reconnectSnapshot,
         modelName: modelName,
         selectedModel: selectedModel,
+        selectedCodexModel: selectedCodexModel,
         engine: activeSessionEngine,
         selectedEffort: selectedEffort,
         contextWindow: contextWindow,
         remainingContext: remainingContext,
         messages: messages,
+        transcriptRevisionListenable: transcriptRevision,
         transcriptJumpRequest: transcriptJumpRequest,
         readingFontScaleListenable: widget.readingFontScaleListenable,
         commands: commands,
+        commandsLoading: commandsLoading,
+        commandsFailed: commandsFailed,
+        onRefreshCommands: () => unawaited(refreshCommandCatalog()),
         permissionMode: running ? activePermissionMode : selectedPermissionMode,
         allowBypassPermissions: allowBypassPermissions,
+        codexSandboxModes: codexSandboxModes,
         codexSandboxMode: running
             ? activeCodexSandboxMode
             : selectedCodexSandboxMode,
@@ -2338,15 +2841,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           context,
           session,
           notificationsEnabled,
-          chatBackground,
           modelName,
           selectedModel,
           widget.readingFontScaleListenable.value,
           refreshConnection,
           setNotificationsEnabled,
           setModelPreference,
-          setChatBackground,
-          pickChatBackgroundImage,
           widget.onReadingFontScaleChanged,
           logoutPairedDevice,
         ),
@@ -2355,6 +2855,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         onNewConversation: beginNewConversation,
         onOpenSessions: openSessions,
         onOpenWorkspace: openWorkspace,
+        onOpenWorkspaceChanges: openWorkspaceChanges,
+        onOpenWorkspacePath: openWorkspacePath,
+        workspaceChangeEcho: workspaceChangeEcho,
         onTranscriptJumpHandled: handleTranscriptJumpHandled,
         onPermissionModeSelected: selectPermissionMode,
         onCodexSandboxModeSelected: selectCodexSandboxMode,
@@ -2364,30 +2867,26 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         onRemoveAttachment: removePendingAttachment,
         onSend: sendPrompt,
         onStop: stopRun,
+        peek: currentSessionPeek(),
+        onExitPeek: () => setState(clearSessionPeek),
+        queuedPreview: queuedPrompt?.preview,
+        onCancelQueue: () => setState(restoreQueuedPrompt),
       ),
     };
+    final colors = AppPalette.of(context);
+    final dark = Theme.of(context).brightness == Brightness.dark;
     return AnnotatedRegion<SystemUiOverlayStyle>(
-      value: route == ShellRoute.boot
-          ? const SystemUiOverlayStyle(
-              statusBarColor: Colors.transparent,
-              statusBarIconBrightness: Brightness.dark,
-              statusBarBrightness: Brightness.light,
-              systemNavigationBarColor: _BootstrapPalette.ground,
-              systemNavigationBarIconBrightness: Brightness.dark,
-              systemNavigationBarDividerColor: Colors.transparent,
-            )
-          : const SystemUiOverlayStyle(
-              statusBarColor: Colors.transparent,
-              statusBarIconBrightness: Brightness.dark,
-              statusBarBrightness: Brightness.light,
-              systemNavigationBarColor: AppColors.paper,
-              systemNavigationBarIconBrightness: Brightness.dark,
-              systemNavigationBarDividerColor: Colors.transparent,
-            ),
+      value: SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: dark ? Brightness.light : Brightness.dark,
+        statusBarBrightness: dark ? Brightness.dark : Brightness.light,
+        systemNavigationBarColor: colors.paper,
+        systemNavigationBarIconBrightness: dark
+            ? Brightness.light
+            : Brightness.dark,
+        systemNavigationBarDividerColor: Colors.transparent,
+      ),
       child: AppBackground(
-        chatBackground: route == ShellRoute.chat
-            ? chatBackground
-            : ChatBackgroundPreference.defaultValue,
         child: AnimatedSwitcher(
           key: const ValueKey('shell-route-switcher'),
           duration: reduceMotion ? Duration.zero : AppMotion.standard,
@@ -2422,42 +2921,17 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
 enum ShellRoute { boot, pair, chat }
 
-/*
-THESIS: Startup is a live generative identity, not a centered logo and loader.
-OWN-WORLD: Ice-white ground, ultramarine/cyan and fluorescent-chartreuse
-parametric streams, graphite type, no cards or terminal symbols.
-STORY: Two independently seeded paths enter from opposite edges, register as
-a double-C connection, and reseed when the real bootstrap phase changes.
-FIRST VIEWPORT: The identity owns most of the screen; the seed index sits upper
-left and real product/status copy anchors the lower right.
-FORM: Generative Parametric Identity, seed 11594fa5.
-FINISH: unreviewed and undocumented is unfinished; this build ends with the
-finish review, the verdict, DESIGN.md, and every shipping raster carrying its
-provenance.
-*/
 enum BootstrapPhase {
-  readingConnection('正在读取连接信息', 23.618, -72.046),
-  preparingPairing('正在准备配对', 12.844, -31.220),
-  restoringSession('正在恢复上次会话', 31.207, -54.813),
-  contactingHost('正在检查桌面主机', 48.112, -16.904);
+  readingConnection('正在读取连接信息'),
+  preparingPairing('正在准备配对'),
+  restoringSession('正在恢复上次会话'),
+  contactingHost('正在检查桌面主机');
 
-  const BootstrapPhase(this.label, this.seedA, this.seedB);
-
+  const BootstrapPhase(this.label);
   final String label;
-  final double seedA;
-  final double seedB;
 }
 
-class _BootstrapPalette {
-  static const ground = Color(0xFFF5F6F7);
-  static const ink = Color(0xFF1D2028);
-  static const muted = Color(0xFF565B67);
-  static const blue = Color(0xFF2850F6);
-  static const cyan = Color(0xFF43C9F2);
-  static const lime = Color(0xFFA5F33B);
-}
-
-class BootstrapScreen extends StatefulWidget {
+class BootstrapScreen extends StatelessWidget {
   const BootstrapScreen({
     super.key,
     this.phase = BootstrapPhase.readingConnection,
@@ -2466,446 +2940,42 @@ class BootstrapScreen extends StatefulWidget {
   final BootstrapPhase phase;
 
   @override
-  State<BootstrapScreen> createState() => _BootstrapScreenState();
-}
-
-class _BootstrapScreenState extends State<BootstrapScreen>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController animation;
-  var reduceMotion = false;
-
-  @override
-  void initState() {
-    super.initState();
-    animation = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2600),
-    );
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final nextReduceMotion = MediaQuery.disableAnimationsOf(context);
-    if (nextReduceMotion == reduceMotion && animation.isAnimating) return;
-    reduceMotion = nextReduceMotion;
-    if (reduceMotion) {
-      animation
-        ..stop()
-        ..value = 0.42;
-    } else if (!animation.isAnimating) {
-      animation.repeat();
-    }
-  }
-
-  @override
-  void dispose() {
-    animation.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    return AnnotatedRegion<SystemUiOverlayStyle>(
+    final colors = AppPalette.of(context);
+    return ColoredBox(
       key: const ValueKey('boot'),
-      value: const SystemUiOverlayStyle(
-        statusBarColor: Colors.transparent,
-        statusBarIconBrightness: Brightness.dark,
-        statusBarBrightness: Brightness.light,
-        systemNavigationBarColor: _BootstrapPalette.ground,
-        systemNavigationBarIconBrightness: Brightness.dark,
-        systemNavigationBarDividerColor: Colors.transparent,
-      ),
-      child: ColoredBox(
-        color: _BootstrapPalette.ground,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: Semantics(
-                label: '正在生成手机与桌面主机的连接标记',
-                excludeSemantics: true,
-                child: RepaintBoundary(
-                  key: const ValueKey('bootstrap-signal'),
-                  child: CustomPaint(
-                    painter: _BootstrapIdentityPainter(
-                      animation: animation,
-                      phase: widget.phase,
-                    ),
+      color: colors.paper,
+      child: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  LucideIcons.monitorSmartphone,
+                  size: AppIconSizes.hero,
+                  color: colors.ink,
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  'CC Remote',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                const SizedBox(height: 12),
+                Semantics(
+                  liveRegion: true,
+                  child: Text(
+                    phase.label,
+                    style: TextStyle(color: colors.muted),
                   ),
                 ),
-              ),
+              ],
             ),
-            SafeArea(
-              minimum: const EdgeInsets.fromLTRB(26, 26, 26, 22),
-              child: Stack(
-                children: [
-                  Align(
-                    alignment: Alignment.topLeft,
-                    child: _BootstrapSeedIndex(
-                      phase: widget.phase,
-                      reduceMotion: reduceMotion,
-                    ),
-                  ),
-                  Align(
-                    alignment: Alignment.bottomRight,
-                    child: Padding(
-                      padding: const EdgeInsets.only(bottom: 72),
-                      child: _BootstrapStatusBlock(
-                        phase: widget.phase,
-                        reduceMotion: reduceMotion,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
-  }
-}
-
-class _BootstrapSeedIndex extends StatelessWidget {
-  const _BootstrapSeedIndex({required this.phase, required this.reduceMotion});
-
-  final BootstrapPhase phase;
-  final bool reduceMotion;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SizedBox(
-          width: 2,
-          height: 72,
-          child: Column(
-            children: const [
-              Expanded(child: ColoredBox(color: _BootstrapPalette.blue)),
-              Expanded(child: ColoredBox(color: _BootstrapPalette.lime)),
-            ],
-          ),
-        ),
-        const SizedBox(width: 14),
-        AnimatedSwitcher(
-          duration: reduceMotion ? Duration.zero : AppMotion.fast,
-          child: Column(
-            key: ValueKey(phase),
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'SEED',
-                style: TextStyle(
-                  color: _BootstrapPalette.ink,
-                  fontFamily: 'sans-serif-condensed',
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 2.1,
-                  height: 1.2,
-                ),
-              ),
-              const SizedBox(height: 9),
-              Text(
-                phase.seedA.toStringAsFixed(3),
-                style: const TextStyle(
-                  color: _BootstrapPalette.muted,
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: 0.7,
-                  height: 1.35,
-                  fontFeatures: [FontFeature.tabularFigures()],
-                ),
-              ),
-              Text(
-                phase.seedB.toStringAsFixed(3),
-                style: const TextStyle(
-                  color: _BootstrapPalette.muted,
-                  fontFamily: 'monospace',
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: 0.7,
-                  height: 1.35,
-                  fontFeatures: [FontFeature.tabularFigures()],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _BootstrapStatusBlock extends StatelessWidget {
-  const _BootstrapStatusBlock({
-    required this.phase,
-    required this.reduceMotion,
-  });
-
-  final BootstrapPhase phase;
-  final bool reduceMotion;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 224,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(
-            width: 24,
-            height: 4,
-            child: ColoredBox(color: _BootstrapPalette.blue),
-          ),
-          const SizedBox(height: 18),
-          const FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text(
-              'CC Remote',
-              maxLines: 1,
-              style: TextStyle(
-                color: _BootstrapPalette.ink,
-                fontFamily: 'sans-serif-condensed',
-                fontSize: 32,
-                fontWeight: FontWeight.w600,
-                letterSpacing: -0.8,
-                height: 1.05,
-              ),
-            ),
-          ),
-          const SizedBox(height: 17),
-          Semantics(
-            liveRegion: true,
-            label: phase.label,
-            excludeSemantics: true,
-            child: AnimatedSwitcher(
-              duration: reduceMotion ? Duration.zero : AppMotion.fast,
-              transitionBuilder: (child, phaseAnimation) =>
-                  FadeTransition(opacity: phaseAnimation, child: child),
-              child: Text(
-                phase.label,
-                key: ValueKey(phase),
-                maxLines: 2,
-                style: const TextStyle(
-                  color: _BootstrapPalette.muted,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: 0.1,
-                  height: 1.35,
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-          const DecoratedBox(
-            decoration: BoxDecoration(
-              color: _BootstrapPalette.blue,
-              shape: BoxShape.circle,
-            ),
-            child: SizedBox.square(dimension: 8),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _BootstrapIdentityPainter extends CustomPainter {
-  _BootstrapIdentityPainter({required this.animation, required this.phase})
-    : super(repaint: animation);
-
-  final Animation<double> animation;
-  final BootstrapPhase phase;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (size.isEmpty) return;
-    final shortestSide = min(size.width, size.height);
-    final motion = sin(animation.value * 2 * pi + phase.seedA * 0.03);
-    final secondaryMotion = cos(
-      animation.value * 2 * pi + phase.seedB.abs() * 0.02,
-    );
-
-    canvas.drawCircle(
-      Offset(size.width * 0.72, size.height * 0.18),
-      shortestSide * 0.38,
-      Paint()..color = _BootstrapPalette.blue.withValues(alpha: 0.018),
-    );
-    canvas.drawCircle(
-      Offset(size.width * 0.24, size.height * 0.58),
-      shortestSide * 0.46,
-      Paint()..color = _BootstrapPalette.lime.withValues(alpha: 0.016),
-    );
-
-    _drawStreamBundle(
-      canvas: canvas,
-      size: size,
-      fromLeft: true,
-      lineCount: 20,
-      motion: motion,
-      secondaryMotion: secondaryMotion,
-    );
-    _drawStreamBundle(
-      canvas: canvas,
-      size: size,
-      fromLeft: false,
-      lineCount: 20,
-      motion: motion,
-      secondaryMotion: secondaryMotion,
-    );
-
-    _drawRegistrationMarks(canvas, size, motion);
-  }
-
-  void _drawStreamBundle({
-    required Canvas canvas,
-    required Size size,
-    required bool fromLeft,
-    required int lineCount,
-    required double motion,
-    required double secondaryMotion,
-  }) {
-    final width = size.width;
-    final height = size.height;
-    final centerX = width * (fromLeft ? 0.43 : 0.57);
-    final centerY = height * 0.40;
-    final baseRx = min(width * 0.155, 67.0);
-    final baseRy = baseRx * 1.03;
-    final startAngle = fromLeft ? -pi / 4 : -3 * pi / 4;
-    final sweepAngle = fromLeft ? -3 * pi / 2 : 3 * pi / 2;
-
-    for (var index = 0; index < lineCount; index++) {
-      final normalized = index / (lineCount - 1);
-      final spread = (index - (lineCount - 1) / 2) * 2.05;
-      final localWave = sin(
-        phase.seedA * 0.08 + index * 0.31 + animation.value * 2 * pi,
-      );
-      final rx = baseRx + spread * 0.78 + localWave * 1.4;
-      final ry = baseRy + spread * 0.58 - localWave * 0.9;
-      final shiftedCenter = Offset(
-        centerX + motion * (fromLeft ? 4.5 : -4.5),
-        centerY + secondaryMotion * 4 + spread * 0.18,
-      );
-      final arcRect = Rect.fromCenter(
-        center: shiftedCenter,
-        width: rx * 2,
-        height: ry * 2,
-      );
-      final arcStart = _ellipsePoint(arcRect, startAngle);
-      final path = Path()
-        ..moveTo(
-          fromLeft ? -width * 0.12 : width * 1.12,
-          height * 0.25 + spread * 1.25 + localWave * 2.4,
-        )
-        ..cubicTo(
-          width * (fromLeft ? 0.15 : 0.85),
-          height * 0.27 + spread * 0.72,
-          width * (fromLeft ? 0.31 : 0.69),
-          height * 0.25 + localWave * 4,
-          arcStart.dx,
-          arcStart.dy,
-        )
-        ..arcTo(arcRect, startAngle, sweepAngle, false);
-
-      path.cubicTo(
-        width * (fromLeft ? 0.74 : 0.26),
-        height * (0.56 + normalized * 0.012),
-        width * (fromLeft ? 0.46 : 0.54),
-        height * (0.68 + spread * 0.0009),
-        fromLeft ? -width * 0.13 : width * 1.13,
-        height * (fromLeft ? 0.96 : 0.90) + spread * 1.15,
-      );
-
-      final startColor = fromLeft
-          ? _BootstrapPalette.blue
-          : _BootstrapPalette.lime;
-      final color = Color.lerp(
-        startColor,
-        _BootstrapPalette.cyan,
-        fromLeft ? normalized * 0.58 : (1 - normalized) * 0.34,
-      )!;
-      canvas.drawPath(
-        path,
-        Paint()
-          ..color = color.withValues(alpha: 0.72)
-          ..style = PaintingStyle.stroke
-          ..strokeCap = StrokeCap.round
-          ..strokeWidth = 0.9,
-      );
-
-      if (index == 3 || index == 10 || index == 16) {
-        final metrics = path.computeMetrics().toList(growable: false);
-        if (metrics.isNotEmpty) {
-          final metric = metrics.first;
-          final tangent = metric.getTangentForOffset(
-            metric.length * (0.16 + index * 0.012),
-          );
-          if (tangent != null) {
-            final markerPaint = Paint()..color = color.withValues(alpha: 0.86);
-            if (index == 10) {
-              canvas.drawRect(
-                Rect.fromCenter(center: tangent.position, width: 4, height: 4),
-                markerPaint,
-              );
-            } else {
-              canvas.drawCircle(tangent.position, 2, markerPaint);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  Offset _ellipsePoint(Rect rect, double angle) {
-    return Offset(
-      rect.center.dx + cos(angle) * rect.width / 2,
-      rect.center.dy + sin(angle) * rect.height / 2,
-    );
-  }
-
-  void _drawRegistrationMarks(Canvas canvas, Size size, double motion) {
-    final marks = <(Offset, Color)>[
-      (
-        Offset(size.width * 0.41, size.height * 0.22 + motion * 3),
-        _BootstrapPalette.cyan,
-      ),
-      (
-        Offset(size.width * 0.79, size.height * 0.28 - motion * 2),
-        _BootstrapPalette.lime,
-      ),
-      (
-        Offset(size.width * 0.81, size.height * 0.61 + motion * 4),
-        _BootstrapPalette.blue,
-      ),
-      (
-        Offset(size.width * 0.36, size.height * 0.79 - motion * 3),
-        _BootstrapPalette.cyan,
-      ),
-    ];
-    for (final mark in marks) {
-      canvas.drawCircle(
-        mark.$1,
-        3.2,
-        Paint()..color = _BootstrapPalette.ground,
-      );
-      canvas.drawCircle(
-        mark.$1,
-        2.4,
-        Paint()
-          ..color = mark.$2.withValues(alpha: 0.54)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _BootstrapIdentityPainter oldDelegate) {
-    return oldDelegate.animation != animation || oldDelegate.phase != phase;
   }
 }
 
@@ -3013,7 +3083,8 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
       borderRadius: BorderRadius.circular(compact ? 20 : 28),
       child: MobileScanner(
         controller: scannerController,
-        placeholderBuilder: (_) => const ColoredBox(color: AppColors.control),
+        placeholderBuilder: (context) =>
+            ColoredBox(color: AppPalette.of(context).control),
         errorBuilder: (context, error) => CameraPermissionPlaceholder(
           compact: compact,
           onPressed: () => checkCameraPermission(request: true),
@@ -3050,18 +3121,18 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Row(
+                          Row(
                             children: [
                               Icon(
                                 LucideIcons.smartphone,
-                                size: 18,
-                                color: AppColors.accentStrong,
+                                size: AppIconSizes.control,
+                                color: AppPalette.of(context).accentStrong,
                               ),
                               SizedBox(width: 7),
                               Text(
                                 '首次连接',
                                 style: TextStyle(
-                                  color: AppColors.muted,
+                                  color: AppPalette.of(context).muted,
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -3079,10 +3150,10 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                             ),
                           ),
                           const SizedBox(height: 5),
-                          const Text(
+                          Text(
                             '扫描电脑终端里的二维码',
                             style: TextStyle(
-                              color: AppColors.muted,
+                              color: AppPalette.of(context).muted,
                               fontSize: 14,
                             ),
                           ),
@@ -3094,15 +3165,15 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                       width: compact ? 52 : 60,
                       height: compact ? 52 : 60,
                       decoration: BoxDecoration(
-                        color: AppColors.surface,
+                        color: AppPalette.of(context).surface,
                         borderRadius: BorderRadius.circular(AppRadii.surface),
-                        border: Border.all(color: AppColors.line),
+                        border: Border.all(color: AppPalette.of(context).line),
                       ),
                       alignment: Alignment.center,
-                      child: const Icon(
+                      child: Icon(
                         LucideIcons.monitor,
-                        size: 26,
-                        color: AppColors.accentStrong,
+                        size: AppIconSizes.primary,
+                        color: AppPalette.of(context).accentStrong,
                       ),
                     ),
                   ],
@@ -3135,9 +3206,9 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                   key: const ValueKey('pair-status-panel'),
                   padding: const EdgeInsets.all(AppSpacing.md),
                   decoration: BoxDecoration(
-                    color: AppColors.surface,
+                    color: AppPalette.of(context).surface,
                     borderRadius: BorderRadius.circular(AppRadii.surface),
-                    border: Border.all(color: AppColors.line),
+                    border: Border.all(color: AppPalette.of(context).line),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -3149,16 +3220,16 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                             width: AppSizes.iconControl,
                             height: AppSizes.iconControl,
                             decoration: BoxDecoration(
-                              color: AppColors.control,
+                              color: AppPalette.of(context).control,
                               borderRadius: BorderRadius.circular(
                                 AppRadii.control,
                               ),
                             ),
                             alignment: Alignment.center,
-                            child: const Icon(
+                            child: Icon(
                               LucideIcons.scanLine,
-                              size: 20,
-                              color: AppColors.accentStrong,
+                              size: AppIconSizes.control,
+                              color: AppPalette.of(context).accentStrong,
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -3187,8 +3258,8 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                                           : '扫到后会确认设备信息再连接'),
                                   style: TextStyle(
                                     color: widget.error == null
-                                        ? AppColors.muted
-                                        : AppColors.danger,
+                                        ? AppPalette.of(context).muted
+                                        : AppPalette.of(context).danger,
                                     fontSize: 12,
                                     height: 1.35,
                                   ),
@@ -3221,8 +3292,8 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                                       : '相机已就绪'
                                 : '需要重试',
                             color: widget.error == null
-                                ? AppColors.muted
-                                : AppColors.danger,
+                                ? AppPalette.of(context).muted
+                                : AppPalette.of(context).danger,
                           ),
                         ],
                       ),
@@ -3230,10 +3301,10 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                         const SizedBox(height: 14),
                         ClipRRect(
                           borderRadius: BorderRadius.circular(AppRadii.pill),
-                          child: const LinearProgressIndicator(
+                          child: LinearProgressIndicator(
                             minHeight: 2,
-                            color: AppColors.accent,
-                            backgroundColor: AppColors.line,
+                            color: AppPalette.of(context).accent,
+                            backgroundColor: AppPalette.of(context).line,
                           ),
                         ),
                       ],
@@ -3245,11 +3316,11 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                             scaleOnPress: false,
                             child: FilledButton.icon(
                               onPressed: widget.onDemoConnect,
-                              icon: const Icon(LucideIcons.link),
+                              icon: const SmartIcon(LucideIcons.link),
                               label: const Text('连接这台电脑'),
                               style: FilledButton.styleFrom(
-                                backgroundColor: AppColors.cta,
-                                foregroundColor: AppColors.onCta,
+                                backgroundColor: AppPalette.of(context).cta,
+                                foregroundColor: AppPalette.of(context).onCta,
                                 minimumSize: const Size.fromHeight(52),
                               ),
                             ),
@@ -3259,19 +3330,19 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                           widget.error == null &&
                           !widget.canResetScan) ...[
                         const SizedBox(height: 14),
-                        const Row(
+                        Row(
                           children: [
                             Icon(
                               LucideIcons.scan,
-                              size: 18,
-                              color: AppColors.muted,
+                              size: AppIconSizes.control,
+                              color: AppPalette.of(context).muted,
                             ),
                             SizedBox(width: 8),
                             Expanded(
                               child: Text(
                                 '保持二维码完整可见，识别后会先确认设备信息',
                                 style: TextStyle(
-                                  color: AppColors.muted,
+                                  color: AppPalette.of(context).muted,
                                   fontSize: 12,
                                 ),
                               ),
@@ -3285,11 +3356,16 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                           width: double.infinity,
                           child: OutlinedButton.icon(
                             onPressed: widget.onClearError,
-                            icon: const Icon(LucideIcons.refreshCw, size: 18),
+                            icon: const SmartIcon(
+                              LucideIcons.refreshCw,
+                              size: AppIconSizes.control,
+                            ),
                             label: const Text('重新扫描'),
                             style: OutlinedButton.styleFrom(
-                              foregroundColor: AppColors.ink,
-                              backgroundColor: AppColors.surfaceElevated,
+                              foregroundColor: AppPalette.of(context).ink,
+                              backgroundColor: AppPalette.of(
+                                context,
+                              ).surfaceElevated,
                               minimumSize: const Size.fromHeight(48),
                             ),
                           ),
@@ -3325,7 +3401,7 @@ class CameraPermissionPlaceholder extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ColoredBox(
-      color: AppColors.surface,
+      color: AppPalette.of(context).surface,
       child: Center(
         child: Padding(
           padding: EdgeInsets.all(compact ? 10 : 18),
@@ -3335,7 +3411,7 @@ class CameraPermissionPlaceholder extends StatelessWidget {
               Icon(
                 LucideIcons.camera,
                 size: compact ? 26 : 34,
-                color: AppColors.accentStrong,
+                color: AppPalette.of(context).accentStrong,
               ),
               SizedBox(height: compact ? 6 : 10),
               Text(
@@ -3350,7 +3426,10 @@ class CameraPermissionPlaceholder extends StatelessWidget {
                 Text(
                   needsSettings ? '请在系统设置中允许后返回' : '用于扫描电脑端的配对二维码',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                  style: TextStyle(
+                    color: AppPalette.of(context).muted,
+                    fontSize: 12,
+                  ),
                 ),
               ],
               SizedBox(height: compact ? 6 : 12),
@@ -3362,7 +3441,7 @@ class CameraPermissionPlaceholder extends StatelessWidget {
                         dimension: 16,
                         child: CircularProgressIndicator(strokeWidth: 2),
                       )
-                    : Icon(
+                    : SmartIcon(
                         needsSettings
                             ? LucideIcons.settings
                             : LucideIcons.camera,
@@ -3391,26 +3470,29 @@ class ScanPlaceholder extends StatelessWidget {
           width: compact ? 46 : 68,
           height: compact ? 46 : 68,
           decoration: BoxDecoration(
-            color: AppColors.control,
+            color: AppPalette.of(context).control,
             borderRadius: BorderRadius.circular(AppRadii.surface),
-            border: Border.all(color: AppColors.line),
+            border: Border.all(color: AppPalette.of(context).line),
           ),
           child: Icon(
             LucideIcons.qrCode,
             size: compact ? 28 : 42,
-            color: AppColors.accentStrong,
+            color: AppPalette.of(context).accentStrong,
           ),
         ),
         SizedBox(height: compact ? 6 : 14),
-        const Text(
+        Text(
           '把二维码放进取景框',
-          style: TextStyle(color: AppColors.ink, fontWeight: FontWeight.w700),
+          style: TextStyle(
+            color: AppPalette.of(context).ink,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         if (!compact) ...[
           const SizedBox(height: 4),
-          const Text(
+          Text(
             '识别后会先显示电脑信息',
-            style: TextStyle(color: AppColors.muted, fontSize: 12),
+            style: TextStyle(color: AppPalette.of(context).muted, fontSize: 12),
           ),
         ],
       ],
@@ -3453,14 +3535,14 @@ class PairReviewSheet extends StatelessWidget {
                     width: AppSizes.iconControl,
                     height: AppSizes.iconControl,
                     decoration: BoxDecoration(
-                      color: AppColors.control,
+                      color: AppPalette.of(context).control,
                       borderRadius: BorderRadius.circular(AppRadii.control),
                     ),
                     alignment: Alignment.center,
-                    child: const Icon(
+                    child: Icon(
                       LucideIcons.monitor,
-                      size: 20,
-                      color: AppColors.accentStrong,
+                      size: AppIconSizes.control,
+                      color: AppPalette.of(context).accentStrong,
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -3480,8 +3562,8 @@ class PairReviewSheet extends StatelessWidget {
                           payload.origin.toString(),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: AppColors.muted,
+                          style: TextStyle(
+                            color: AppPalette.of(context).muted,
                             fontFamily: AppTypography.codeFontFamily,
                             fontFamilyFallback:
                                 AppTypography.codeFontFamilyFallback,
@@ -3497,7 +3579,9 @@ class PairReviewSheet extends StatelessWidget {
               StatusLabel(
                 icon: expired ? LucideIcons.calendarX : LucideIcons.badgeCheck,
                 label: expired ? '二维码已过期' : '二维码有效',
-                color: expired ? AppColors.danger : AppColors.muted,
+                color: expired
+                    ? AppPalette.of(context).danger
+                    : AppPalette.of(context).muted,
               ),
               const SizedBox(height: 16),
               SizedBox(
@@ -3516,8 +3600,8 @@ class PairReviewSheet extends StatelessWidget {
                             Navigator.pop(context, true);
                           },
                     style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.cta,
-                      foregroundColor: AppColors.onCta,
+                      backgroundColor: AppPalette.of(context).cta,
+                      foregroundColor: AppPalette.of(context).onCta,
                       minimumSize: const Size.fromHeight(52),
                     ),
                     child: const Text('连接这台电脑'),
@@ -3530,8 +3614,8 @@ class PairReviewSheet extends StatelessWidget {
                 child: OutlinedButton(
                   onPressed: () => Navigator.pop(context, false),
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.ink,
-                    backgroundColor: AppColors.surface,
+                    foregroundColor: AppPalette.of(context).ink,
+                    backgroundColor: AppPalette.of(context).surface,
                     minimumSize: const Size.fromHeight(48),
                   ),
                   child: const Text('重新扫描'),
@@ -3562,9 +3646,10 @@ enum ConsoleTone { neutral, active, warning, danger }
 
 @immutable
 class ConsolePresentation {
-  const ConsolePresentation(this.phase);
+  const ConsolePresentation(this.phase, {this.engine = SessionEngine.claude});
 
   final ConsolePhase phase;
+  final SessionEngine engine;
 
   static ConsolePresentation resolve({
     required bool connected,
@@ -3576,23 +3661,27 @@ class ConsolePresentation {
     bool stopTimedOut = false,
     bool stopped = false,
     bool failed = false,
+    SessionEngine engine = SessionEngine.claude,
   }) {
-    if (offline) return const ConsolePresentation(ConsolePhase.offline);
+    if (offline) return ConsolePresentation(ConsolePhase.offline, engine: engine);
     if (running && stopping) {
-      return const ConsolePresentation(ConsolePhase.stopping);
+      return ConsolePresentation(ConsolePhase.stopping, engine: engine);
     }
     if (running && stopTimedOut) {
-      return const ConsolePresentation(ConsolePhase.stopTimedOut);
+      return ConsolePresentation(ConsolePhase.stopTimedOut, engine: engine);
     }
     if (running && awaitingPermission) {
-      return const ConsolePresentation(ConsolePhase.awaitingPermission);
+      return ConsolePresentation(
+        ConsolePhase.awaitingPermission,
+        engine: engine,
+      );
     }
-    if (running) return const ConsolePresentation(ConsolePhase.running);
-    if (uploading) return const ConsolePresentation(ConsolePhase.uploading);
-    if (!connected) return const ConsolePresentation(ConsolePhase.connecting);
-    if (failed) return const ConsolePresentation(ConsolePhase.failed);
-    if (stopped) return const ConsolePresentation(ConsolePhase.stopped);
-    return const ConsolePresentation(ConsolePhase.connected);
+    if (running) return ConsolePresentation(ConsolePhase.running, engine: engine);
+    if (uploading) return ConsolePresentation(ConsolePhase.uploading, engine: engine);
+    if (!connected) return ConsolePresentation(ConsolePhase.connecting, engine: engine);
+    if (failed) return ConsolePresentation(ConsolePhase.failed, engine: engine);
+    if (stopped) return ConsolePresentation(ConsolePhase.stopped, engine: engine);
+    return ConsolePresentation(ConsolePhase.connected, engine: engine);
   }
 
   String get statusLabel => switch (phase) {
@@ -3612,9 +3701,10 @@ class ConsolePresentation {
     ConsolePhase.connecting => '连接后可以继续输入',
     ConsolePhase.connected ||
     ConsolePhase.stopped ||
-    ConsolePhase.failed => '输入要发给 Claude Code 的内容',
+    ConsolePhase.failed => '输入要发给 ${engine.displayName} 的内容',
     ConsolePhase.uploading => '正在上传附件…',
-    ConsolePhase.running => 'Claude 正在输出…',
+    ConsolePhase.running => '下一句可以先写着，点排队发送',
+
     ConsolePhase.awaitingPermission => '请先处理权限请求',
     ConsolePhase.stopping => '等待主机确认停止',
     ConsolePhase.stopTimedOut => '主机未确认停止，可再次尝试',
@@ -3636,6 +3726,23 @@ class ConsolePresentation {
     ConsolePhase.connected ||
     ConsolePhase.stopped ||
     ConsolePhase.failed => true,
+    _ => false,
+  };
+
+  bool get canDraft => switch (phase) {
+    ConsolePhase.connected ||
+    ConsolePhase.stopped ||
+    ConsolePhase.failed ||
+    ConsolePhase.running ||
+    ConsolePhase.awaitingPermission ||
+    ConsolePhase.stopTimedOut => true,
+    _ => false,
+  };
+
+  bool get canQueue => switch (phase) {
+    ConsolePhase.running ||
+    ConsolePhase.awaitingPermission ||
+    ConsolePhase.stopTimedOut => true,
     _ => false,
   };
 
@@ -3703,7 +3810,10 @@ _currentTurnEvidence(List<TranscriptMessage> messages) {
       }
     }
     stopped |= message.activityState == ActivityState.stopped;
-    failed |= message.activityState == ActivityState.error;
+    // Tool errors remain in the transcript; only a terminal result fails the turn.
+    failed |=
+        message.activityKind == ActivityKind.summary &&
+        message.activityState == ActivityState.error;
   }
 
   return (
@@ -3772,6 +3882,139 @@ String preservedConnectionEvidence({
   return '连接恢复后会同步电脑端状态';
 }
 
+class SessionPeekDock extends StatelessWidget {
+  const SessionPeekDock({
+    super.key,
+    required this.peek,
+    required this.onReturn,
+    this.onStop,
+  });
+
+  final SessionPeekView peek;
+  final VoidCallback onReturn;
+  final VoidCallback? onStop;
+
+  @override
+  Widget build(BuildContext context) {
+    final title = peek.failed
+        ? '读不到「${peek.title}」'
+        : peek.loading
+        ? '正在读取「${peek.title}」'
+        : '只读查看「${peek.title}」';
+    final subtitle = peek.hasLiveUpdate
+        ? '原会话有新输出'
+        : peek.liveRunning
+        ? '原会话仍在运行'
+        : '原会话已结束';
+    final showStop = onStop != null && peek.liveRunning;
+    return SignalLiquidGlass(
+      key: const ValueKey('session-peek-dock'),
+      blurSigma: 8,
+      decoration: AppLiquidGlass.strong(
+        context: context,
+        borderRadius: BorderRadius.circular(AppRadii.composerFloat),
+        elevated: true,
+        backdrop: true,
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (peek.loading)
+              Padding(
+                padding: EdgeInsets.only(bottom: 8),
+                child: LinearProgressIndicator(
+                  key: ValueKey('session-peek-loading'),
+                  minHeight: 2,
+                  color: AppPalette.of(context).accentStrong,
+                ),
+              ),
+            Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: AppPalette.of(context).ink,
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                height: 1.3,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              subtitle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: AppPalette.of(context).muted,
+                fontSize: 12,
+                height: 1.3,
+              ),
+            ),
+            if (peek.queuedPreview != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                peek.queuedPreview!,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: AppPalette.of(context).accentStrong,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton(
+                    key: const ValueKey('session-peek-return'),
+                    onPressed: onReturn,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppPalette.of(context).cta,
+                      foregroundColor: AppPalette.of(context).onCta,
+                      minimumSize: const Size.fromHeight(44),
+                    ),
+                    child: Text(peek.liveRunning ? '返回运行中的会话' : '返回当前会话'),
+                  ),
+                ),
+                if (showStop) ...[
+                  const SizedBox(width: 8),
+                  IconButton(
+                    key: const ValueKey('session-peek-stop'),
+                    tooltip: '停止',
+                    onPressed: onStop,
+                    style: IconButton.styleFrom(
+                      backgroundColor: AppPalette.of(context).stop,
+                      foregroundColor: AppPalette.of(context).onStop,
+                      minimumSize: const Size.square(44),
+                      side: BorderSide(
+                        color: AppPalette.of(
+                          context,
+                        ).onStop.withValues(alpha: 0.28),
+                        width: 0.8,
+                      ),
+                      shadowColor: Colors.transparent,
+                      elevation: 3,
+                    ),
+                    icon: const Icon(
+                      PhosphorIconsFill.square,
+                      size: AppIconSizes.inline,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class ChatScreen extends StatelessWidget {
   const ChatScreen({
     super.key,
@@ -3786,17 +4029,23 @@ class ChatScreen extends StatelessWidget {
     this.reconnectSnapshot = const RemoteConnectionSnapshot.idle(),
     required this.modelName,
     this.selectedModel = ClaudeModelPreference.followComputer,
+    this.selectedCodexModel,
     this.engine = SessionEngine.claude,
     this.selectedEffort = ClaudeEffortPreference.automatic,
     required this.contextWindow,
     required this.remainingContext,
     required this.messages,
+    this.transcriptRevisionListenable,
     this.transcriptJumpRequest,
     this.readingFontScaleListenable,
     required this.commands,
+    this.commandsLoading = false,
+    this.commandsFailed = false,
+    this.onRefreshCommands,
     required this.permissionMode,
     required this.allowBypassPermissions,
-    this.codexSandboxMode = CodexSandboxMode.readOnly,
+    this.codexSandboxMode = CodexSandboxMode.dangerFullAccess,
+    this.codexSandboxModes = CodexSandboxMode.supportedModes,
     required this.pendingPermissions,
     required this.respondingPermissionIds,
     required this.promptController,
@@ -3809,6 +4058,9 @@ class ChatScreen extends StatelessWidget {
     required this.onNewConversation,
     required this.onOpenSessions,
     required this.onOpenWorkspace,
+    this.workspaceChangeEcho,
+    this.onOpenWorkspaceChanges,
+    this.onOpenWorkspacePath,
     this.onTranscriptJumpHandled,
     required this.onPermissionModeSelected,
     this.onCodexSandboxModeSelected,
@@ -3818,6 +4070,10 @@ class ChatScreen extends StatelessWidget {
     this.onRemoveAttachment,
     required this.onSend,
     required this.onStop,
+    this.peek,
+    this.onExitPeek,
+    this.queuedPreview,
+    this.onCancelQueue,
   });
 
   final SavedSession? session;
@@ -3831,20 +4087,26 @@ class ChatScreen extends StatelessWidget {
   final RemoteConnectionSnapshot reconnectSnapshot;
   final String? modelName;
   final ClaudeModelPreference selectedModel;
+  final String? selectedCodexModel;
   final SessionEngine engine;
   final ClaudeEffortPreference selectedEffort;
   final int? contextWindow;
   final int? remainingContext;
   final List<TranscriptMessage> messages;
+  final ValueListenable<int>? transcriptRevisionListenable;
   final ValueListenable<double>? readingFontScaleListenable;
 
   // ponytail: static fallback so tests without a listening shell skip wiring
   static final ValueNotifier<double> _unityReadingScale = ValueNotifier(1.0);
   final TranscriptJumpRequest? transcriptJumpRequest;
   final List<String> commands;
+  final bool commandsLoading;
+  final bool commandsFailed;
+  final VoidCallback? onRefreshCommands;
   final PermissionMode permissionMode;
   final bool allowBypassPermissions;
   final CodexSandboxMode codexSandboxMode;
+  final List<CodexSandboxMode> codexSandboxModes;
   final List<RemotePermissionRequest> pendingPermissions;
   final Set<String> respondingPermissionIds;
   final TextEditingController promptController;
@@ -3857,6 +4119,9 @@ class ChatScreen extends StatelessWidget {
   final VoidCallback onNewConversation;
   final VoidCallback onOpenSessions;
   final VoidCallback onOpenWorkspace;
+  final WorkspaceChangeEcho? workspaceChangeEcho;
+  final VoidCallback? onOpenWorkspaceChanges;
+  final ValueChanged<String>? onOpenWorkspacePath;
   final ValueChanged<TranscriptJumpRequest>? onTranscriptJumpHandled;
   final ValueChanged<PermissionMode> onPermissionModeSelected;
   final ValueChanged<CodexSandboxMode>? onCodexSandboxModeSelected;
@@ -3866,9 +4131,14 @@ class ChatScreen extends StatelessWidget {
   final ValueChanged<AttachmentDraft>? onRemoveAttachment;
   final VoidCallback onSend;
   final VoidCallback onStop;
+  final SessionPeekView? peek;
+  final VoidCallback? onExitPeek;
+  final String? queuedPreview;
+  final VoidCallback? onCancelQueue;
 
   @override
   Widget build(BuildContext context) {
+    final peeking = peek != null;
     final evidence = _currentTurnEvidence(messages);
     final presentation = ConsolePresentation.resolve(
       connected: connected,
@@ -3880,6 +4150,7 @@ class ChatScreen extends StatelessWidget {
       stopTimedOut: evidence.stopTimedOut,
       stopped: evidence.stopped,
       failed: evidence.failed,
+      engine: engine,
     );
     final previousPrompt = evidence.previousPrompt;
     final canRestorePreviousPrompt =
@@ -3887,6 +4158,7 @@ class ChatScreen extends StatelessWidget {
         previousPrompt != null &&
         promptController.text.trim().isEmpty;
     final media = MediaQuery.of(context);
+
     final header = RepaintBoundary(
       child: ConnectionHeader(
         session: session,
@@ -3906,27 +4178,43 @@ class ChatScreen extends StatelessWidget {
         onOpenWorkspace: onOpenWorkspace,
       ),
     );
-    final transcript = RepaintBoundary(
-      child: TranscriptView(
-        messages: messages,
-        jumpRequest: transcriptJumpRequest,
-        session: session,
-        activeSessionId: activeSessionId,
-        running: running,
-        runStartedAt: runStartedAt,
-        pendingPermissions: pendingPermissions,
-        respondingPermissionIds: respondingPermissionIds,
-        connected: connected,
-        offline: offline,
-        onFillPrompt: onFillPrompt,
-        onReconnect: onReconnect,
-        onPermissionAllow: onPermissionAllow,
-        onPermissionDeny: onPermissionDeny,
-        onJumpHandled: onTranscriptJumpHandled,
+    Widget buildTranscriptView(double topPadding) => TranscriptView(
+      topPadding: topPadding,
+      messages: peeking ? peek!.messages : messages,
+      jumpRequest: transcriptJumpRequest,
+      session: session,
+      activeSessionId: peeking ? peek!.sessionId : activeSessionId,
+      running: peeking ? false : running,
+      runStartedAt: peeking ? null : runStartedAt,
+      pendingPermissions: peeking
+          ? const <RemotePermissionRequest>[]
+          : pendingPermissions,
+      respondingPermissionIds: respondingPermissionIds,
+      connected: connected,
+      offline: offline,
+      workspaceChangeEcho: peeking ? null : workspaceChangeEcho,
+      onFillPrompt: onFillPrompt,
+      onReconnect: onReconnect,
+      onPermissionAllow: onPermissionAllow,
+      onPermissionDeny: onPermissionDeny,
+      onJumpHandled: onTranscriptJumpHandled,
+      onOpenWorkspaceChanges: peeking ? null : onOpenWorkspaceChanges,
+    );
+    Widget buildTranscript(double topPadding) => RepaintBoundary(
+      child: WorkspacePortal(
+        workspaceDir: peeking ? null : session?.workspaceDir,
+        onOpenPath: peeking ? null : onOpenWorkspacePath,
+        child: transcriptRevisionListenable == null || peeking
+            ? buildTranscriptView(topPadding)
+            : ValueListenableBuilder<int>(
+                valueListenable: transcriptRevisionListenable!,
+                builder: (context, _, _) => buildTranscriptView(topPadding),
+              ),
       ),
     );
     final showComposer =
-        !(offline && messages.isEmpty && pendingPermissions.isEmpty);
+        peeking || !(offline && messages.isEmpty && pendingPermissions.isEmpty);
+
     // Edge-to-edge: use viewPadding so the float clears the home indicator
     // even when MediaQuery.padding.bottom is 0.
     final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
@@ -3936,66 +4224,102 @@ class ChatScreen extends StatelessWidget {
         : (bottomInset > 0 ? bottomInset : 8.0);
     return SafeArea(
       key: const ValueKey('chat'),
+      top: false,
       bottom: false,
-      child: Padding(
-        // Tighter sides → wider bubbles; bottom handled on the float.
-        padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
-        child: Column(
-          children: [
-            header,
-            if (ConsoleStatusStrip.shouldShow(presentation)) ...[
-              const SizedBox(height: 8),
-              ConsoleStatusStrip(
-                presentation: presentation,
-                hostLabel: session?.deviceName,
-              ),
-            ],
-            if (!keyboardVisible)
-              RecoveryStatePanel(
-                presentation: presentation,
-                hostLabel: session?.deviceName,
-                failureDetail: evidence.failureDetail,
-                reconnectSnapshot: reconnectSnapshot,
-                hasTranscript: messages.isNotEmpty,
-                hasDraft:
-                    promptController.text.trim().isNotEmpty ||
-                    pendingAttachments.isNotEmpty,
-                onReconnect: onReconnect,
-                onStop: onStop,
-                onOpenWorkspace: onOpenWorkspace,
-                onEditPreviousPrompt: canRestorePreviousPrompt
-                    ? () => onFillPrompt(previousPrompt)
-                    : null,
-              ),
-            const SizedBox(height: 12),
-            Expanded(
-              child: ValueListenableBuilder<double>(
-                valueListenable:
-                    readingFontScaleListenable ?? _unityReadingScale,
-                builder: (context, scale, child) => MediaQuery(
-                  data: media.copyWith(
-                    textScaler: multiplyReadingTextScaler(
-                      media.textScaler,
-                      scale,
-                    ),
+      child: ValueListenableBuilder<double>(
+        valueListenable: readingFontScaleListenable ?? _unityReadingScale,
+        builder: (context, scale, child) => MediaQuery(
+          data: MediaQuery.of(context).copyWith(
+            textScaler: multiplyReadingTextScaler(media.textScaler, scale),
+          ),
+          child: child!,
+        ),
+        child: _ChatOverlayLayout(
+          initialTopExtent: media.padding.top + AppSizes.sessionHeader + 20,
+          blurExtent: media.padding.top + AppSizes.sessionHeader + 32,
+          topOverlay: Builder(
+            builder: (context) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: media.textScaler),
+              child: SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      header,
+                      if (!peeking &&
+                          ConsoleStatusStrip.shouldShow(presentation)) ...[
+                        const SizedBox(height: 8),
+                        ConsoleStatusStrip(
+                          presentation: presentation,
+                          hostLabel: session?.deviceName,
+                        ),
+                      ],
+                      if (!peeking)
+                        Visibility(
+                          visible: !keyboardVisible,
+                          maintainState: true,
+                          child: RecoveryStatePanel(
+                            key: ValueKey(activeSessionId),
+                            presentation: presentation,
+                            hostLabel: session?.deviceName,
+                            failureDetail: evidence.failureDetail,
+                            failureKey: (
+                              activeSessionId,
+                              messages.lastIndexWhere(
+                                (message) => message.role == MessageRole.user,
+                              ),
+                            ),
+                            reconnectSnapshot: reconnectSnapshot,
+                            hasTranscript: messages.isNotEmpty,
+                            hasDraft:
+                                promptController.text.trim().isNotEmpty ||
+                                pendingAttachments.isNotEmpty,
+                            onReconnect: onReconnect,
+                            onStop: onStop,
+                            onOpenWorkspace: onOpenWorkspace,
+                            onEditPreviousPrompt: canRestorePreviousPrompt
+                                ? () => onFillPrompt(previousPrompt)
+                                : null,
+                          ),
+                        ),
+                    ],
                   ),
-                  child: child!,
                 ),
-                child: Stack(
-                  // Let transcript paint under the floating composer.
-                  clipBehavior: Clip.none,
-                  children: [
-                    Positioned.fill(child: transcript),
-                    if (showComposer)
-                      Align(
-                        alignment: Alignment.bottomCenter,
-                        child: Padding(
-                          padding: EdgeInsets.only(bottom: composerBottomGap),
-                          child: RepaintBoundary(
-                            child: PromptBar(
+              ),
+            ),
+          ),
+          bodyBuilder: (topPadding) => Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 760),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+                child: buildTranscript(topPadding),
+              ),
+            ),
+          ),
+          floatingOverlay: showComposer
+              ? Align(
+                  alignment: Alignment.bottomCenter,
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(8, 0, 8, composerBottomGap),
+                    child: RepaintBoundary(
+                      child: peeking
+                          ? SessionPeekDock(
+                              peek: peek!,
+                              onReturn: onExitPeek ?? () {},
+                              onStop: peek!.liveRunning ? onStop : null,
+                            )
+                          : PromptBar(
                               controller: promptController,
                               attachments: pendingAttachments,
                               commands: commands,
+                              commandsLoading: commandsLoading,
+                              commandsFailed: commandsFailed,
+                              onRefreshCommands: onRefreshCommands,
                               running: running,
                               stopping: stopping,
                               uploading: uploadingAttachments,
@@ -4008,9 +4332,12 @@ class ChatScreen extends StatelessWidget {
                               remainingContext: remainingContext,
                               engine: engine,
                               selectedModel: selectedModel,
+                              selectedCodexModel: selectedCodexModel,
                               selectedEffort: selectedEffort,
                               codexSandboxMode: codexSandboxMode,
                               presentation: presentation,
+                              queuedPreview: queuedPreview,
+                              onCancelQueue: onCancelQueue,
                               onPermissionModeSelected:
                                   onPermissionModeSelected,
                               onCodexSandboxModeSelected:
@@ -4025,14 +4352,130 @@ class ChatScreen extends StatelessWidget {
                               onSend: onSend,
                               onStop: onStop,
                             ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
+                    ),
+                  ),
+                )
+              : null,
+        ),
+      ),
+    );
+  }
+}
+
+class _ChatOverlayLayout extends StatefulWidget {
+  const _ChatOverlayLayout({
+    required this.initialTopExtent,
+    required this.blurExtent,
+    required this.topOverlay,
+    required this.bodyBuilder,
+    this.floatingOverlay,
+  });
+
+  final double initialTopExtent;
+  final double blurExtent;
+  final Widget topOverlay;
+  final Widget Function(double topPadding) bodyBuilder;
+  final Widget? floatingOverlay;
+
+  @override
+  State<_ChatOverlayLayout> createState() => _ChatOverlayLayoutState();
+}
+
+class _ChatOverlayLayoutState extends State<_ChatOverlayLayout> {
+  final _topOverlayKey = GlobalKey();
+  double? _topExtent;
+  bool _measurementScheduled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _scheduleMeasurement();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ChatOverlayLayout oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _scheduleMeasurement();
+  }
+
+  void _scheduleMeasurement() {
+    if (_measurementScheduled) return;
+    _measurementScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _measurementScheduled = false;
+      if (!mounted) return;
+      final box = _topOverlayKey.currentContext?.findRenderObject();
+      if (box is! RenderBox || !box.hasSize) return;
+      final nextExtent = box.size.height;
+      final currentExtent = _topExtent ?? widget.initialTopExtent;
+      if ((nextExtent - currentExtent).abs() < 0.5) return;
+      setState(() => _topExtent = nextExtent);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final topExtent = _topExtent ?? widget.initialTopExtent;
+    return Stack(
+      key: const ValueKey('chat-overlay-layout'),
+      clipBehavior: Clip.none,
+      children: [
+        Positioned.fill(child: widget.bodyBuilder(topExtent + 8)),
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          height: widget.blurExtent,
+          child: const RepaintBoundary(child: _ChatTopBackdrop()),
+        ),
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: NotificationListener<SizeChangedLayoutNotification>(
+            onNotification: (_) {
+              _scheduleMeasurement();
+              return true;
+            },
+            child: SizeChangedLayoutNotifier(
+              key: _topOverlayKey,
+              child: widget.topOverlay,
+            ),
+          ),
+        ),
+        if (widget.floatingOverlay != null) widget.floatingOverlay!,
+      ],
+    );
+  }
+}
+
+class _ChatTopBackdrop extends StatelessWidget {
+  const _ChatTopBackdrop();
+
+  static final _filter = ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12);
+
+  @override
+  Widget build(BuildContext context) {
+    return ExcludeSemantics(
+      child: IgnorePointer(
+        child: ClipRect(
+          child: ShaderMask(
+            blendMode: BlendMode.dstIn,
+            shaderCallback: (bounds) => const LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Colors.white, Colors.white, Colors.transparent],
+              stops: [0, 0.55, 1],
+            ).createShader(bounds),
+            child: BackdropFilter(
+              filter: _filter,
+              blendMode: BlendMode.src,
+              child: ColoredBox(
+                color: AppPalette.of(context).paper.withValues(alpha: 0.36),
+                child: const SizedBox.expand(),
               ),
             ),
-          ],
+          ),
         ),
       ),
     );
@@ -4086,61 +4529,224 @@ class ConnectionHeader extends StatelessWidget {
           stopping: stopping,
           uploading: uploadingAttachments,
         );
+    final showActivePill =
+        console.phase == ConsolePhase.running ||
+        console.phase == ConsolePhase.stopping ||
+        console.phase == ConsolePhase.stopTimedOut ||
+        console.phase == ConsolePhase.uploading ||
+        console.phase == ConsolePhase.awaitingPermission;
+
     return SizedBox(
       key: const ValueKey('session-header'),
       height: AppSizes.sessionHeader,
-      child: Row(
+      child: Stack(
+        alignment: Alignment.center,
         children: [
-          SignalPressEffect(
+          Row(
+            children: [
+              SignalPressEffect(
+                builder: (context, pressed, child) => SignalAnimatedSurface(
+                  key: const ValueKey('session-menu-surface'),
+                  duration: appPressAnimationDuration(context, pressed),
+                  blurSigma: 8,
+                  decoration: AppLiquidGlass.thin(
+                    context: context,
+                    shape: BoxShape.circle,
+                    pressed: pressed,
+                    backdrop: true,
+                  ),
+                  child: child,
+                ),
+                child: _HeaderIconButton(
+                  tooltip: '项目与会话',
+                  icon: LucideIcons.menu,
+                  onPressed: uploadingAttachments ? null : onOpenSessions,
+                ),
+              ),
+              const Spacer(),
+              SignalPressEffect(
+                builder: (context, pressed, child) => SignalAnimatedSurface(
+                  key: const ValueKey('session-actions-surface'),
+                  duration: appPressAnimationDuration(context, pressed),
+                  blurSigma: 8,
+                  decoration: AppLiquidGlass.thin(
+                    context: context,
+                    borderRadius: BorderRadius.circular(AppRadii.pill),
+                    pressed: pressed,
+                    backdrop: true,
+                  ),
+                  child: child,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _HeaderIconButton(
+                      key: const ValueKey('session-new-button'),
+                      tooltip: '新对话',
+                      icon: LucideIcons.plus,
+                      filled: true,
+                      onPressed: console.canCompose ? onNewConversation : null,
+                    ),
+                    _SessionMoreButton(
+                      offline: console.showsReconnect,
+                      modelName: modelName,
+                      onReconnect: onReconnect,
+                      onOpenWorkspace: onOpenWorkspace,
+                      onOpenSettings: onOpenSettings,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (showActivePill)
+            _HeaderActivityPill(
+              key: const ValueKey('session-activity-pill'),
+              presentation: console,
+              onTap: onOpenWorkspace,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HeaderActivityPill extends StatelessWidget {
+  const _HeaderActivityPill({
+    super.key,
+    required this.presentation,
+    this.onTap,
+  });
+
+  final ConsolePresentation presentation;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final toneColor = switch (presentation.tone) {
+      ConsoleTone.active => AppPalette.of(context).accentStrong,
+      ConsoleTone.warning => AppPalette.of(context).warning,
+      ConsoleTone.danger => AppPalette.of(context).danger,
+      ConsoleTone.neutral => AppPalette.of(context).muted,
+    };
+
+    final Widget indicator;
+    if (presentation.phase == ConsolePhase.running) {
+      indicator = _ActivityPulseDot(color: toneColor);
+    } else if (presentation.phase == ConsolePhase.uploading) {
+      indicator = Icon(
+        LucideIcons.uploadCloud,
+        size: AppIconSizes.badge,
+        color: toneColor,
+      );
+    } else if (presentation.phase == ConsolePhase.stopping) {
+      indicator = Icon(
+        LucideIcons.square,
+        size: AppIconSizes.badge,
+        color: toneColor,
+      );
+    } else if (presentation.phase == ConsolePhase.stopTimedOut) {
+      indicator = Icon(
+        LucideIcons.circleAlert,
+        size: AppIconSizes.badge,
+        color: toneColor,
+      );
+    } else if (presentation.phase == ConsolePhase.awaitingPermission) {
+      indicator = Icon(
+        LucideIcons.shield,
+        size: AppIconSizes.badge,
+        color: toneColor,
+      );
+    } else {
+      indicator = Icon(
+        LucideIcons.activity,
+        size: AppIconSizes.badge,
+        color: toneColor,
+      );
+    }
+
+    return Semantics(
+      liveRegion: true,
+      button: onTap != null,
+      label: presentation.statusLabel,
+      child: Tooltip(
+        message: presentation.statusLabel,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 160),
+          child: SignalPressEffect(
             builder: (context, pressed, child) => SignalAnimatedSurface(
-              key: const ValueKey('session-menu-surface'),
+              key: const ValueKey('session-activity-pill-surface'),
               duration: appPressAnimationDuration(context, pressed),
-              blurSigma: 8,
-              decoration: AppLiquidGlass.thin(
-                shape: BoxShape.circle,
-                pressed: pressed,
-                backdrop: true,
+              decoration: BoxDecoration(
+                color: AppPalette.of(context).assistantBubble,
+                borderRadius: BorderRadius.circular(AppRadii.pill),
+                border: Border.all(color: AppPalette.of(context).bubbleOutline),
+                boxShadow: AppElevation.liquidThin(
+                  context: context,
+                  pressed: pressed,
+                ),
               ),
               child: child,
             ),
-            child: _HeaderIconButton(
-              tooltip: '项目与会话',
-              icon: LucideIcons.menu,
-              onPressed: uploadingAttachments ? null : onOpenSessions,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onTap,
+                borderRadius: BorderRadius.circular(AppRadii.pill),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      indicator,
+                      const SizedBox(width: 6),
+                      Flexible(
+                        child: Text(
+                          presentation.statusLabel,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: toneColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: -0.2,
+                            height: 1.2,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
-          const Spacer(),
-          SignalPressEffect(
-            builder: (context, pressed, child) => SignalAnimatedSurface(
-              key: const ValueKey('session-actions-surface'),
-              duration: appPressAnimationDuration(context, pressed),
-              blurSigma: 8,
-              decoration: AppLiquidGlass.thin(
-                borderRadius: BorderRadius.circular(AppRadii.pill),
-                pressed: pressed,
-                backdrop: true,
-              ),
-              child: child,
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _HeaderIconButton(
-                  key: const ValueKey('session-new-button'),
-                  tooltip: '新对话',
-                  icon: LucideIcons.plus,
-                  filled: true,
-                  onPressed: console.canCompose ? onNewConversation : null,
-                ),
-                _SessionMoreButton(
-                  offline: console.showsReconnect,
-                  modelName: modelName,
-                  onReconnect: onReconnect,
-                  onOpenWorkspace: onOpenWorkspace,
-                  onOpenSettings: onOpenSettings,
-                ),
-              ],
-            ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActivityPulseDot extends StatelessWidget {
+  const _ActivityPulseDot({required this.color});
+
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 7,
+      height: 7,
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.45),
+            blurRadius: 4,
+            spreadRadius: 1,
           ),
         ],
       ),
@@ -4166,10 +4772,10 @@ class ConsoleStatusStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final toneColor = switch (presentation.tone) {
-      ConsoleTone.active => AppColors.accentStrong,
-      ConsoleTone.warning => AppColors.warning,
-      ConsoleTone.danger => AppColors.danger,
-      ConsoleTone.neutral => AppColors.muted,
+      ConsoleTone.active => AppPalette.of(context).accentStrong,
+      ConsoleTone.warning => AppPalette.of(context).warning,
+      ConsoleTone.danger => AppPalette.of(context).danger,
+      ConsoleTone.neutral => AppPalette.of(context).muted,
     };
     final icon = switch (presentation.phase) {
       ConsolePhase.offline => LucideIcons.unlink,
@@ -4198,13 +4804,13 @@ class ConsoleStatusStrip extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: AppColors.surface,
+          color: AppPalette.of(context).surface,
           borderRadius: BorderRadius.circular(AppRadii.control),
-          border: Border.all(color: AppColors.line),
+          border: Border.all(color: AppPalette.of(context).line),
         ),
         child: Row(
           children: [
-            Icon(icon, size: 16, color: toneColor),
+            Icon(icon, size: AppIconSizes.inline, color: toneColor),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -4227,8 +4833,8 @@ class ConsoleStatusStrip extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   textAlign: TextAlign.right,
-                  style: const TextStyle(
-                    color: AppColors.muted,
+                  style: TextStyle(
+                    color: AppPalette.of(context).muted,
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
                     height: 1.3,
@@ -4249,6 +4855,7 @@ class RecoveryStatePanel extends StatefulWidget {
     required this.presentation,
     this.hostLabel,
     this.failureDetail,
+    this.failureKey,
     this.reconnectSnapshot = const RemoteConnectionSnapshot.idle(),
     this.hasTranscript = false,
     this.hasDraft = false,
@@ -4261,6 +4868,7 @@ class RecoveryStatePanel extends StatefulWidget {
   final ConsolePresentation presentation;
   final String? hostLabel;
   final String? failureDetail;
+  final Object? failureKey;
   final RemoteConnectionSnapshot reconnectSnapshot;
   final bool hasTranscript;
   final bool hasDraft;
@@ -4291,6 +4899,7 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
   DateTime? reconnectCountdownTarget;
   int? reconnectSecondsRemaining;
   bool showCompletion = false;
+  bool failureDismissed = false;
 
   @override
   void initState() {
@@ -4301,6 +4910,11 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
   @override
   void didUpdateWidget(covariant RecoveryStatePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.presentation.phase != oldWidget.presentation.phase ||
+        widget.failureKey != oldWidget.failureKey ||
+        widget.failureDetail != oldWidget.failureDetail) {
+      failureDismissed = false;
+    }
     final completed =
         widget.presentation.phase == ConsolePhase.connected &&
         switch (oldWidget.presentation.phase) {
@@ -4407,6 +5021,8 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
             evidence: '最新输出已保留在对话中',
             icon: LucideIcons.circleCheck,
           )
+        : widget.presentation.phase == ConsolePhase.failed && failureDismissed
+        ? null
         : switch (widget.presentation.phase) {
             ConsolePhase.connecting => _RecoveryPanelContent(
               title: '正在连接电脑端',
@@ -4442,13 +5058,14 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
               evidence: '对话记录和工作区状态已保留',
               icon: LucideIcons.square,
               actionLabel: '再次停止',
-              actionIcon: LucideIcons.square,
+              actionIcon: PhosphorIconsFill.square,
               action: widget.onStop,
               danger: true,
             ),
             ConsolePhase.stopped => _RecoveryPanelContent(
               title: '任务已停止',
-              detail: '电脑端已确认停止。你可以检查变更，或继续给 Claude 新指令。',
+              detail:
+                  '电脑端已确认停止。你可以检查变更，或继续给 ${widget.presentation.engine.displayName} 新指令。',
               evidence: '对话记录和工作区状态已保留',
               icon: LucideIcons.circlePause,
               actionLabel: '查看工作区',
@@ -4459,7 +5076,7 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
               title: '任务执行失败',
               detail: widget.failureDetail?.trim().isNotEmpty == true
                   ? widget.failureDetail!.trim()
-                  : 'Claude Code 没有完成这次任务。请检查错误后重试。',
+                  : '${widget.presentation.engine.displayName} 没有完成这次任务。请检查错误后重试。',
               evidence: '对话记录和工作区变更仍保留',
               icon: LucideIcons.circleAlert,
               actionLabel: widget.onEditPreviousPrompt == null
@@ -4473,14 +5090,14 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
             _ => null,
           };
     final toneColor = showCompletion
-        ? AppColors.accentStrong
+        ? AppPalette.of(context).accentStrong
         : widget.presentation.phase == ConsolePhase.offline && reconnecting
-        ? AppColors.warning
+        ? AppPalette.of(context).warning
         : switch (widget.presentation.tone) {
-            ConsoleTone.active => AppColors.accentStrong,
-            ConsoleTone.warning => AppColors.warning,
-            ConsoleTone.danger => AppColors.danger,
-            ConsoleTone.neutral => AppColors.muted,
+            ConsoleTone.active => AppPalette.of(context).accentStrong,
+            ConsoleTone.warning => AppPalette.of(context).warning,
+            ConsoleTone.danger => AppPalette.of(context).danger,
+            ConsoleTone.neutral => AppPalette.of(context).muted,
           };
     final semanticsDetail =
         widget.presentation.phase == ConsolePhase.offline && reconnecting
@@ -4508,10 +5125,10 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
                     '${content.actionLabel == null ? '' : '，${content.actionLabel}'}',
                 child: Material(
                   key: const ValueKey('recovery-state-panel'),
-                  color: AppColors.surface,
+                  color: AppPalette.of(context).surface,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(AppRadii.surface),
-                    side: const BorderSide(color: AppColors.line),
+                    side: BorderSide(color: AppPalette.of(context).line),
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: AnimatedSwitcher(
@@ -4536,7 +5153,7 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
                                   width: AppSizes.iconControl,
                                   height: AppSizes.iconControl,
                                   decoration: BoxDecoration(
-                                    color: AppColors.control,
+                                    color: AppPalette.of(context).control,
                                     borderRadius: BorderRadius.circular(
                                       AppRadii.control,
                                     ),
@@ -4546,11 +5163,11 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
                                       ? reduceMotion
                                             ? Icon(
                                                 LucideIcons.loader,
-                                                size: 20,
+                                                size: AppIconSizes.control,
                                                 color: toneColor,
                                               )
                                             : SizedBox.square(
-                                                dimension: 18,
+                                                dimension: AppIconSizes.control,
                                                 child:
                                                     CircularProgressIndicator(
                                                       strokeWidth: 2,
@@ -4559,7 +5176,7 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
                                               )
                                       : Icon(
                                           content.icon,
-                                          size: 20,
+                                          size: AppIconSizes.control,
                                           color: toneColor,
                                         ),
                                 ),
@@ -4583,8 +5200,8 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
                                         content.detail,
                                         maxLines: 3,
                                         overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          color: AppColors.muted,
+                                        style: TextStyle(
+                                          color: AppPalette.of(context).muted,
                                           fontSize: 13,
                                           height: 1.45,
                                         ),
@@ -4592,13 +5209,21 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
                                     ],
                                   ),
                                 ),
+                                if (widget.presentation.phase ==
+                                    ConsolePhase.failed)
+                                  _HeaderIconButton(
+                                    tooltip: '收起失败提示',
+                                    icon: LucideIcons.x,
+                                    onPressed: () =>
+                                        setState(() => failureDismissed = true),
+                                  ),
                               ],
                             ),
                             const SizedBox(height: 10),
                             Text(
                               content.evidence,
-                              style: const TextStyle(
-                                color: AppColors.muted,
+                              style: TextStyle(
+                                color: AppPalette.of(context).muted,
                                 fontSize: 12,
                                 height: 1.4,
                                 fontWeight: FontWeight.w600,
@@ -4615,14 +5240,26 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
                                     onPressed: content.action,
                                     style: FilledButton.styleFrom(
                                       backgroundColor: content.danger
-                                          ? AppColors.danger
-                                          : AppColors.cta,
-                                      foregroundColor: AppColors.onCta,
+                                          ? AppPalette.of(context).danger
+                                          : AppPalette.of(context).control,
+                                      foregroundColor: content.danger
+                                          ? AppPalette.of(context).onStop
+                                          : AppPalette.of(context).ink,
+                                      overlayColor: content.danger
+                                          ? AppPalette.of(
+                                              context,
+                                            ).onStop.withValues(alpha: 0.13)
+                                          : AppPalette.of(
+                                              context,
+                                            ).ink.withValues(alpha: 0.08),
                                       minimumSize: const Size.fromHeight(
                                         AppSizes.touchTarget,
                                       ),
                                     ),
-                                    icon: Icon(content.actionIcon, size: 18),
+                                    icon: Icon(
+                                      content.actionIcon,
+                                      size: AppIconSizes.control,
+                                    ),
                                     label: Text(content.actionLabel!),
                                   ),
                                 ),
@@ -4687,24 +5324,13 @@ class _HeaderIconButton extends StatelessWidget {
         onPressed: onPressed,
         tooltip: tooltip,
         padding: EdgeInsets.zero,
-        icon: filled
-            ? Container(
-                width: 20,
-                height: 20,
-                decoration: BoxDecoration(
-                  color: onPressed == null
-                      ? AppColors.inactiveLight
-                      : AppColors.ink,
-                  shape: BoxShape.circle,
-                ),
-                alignment: Alignment.center,
-                child: Icon(icon, size: 14, color: AppColors.surfaceElevated),
-              )
-            : Icon(
-                icon,
-                size: 20,
-                color: onPressed == null ? AppColors.inactive : AppColors.ink,
-              ),
+        icon: Icon(
+          icon,
+          size: filled ? 22 : 20,
+          color: onPressed == null
+              ? AppPalette.of(context).inactive
+              : AppPalette.of(context).ink,
+        ),
       ),
     );
   }
@@ -4777,7 +5403,7 @@ class _SessionMoreButton extends StatelessWidget {
           if (metaParts.isNotEmpty)
             _SessionMenuMetaEntry(text: metaParts.join(' · ')),
         ],
-        icon: const Icon(LucideIcons.ellipsis, size: 20),
+        icon: const SmartIcon(LucideIcons.ellipsis, size: AppIconSizes.control),
       ),
     );
   }
@@ -4793,13 +5419,17 @@ class _SessionMenuRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(icon, size: 20, color: AppColors.ink),
+        SmartIcon(
+          icon,
+          size: AppIconSizes.control,
+          color: notoGlyphFor(icon) == null ? AppPalette.of(context).ink : null,
+        ),
         const SizedBox(width: 12),
         Expanded(
           child: Text(
             label,
-            style: const TextStyle(
-              color: AppColors.ink,
+            style: TextStyle(
+              color: AppPalette.of(context).ink,
               fontSize: 15,
               fontWeight: FontWeight.w600,
               height: 1.3,
@@ -4843,8 +5473,8 @@ class _SessionMenuMetaEntryState extends State<_SessionMenuMetaEntry> {
               widget.text,
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: AppColors.muted,
+              style: TextStyle(
+                color: AppPalette.of(context).muted,
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
                 height: 1.35,
@@ -4861,16 +5491,12 @@ Future<void> showSettingsSheet(
   BuildContext context,
   SavedSession? session,
   bool notificationsEnabled,
-  ChatBackgroundPreference chatBackground,
   String? currentModel,
   ClaudeModelPreference selectedModel,
   double readingFontScale,
   VoidCallback onReconnect,
   Future<bool> Function(bool) onNotificationsChanged,
   Future<void> Function(ClaudeModelPreference) onModelChanged,
-  Future<ChatBackgroundPreference> Function(ChatBackgroundPreference)
-  onChatBackgroundChanged,
-  Future<ChatBackgroundPreference?> Function(double) onPickChatBackgroundImage,
   Future<void> Function(double scale, {bool persist}) onReadingFontScaleChanged,
   VoidCallback onLogout,
 ) async {
@@ -4887,19 +5513,16 @@ Future<void> showSettingsSheet(
       SettingsSheet(
         session: session,
         notificationsEnabled: notificationsEnabled,
-        chatBackground: chatBackground,
         currentModel: currentModel,
         selectedModel: selectedModel,
         readingFontScale: readingFontScale,
         onReconnect: onReconnect,
         onNotificationsChanged: onNotificationsChanged,
         onModelChanged: onModelChanged,
-        onChatBackgroundChanged: onChatBackgroundChanged,
-        onPickChatBackgroundImage: onPickChatBackgroundImage,
         onReadingFontScaleChanged: onReadingFontScaleChanged,
         onLogout: onLogout,
       ),
-      barrierColor: _SettingsPalette.barrier,
+      barrierColor: AppPalette.of(context).scrim,
     ),
   );
   FocusManager.instance.primaryFocus?.unfocus();
@@ -5007,6 +5630,18 @@ Future<void> showSessionNavigator(
 }
 
 enum _SessionNavigatorView { home, projects, search }
+
+enum _SessionFilter {
+  all('全部'),
+  running('运行中'),
+  archived('已归档'),
+  claude('Claude'),
+  codex('Codex');
+
+  const _SessionFilter(this.label);
+
+  final String label;
+}
 
 enum _SessionAction { rename, archive, delete }
 
@@ -5134,14 +5769,7 @@ IconData inferSessionIcon(String title, [bool archived = false]) {
 }
 
 class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
-  // Session navigation shares the console's single blue. Gradients and a
-  // second blue here made the page feel like a different product.
-  static const _selectedStatusColor = AppColors.accentStrong;
-  static const _projectAccentGradient = LinearGradient(
-    begin: Alignment.topLeft,
-    end: Alignment.bottomRight,
-    colors: [AppColors.accent, AppColors.accentStrong],
-  );
+  Color get _selectedStatusColor => AppPalette.of(context).navigatorAccent;
 
   late String selectedProjectId =
       widget.activeProjectId ??
@@ -5158,6 +5786,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
   bool searching = false;
   String? searchError;
   List<RemoteSessionSearchResult> searchResults = const [];
+  _SessionFilter sessionFilter = _SessionFilter.all;
 
   RemoteProjectSummary? get selectedProject {
     for (final project in widget.projects) {
@@ -5275,6 +5904,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
   void chooseProject(String projectId) {
     setState(() {
       selectedProjectId = projectId;
+      sessionFilter = _SessionFilter.all;
       searchTransitionActive = false;
       viewMovingForward = false;
       view = _SessionNavigatorView.home;
@@ -5311,13 +5941,20 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(LucideIcons.search, size: 24, color: AppColors.muted),
+            Icon(
+              LucideIcons.search,
+              size: AppIconSizes.primary,
+              color: AppPalette.of(context).muted,
+            ),
             const SizedBox(height: 8),
             Text(searchError!),
             const SizedBox(height: 8),
             TextButton.icon(
               onPressed: () => submitSearch(searchController.text),
-              icon: const Icon(LucideIcons.refreshCw, size: 17),
+              icon: const SmartIcon(
+                LucideIcons.refreshCw,
+                size: AppIconSizes.inline,
+              ),
               label: const Text('重试'),
             ),
           ],
@@ -5332,13 +5969,20 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(LucideIcons.search, color: AppColors.inactive, size: 28),
+            Icon(
+              LucideIcons.search,
+              color: AppPalette.of(context).inactive,
+              size: AppIconSizes.hero,
+            ),
             const SizedBox(height: 12),
             const Text('没有找到匹配内容'),
             const SizedBox(height: 6),
-            const Text(
+            Text(
               '试试项目名、会话标题或报错关键词',
-              style: TextStyle(color: AppColors.muted, fontSize: 13),
+              style: TextStyle(
+                color: AppPalette.of(context).muted,
+                fontSize: 13,
+              ),
             ),
           ],
         ),
@@ -5350,7 +5994,8 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
       itemBuilder: (context, index) {
         final result = searchResults[index];
         final active = result.sessionId == widget.activeSessionId;
-        final canOpen = !result.archived && (!widget.running || active);
+        final canOpen = !result.archived;
+
         return ListTile(
           key: ValueKey('search-session-${result.sessionId}'),
           enabled: canOpen,
@@ -5363,7 +6008,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
             inferSessionIcon(result.title, result.archived),
             size: AppMark.size,
             color: result.archived
-                ? AppColors.inactive
+                ? AppPalette.of(context).inactive
                 : AppMark.of(result.sessionId, index),
           ),
           title: Text(
@@ -5382,8 +6027,8 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                 '${result.matchCount} 条匹配内容${result.archived ? ' · 已归档' : ''}',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: AppColors.muted,
+                style: TextStyle(
+                  color: AppPalette.of(context).muted,
                   fontSize: 12,
                   height: 1.3,
                 ),
@@ -5391,15 +6036,15 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
             ],
           ),
           trailing: active
-              ? const Icon(
+              ? Icon(
                   LucideIcons.check,
-                  size: 20,
+                  size: AppIconSizes.control,
                   color: _selectedStatusColor,
                 )
-              : const Icon(
+              : Icon(
                   LucideIcons.chevronRight,
-                  size: 16,
-                  color: AppColors.inactive,
+                  size: AppIconSizes.inline,
+                  color: AppPalette.of(context).inactive,
                 ),
           onTap: canOpen ? () => widget.onSearchResult(result) : null,
         );
@@ -5410,8 +6055,8 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
   Widget buildHighlightedSnippet(RemoteSessionSearchResult result) {
     final start = result.matchStart.clamp(0, result.snippet.length);
     final end = result.matchEnd.clamp(start, result.snippet.length);
-    const baseStyle = TextStyle(
-      color: AppColors.ink,
+    final baseStyle = TextStyle(
+      color: AppPalette.of(context).ink,
       fontSize: 13,
       height: 1.4,
     );
@@ -5422,9 +6067,11 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
           if (start > 0) TextSpan(text: result.snippet.substring(0, start)),
           TextSpan(
             text: result.snippet.substring(start, end),
-            style: const TextStyle(
-              color: AppColors.accentStrong,
-              backgroundColor: AppColors.composerControlFill,
+            style: TextStyle(
+              color: AppPalette.of(context).accentStrong,
+              backgroundColor: AppPalette.of(
+                context,
+              ).navigatorAccent.withValues(alpha: 0.08),
               fontWeight: FontWeight.w700,
             ),
           ),
@@ -5443,7 +6090,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
       child: Text(
         text,
         style: Theme.of(context).textTheme.titleMedium?.copyWith(
-          color: AppColors.muted,
+          color: AppPalette.of(context).muted,
           fontWeight: FontWeight.w700,
           fontSize: 18,
           letterSpacing: -0.2,
@@ -5455,7 +6102,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
   Widget buildSessionStatus(RemoteSessionSummary item, {int? index}) {
     final iconData = inferSessionIcon(item.title, item.archived);
     final color = item.archived
-        ? AppColors.inactive
+        ? AppPalette.of(context).inactive
         : AppMark.of(item.id, index);
 
     if (item.running) {
@@ -5471,8 +6118,8 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
               child: Container(
                 width: 6,
                 height: 6,
-                decoration: const BoxDecoration(
-                  color: AppColors.accent,
+                decoration: BoxDecoration(
+                  color: AppPalette.of(context).navigatorAccent,
                   shape: BoxShape.circle,
                 ),
               ),
@@ -5508,7 +6155,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
 
   Widget buildSessionRow(RemoteSessionSummary item, {int? index}) {
     final active = item.id == widget.activeSessionId;
-    final canOpen = !item.archived && (!widget.running || active);
+    final canOpen = !item.archived;
     final canMutate = !widget.running && !item.running;
     final status = item.running
         ? '运行中'
@@ -5546,7 +6193,9 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: item.running ? AppColors.ink : AppColors.muted,
+            color: item.running
+                ? AppPalette.of(context).ink
+                : AppPalette.of(context).muted,
             fontSize: 12,
             height: 1.2,
           ),
@@ -5555,14 +6204,20 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
             ? PopupMenuButton<_SessionAction>(
                 key: ValueKey('session-menu-${item.id}'),
                 tooltip: '${item.title} 的更多操作',
-                icon: const Icon(LucideIcons.moreHorizontal, size: 20),
+                icon: const SmartIcon(
+                  LucideIcons.moreHorizontal,
+                  size: AppIconSizes.control,
+                ),
                 onSelected: (action) => handleSessionAction(item, action),
                 itemBuilder: (context) => [
                   const PopupMenuItem(
                     value: _SessionAction.rename,
                     child: Row(
                       children: [
-                        Icon(LucideIcons.pencil, size: 18),
+                        SmartIcon(
+                          LucideIcons.pencil,
+                          size: AppIconSizes.control,
+                        ),
                         SizedBox(width: 12),
                         Text('重命名'),
                       ],
@@ -5573,23 +6228,31 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                       value: _SessionAction.archive,
                       child: Row(
                         children: [
-                          Icon(LucideIcons.archive, size: 18),
+                          SmartIcon(
+                            LucideIcons.archive,
+                            size: AppIconSizes.control,
+                          ),
                           SizedBox(width: 12),
                           Text('归档'),
                         ],
                       ),
                     ),
-                  const PopupMenuItem(
+                  PopupMenuItem(
                     value: _SessionAction.delete,
                     child: Row(
                       children: [
                         Icon(
                           LucideIcons.trash2,
-                          size: 18,
-                          color: AppColors.danger,
+                          size: AppIconSizes.control,
+                          color: AppPalette.of(context).danger,
                         ),
                         SizedBox(width: 12),
-                        Text('删除', style: TextStyle(color: AppColors.danger)),
+                        Text(
+                          '删除',
+                          style: TextStyle(
+                            color: AppPalette.of(context).danger,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -5597,10 +6260,10 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
               )
             : active
             ? null
-            : const Icon(
+            : Icon(
                 LucideIcons.chevronRight,
-                size: 16,
-                color: AppColors.inactive,
+                size: AppIconSizes.inline,
+                color: AppPalette.of(context).inactive,
               ),
         onTap: canOpen && !active ? () => widget.onSelect(item.id) : null,
       ),
@@ -5654,28 +6317,142 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
           maxLines: compact ? 1 : 2,
           overflow: TextOverflow.ellipsis,
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: AppColors.muted,
+            color: AppPalette.of(context).muted,
             fontSize: 12,
             height: 1.2,
           ),
         ),
-        trailing: const Icon(
+        trailing: Icon(
           LucideIcons.chevronRight,
-          size: 16,
-          color: AppColors.inactive,
+          size: AppIconSizes.inline,
+          color: AppPalette.of(context).inactive,
         ),
         onTap: () => chooseProject(project.id),
       ),
     );
   }
 
+  bool sessionMatchesFilter(RemoteSessionSummary session) {
+    switch (sessionFilter) {
+      case _SessionFilter.all:
+        return true;
+      case _SessionFilter.running:
+        return session.running;
+      case _SessionFilter.archived:
+        return session.archived;
+      case _SessionFilter.claude:
+        return session.engine == SessionEngine.claude;
+      case _SessionFilter.codex:
+        return session.engine == SessionEngine.codex;
+    }
+  }
+
+  void selectSessionFilter(_SessionFilter filter) {
+    if (filter == sessionFilter) return;
+    setState(() => sessionFilter = filter);
+  }
+
+  Widget buildSessionFilterBar() {
+    final palette = AppPalette.of(context);
+    final animation = MediaQuery.disableAnimationsOf(context)
+        ? AnimationStyle.noAnimation
+        : const AnimationStyle(
+            duration: Duration(milliseconds: 150),
+            reverseDuration: Duration(milliseconds: 150),
+          );
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: SingleChildScrollView(
+        key: const ValueKey('session-filter-bar'),
+        scrollDirection: Axis.horizontal,
+        clipBehavior: Clip.hardEdge,
+        child: Row(
+          children: [
+            for (final filter in _SessionFilter.values)
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ChoiceChip(
+                  key: ValueKey('session-filter-${filter.name}'),
+                  label: Text(filter.label),
+                  selected: sessionFilter == filter,
+                  onSelected: (_) => selectSessionFilter(filter),
+                  showCheckmark: true,
+                  checkmarkColor: palette.ink,
+                  chipAnimationStyle: ChipAnimationStyle(
+                    enableAnimation: animation,
+                    selectAnimation: animation,
+                    avatarDrawerAnimation: animation,
+                    deleteDrawerAnimation: animation,
+                  ),
+                  materialTapTargetSize: MaterialTapTargetSize.padded,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  labelStyle: TextStyle(
+                    color: sessionFilter == filter
+                        ? palette.ink
+                        : palette.muted,
+                    fontWeight: sessionFilter == filter
+                        ? FontWeight.w700
+                        : FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                  backgroundColor: palette.control,
+                  selectedColor: palette.accentSoft,
+                  side: BorderSide(
+                    color: sessionFilter == filter
+                        ? palette.navigatorAccent
+                        : palette.line,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(AppRadii.pill),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget buildSessionFilterEmptyState() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '没有符合条件的会话',
+            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+              color: AppPalette.of(context).ink,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '试试其他筛选条件',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: AppPalette.of(context).muted,
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            key: const ValueKey('session-filter-clear'),
+            onPressed: () => selectSessionFilter(_SessionFilter.all),
+            icon: const SmartIcon(LucideIcons.x, size: AppIconSizes.inline),
+            label: const Text('清除筛选'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget buildHomeView() {
     final project = selectedProject;
-    final sessions = project == null
+    final projectSessions = project == null
         ? const <RemoteSessionSummary>[]
         : widget.sessions
               .where((session) => session.projectId == project.id)
               .toList();
+    final sessions = projectSessions.where(sessionMatchesFilter).toList();
 
     return ListView.builder(
       key: const ValueKey('session-home-view'),
@@ -5690,7 +6467,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                 '项目与会话',
                 key: const ValueKey('session-page-title'),
                 style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  color: AppColors.ink,
+                  color: AppPalette.of(context).ink,
                   fontWeight: FontWeight.w800,
                   fontSize: 32,
                   height: 1.08,
@@ -5718,33 +6495,41 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                     letterSpacing: -0.2,
                   ),
                 ),
-                trailing: const Icon(
+                trailing: Icon(
                   LucideIcons.chevronRight,
-                  size: 16,
-                  color: AppColors.inactive,
+                  size: AppIconSizes.inline,
+                  color: AppPalette.of(context).inactive,
                 ),
                 onTap: () => openView(_SessionNavigatorView.projects),
               ),
               buildSectionTitle('会话'),
-              if (sessions.isEmpty)
+              if (projectSessions.isNotEmpty) buildSessionFilterBar(),
+              if (projectSessions.isEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
                   child: OutlinedButton.icon(
                     key: const ValueKey('session-empty-create'),
                     onPressed: widget.running ? null : createSession,
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.ink,
-                      backgroundColor: AppColors.surface,
-                      side: const BorderSide(color: AppColors.lineStrong),
+                      foregroundColor: AppPalette.of(context).ink,
+                      backgroundColor: AppPalette.of(context).surface,
+                      side: BorderSide(
+                        color: AppPalette.of(context).lineStrong,
+                      ),
                       minimumSize: const Size.fromHeight(48),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(AppRadii.control),
                       ),
                     ),
-                    icon: const Icon(LucideIcons.plus, size: 18),
+                    icon: const SmartIcon(
+                      LucideIcons.plus,
+                      size: AppIconSizes.control,
+                    ),
                     label: const Text('新建第一个会话'),
                   ),
-                ),
+                )
+              else if (sessions.isEmpty)
+                buildSessionFilterEmptyState(),
             ],
           );
         }
@@ -5794,7 +6579,11 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(LucideIcons.search, size: 28, color: AppColors.inactive),
+          Icon(
+            LucideIcons.search,
+            size: AppIconSizes.hero,
+            color: AppPalette.of(context).inactive,
+          ),
           const SizedBox(height: 12),
           Text(
             '搜索所有会话',
@@ -5805,9 +6594,9 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
           const SizedBox(height: 6),
           Text(
             '输入标题或会话中的关键词',
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: AppColors.muted),
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: AppPalette.of(context).muted,
+            ),
           ),
         ],
       ),
@@ -5856,9 +6645,9 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
       },
       child: Scaffold(
         key: const ValueKey('session-navigator-page'),
-        backgroundColor: Colors.white,
+        backgroundColor: AppPalette.of(context).paper,
         appBar: AppBar(
-          backgroundColor: Colors.white,
+          backgroundColor: AppPalette.of(context).paper,
           surfaceTintColor: Colors.transparent,
           elevation: 0,
           scrolledUnderElevation: 0,
@@ -5872,7 +6661,10 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
             onPressed: view == _SessionNavigatorView.home
                 ? () => Navigator.maybePop(context)
                 : () => openView(_SessionNavigatorView.home),
-            icon: const Icon(LucideIcons.arrowLeft, size: 22),
+            icon: const SmartIcon(
+              LucideIcons.arrowLeft,
+              size: AppIconSizes.primary,
+            ),
           ),
           title: Row(
             children: [
@@ -5885,31 +6677,26 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                   switchInCurve: AppMotion.enter,
                   switchOutCurve: AppMotion.exit,
                   child: view == _SessionNavigatorView.home
-                      ? ShaderMask(
+                      ? PhosphorIcon(
+                          selectedProject != null
+                              ? inferProjectIcon(
+                                  selectedProject!.name,
+                                  selectedProject!.path,
+                                )
+                              : PhosphorIconsFill.cube,
                           key: const ValueKey('session-context-icon-home'),
-                          blendMode: BlendMode.srcIn,
-                          shaderCallback: (bounds) =>
-                              _projectAccentGradient.createShader(bounds),
-                          child: PhosphorIcon(
-                            selectedProject != null
-                                ? inferProjectIcon(
-                                    selectedProject!.name,
-                                    selectedProject!.path,
-                                  )
-                                : PhosphorIconsFill.cube,
-                            size: 18,
-                            color: Colors.white,
-                          ),
+                          size: AppIconSizes.control,
+                          color: AppPalette.of(context).navigatorAccent,
                         )
                       : Icon(
                           view == _SessionNavigatorView.projects
                               ? LucideIcons.layoutGrid
                               : LucideIcons.search,
                           key: ValueKey('session-context-icon-${view.name}'),
-                          size: 20,
+                          size: AppIconSizes.control,
                           color: view == _SessionNavigatorView.projects
-                              ? AppColors.ink
-                              : AppColors.accentStrong,
+                              ? AppPalette.of(context).ink
+                              : AppPalette.of(context).navigatorAccent,
                         ),
                 ),
               ),
@@ -5958,14 +6745,14 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                             hintText: '搜索标题与会话内容',
                             isDense: true,
                             filled: true,
-                            fillColor: AppColors.control,
+                            fillColor: AppPalette.of(context).control,
                             contentPadding: const EdgeInsets.symmetric(
                               horizontal: 12,
                               vertical: 10,
                             ),
-                            prefixIcon: const Icon(
+                            prefixIcon: const SmartIcon(
                               LucideIcons.search,
-                              size: 19,
+                              size: AppIconSizes.control,
                             ),
                             suffixIcon: searchQuery.isEmpty
                                 ? null
@@ -5973,7 +6760,10 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                                     key: const ValueKey('session-search-clear'),
                                     tooltip: '清除搜索',
                                     onPressed: clearSearch,
-                                    icon: const Icon(LucideIcons.x, size: 18),
+                                    icon: const SmartIcon(
+                                      LucideIcons.x,
+                                      size: AppIconSizes.control,
+                                    ),
                                   ),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(
@@ -5991,8 +6781,8 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                               borderRadius: BorderRadius.circular(
                                 AppRadii.control,
                               ),
-                              borderSide: const BorderSide(
-                                color: AppColors.accentStrong,
+                              borderSide: BorderSide(
+                                color: AppPalette.of(context).accentStrong,
                                 width: 2,
                               ),
                             ),
@@ -6007,7 +6797,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.titleMedium
                               ?.copyWith(
-                                color: AppColors.ink,
+                                color: AppPalette.of(context).ink,
                                 fontWeight: FontWeight.w700,
                                 letterSpacing: -0.2,
                               ),
@@ -6045,7 +6835,10 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                           tooltip: '搜索所有会话',
                           onPressed: () =>
                               openView(_SessionNavigatorView.search),
-                          icon: const Icon(LucideIcons.search, size: 22),
+                          icon: const SmartIcon(
+                            LucideIcons.search,
+                            size: AppIconSizes.primary,
+                          ),
                         ),
                         IconButton(
                           key: const ValueKey('create-session'),
@@ -6060,17 +6853,17 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                             height: 38,
                             decoration: BoxDecoration(
                               color: widget.running
-                                  ? AppColors.control
-                                  : AppColors.ink,
+                                  ? AppPalette.of(context).control
+                                  : AppPalette.of(context).ink,
                               shape: BoxShape.circle,
                             ),
                             child: Center(
                               child: Icon(
                                 LucideIcons.plus,
-                                size: 18,
+                                size: AppIconSizes.control,
                                 color: widget.running
-                                    ? AppColors.inactive
-                                    : Colors.white,
+                                    ? AppPalette.of(context).inactive
+                                    : AppPalette.of(context).surface,
                               ),
                             ),
                           ),
@@ -6133,87 +6926,11 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
   }
 }
 
-abstract final class _SettingsPalette {
-  static const background = AppColors.bgTop;
-  static const surface = AppColors.surfaceElevated;
-  static const ink = AppColors.ink;
-  static const secondary = AppColors.muted;
-  static const tertiary = AppColors.inactive;
-  static const line = AppColors.line;
-  static const iconFill = AppColors.control;
-  static const accent = AppColors.accentStrong;
-  static const danger = AppColors.danger;
-  static const barrier = AppColors.scrim;
-}
-
-ThemeData _settingsTheme(ThemeData base) {
-  final scheme = base.colorScheme.copyWith(
-    primary: _SettingsPalette.accent,
-    onPrimary: Colors.white,
-    surface: _SettingsPalette.surface,
-    onSurface: _SettingsPalette.ink,
-    error: _SettingsPalette.danger,
-    outline: _SettingsPalette.line,
-    outlineVariant: _SettingsPalette.line,
-  );
-  return base.copyWith(
-    colorScheme: scheme,
-    scaffoldBackgroundColor: _SettingsPalette.background,
-    textTheme: base.textTheme.apply(
-      bodyColor: _SettingsPalette.ink,
-      displayColor: _SettingsPalette.ink,
-    ),
-    dividerTheme: const DividerThemeData(
-      color: _SettingsPalette.line,
-      thickness: 1,
-      space: 1,
-    ),
-    sliderTheme: base.sliderTheme.copyWith(
-      activeTrackColor: _SettingsPalette.accent,
-      inactiveTrackColor: _SettingsPalette.line,
-      thumbColor: _SettingsPalette.accent,
-      overlayColor: _SettingsPalette.accent.withValues(alpha: 0.12),
-      trackHeight: 3.5,
-    ),
-    switchTheme: SwitchThemeData(
-      thumbColor: WidgetStateProperty.resolveWith(
-        (states) => states.contains(WidgetState.selected)
-            ? Colors.white
-            : _SettingsPalette.tertiary,
-      ),
-      trackColor: WidgetStateProperty.resolveWith(
-        (states) => states.contains(WidgetState.selected)
-            ? _SettingsPalette.accent
-            : _SettingsPalette.line,
-      ),
-      trackOutlineColor: const WidgetStatePropertyAll(Colors.transparent),
-    ),
-  );
-}
-
-class _SettingsModalSurface extends StatefulWidget {
+class _SettingsModalSurface extends StatelessWidget {
   const _SettingsModalSurface({required this.child, this.surfaceKey});
 
   final Widget child;
   final Key? surfaceKey;
-
-  @override
-  State<_SettingsModalSurface> createState() => _SettingsModalSurfaceState();
-}
-
-class _SettingsModalSurfaceState extends State<_SettingsModalSurface> {
-  ThemeData? _theme;
-  ThemeData? _themeBase;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final base = Theme.of(context);
-    if (!identical(base, _themeBase)) {
-      _themeBase = base;
-      _theme = _settingsTheme(base);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -6222,28 +6939,23 @@ class _SettingsModalSurfaceState extends State<_SettingsModalSurface> {
       media.size.height * 0.94,
       media.size.height - media.padding.top - 8,
     );
-    const radius = Radius.circular(28);
-    const borderRadius = BorderRadius.only(topLeft: radius, topRight: radius);
-    return Theme(
-      data: _theme!,
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        // Outer boundary: the sheet entrance only shifts this layer, so the
-        // gradient, shadows, and clip are not re-rasterized per frame.
-        child: RepaintBoundary(
-          child: Container(
-            key: widget.surfaceKey,
-            height: height,
-            decoration: AppLiquidGlass.strong(borderRadius: borderRadius),
-            child: ClipRRect(
-              clipBehavior: Clip.hardEdge,
-              borderRadius: borderRadius,
-              child: Padding(
-                padding: EdgeInsets.only(bottom: media.padding.bottom),
-                // Inner boundary: page switches repaint inside here without
-                // dragging the decorated sheet background along.
-                child: RepaintBoundary(child: widget.child),
-              ),
+    const borderRadius = BorderRadius.vertical(top: Radius.circular(28));
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: RepaintBoundary(
+        child: Container(
+          key: surfaceKey,
+          height: height,
+          decoration: AppLiquidGlass.strong(
+            context: context,
+            borderRadius: borderRadius,
+          ),
+          child: ClipRRect(
+            clipBehavior: Clip.hardEdge,
+            borderRadius: borderRadius,
+            child: Padding(
+              padding: EdgeInsets.only(bottom: media.padding.bottom),
+              child: RepaintBoundary(child: child),
             ),
           ),
         ),
@@ -6257,32 +6969,24 @@ class SettingsSheet extends StatefulWidget {
     super.key,
     required this.session,
     required this.notificationsEnabled,
-    required this.chatBackground,
     required this.currentModel,
     required this.selectedModel,
     required this.readingFontScale,
     required this.onReconnect,
     required this.onNotificationsChanged,
     required this.onModelChanged,
-    required this.onChatBackgroundChanged,
-    required this.onPickChatBackgroundImage,
     required this.onReadingFontScaleChanged,
     required this.onLogout,
   });
 
   final SavedSession? session;
   final bool notificationsEnabled;
-  final ChatBackgroundPreference chatBackground;
   final String? currentModel;
   final ClaudeModelPreference selectedModel;
   final double readingFontScale;
   final VoidCallback onReconnect;
   final Future<bool> Function(bool) onNotificationsChanged;
   final Future<void> Function(ClaudeModelPreference) onModelChanged;
-  final Future<ChatBackgroundPreference> Function(ChatBackgroundPreference)
-  onChatBackgroundChanged;
-  final Future<ChatBackgroundPreference?> Function(double)
-  onPickChatBackgroundImage;
   final Future<void> Function(double scale, {bool persist})
   onReadingFontScaleChanged;
   final VoidCallback onLogout;
@@ -6293,14 +6997,13 @@ class SettingsSheet extends StatefulWidget {
 
 class _SettingsSheetState extends State<SettingsSheet> {
   late bool notificationsEnabled = widget.notificationsEnabled;
-  late ChatBackgroundPreference chatBackground = widget.chatBackground;
   late ClaudeModelPreference selectedModel = widget.selectedModel;
   late double readingFontScale = widget.readingFontScale;
   late double persistedReadingFontScale = widget.readingFontScale;
   bool changingNotifications = false;
   bool changingModel = false;
   bool savingReadingFontScale = false;
-  bool showingChatBackground = false;
+  bool changingAppearance = false;
 
   Future<void> changeNotifications(bool value) async {
     if (changingNotifications) return;
@@ -6323,20 +7026,50 @@ class _SettingsSheetState extends State<SettingsSheet> {
     }
   }
 
-  Future<ChatBackgroundPreference> changeChatBackground(
-    ChatBackgroundPreference preference,
-  ) async {
-    final updated = await widget.onChatBackgroundChanged(preference);
-    if (mounted) setState(() => chatBackground = updated);
-    return updated;
-  }
-
-  Future<ChatBackgroundPreference?> pickChatBackgroundImage(
-    double overlayOpacity,
-  ) async {
-    final updated = await widget.onPickChatBackgroundImage(overlayOpacity);
-    if (updated != null && mounted) setState(() => chatBackground = updated);
-    return updated;
+  Future<void> chooseAppearance() async {
+    if (changingAppearance) return;
+    final appearance = AppearanceScope.of(context);
+    final next = await showAppOptionPicker<ThemeMode>(
+      context,
+      scrollContent: false,
+      builder: (context) => ConversationOptionSheet<ThemeMode>(
+        title: '外观',
+        detail: '选择浅色、深色，或跟随系统自动切换。',
+        selected: appearance.value,
+        options: [
+          for (final mode in ThemeMode.values)
+            ConversationPickerOption(
+              value: mode,
+              id: 'appearance-${mode.name}',
+              title: appearanceLabel(mode),
+              description: switch (mode) {
+                ThemeMode.system => '随系统设置自动切换浅色和深色',
+                ThemeMode.light => '明亮背景，深色文字',
+                ThemeMode.dark => '深色背景，浅色文字',
+              },
+              group: mode == ThemeMode.system ? '自动切换' : '固定外观',
+              leading: SmartIcon(switch (mode) {
+                ThemeMode.system => LucideIcons.contrast,
+                ThemeMode.light => LucideIcons.sun,
+                ThemeMode.dark => LucideIcons.moonStar,
+              }, size: AppIconSizes.control),
+            ),
+        ],
+      ),
+    );
+    if (next == null || !mounted) return;
+    setState(() => changingAppearance = true);
+    try {
+      await appearance.select(next);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('外观设置保存失败，请重试')));
+      }
+    } finally {
+      if (mounted) setState(() => changingAppearance = false);
+    }
   }
 
   Future<void> chooseModel() async {
@@ -6389,35 +7122,16 @@ class _SettingsSheetState extends State<SettingsSheet> {
 
   @override
   Widget build(BuildContext context) {
+    final appearance = AppearanceScope.maybeOf(context);
     final textTheme = Theme.of(context).textTheme;
     final rowTitleStyle = textTheme.titleMedium?.copyWith(
       fontWeight: FontWeight.w700,
       height: 1.3,
     );
     final rowSubtitleStyle = textTheme.bodySmall?.copyWith(
-      color: _SettingsPalette.secondary,
+      color: AppPalette.of(context).muted,
       height: 1.4,
     );
-    final modelLabel = _settingsModelLabel(selectedModel, widget.currentModel);
-    // Font-scale ticks must not re-key the preview: a changing key restarts
-    // the AnimatedSwitcher cross-fade on every slider tick.
-    final previewKey = ValueKey('$modelLabel-${chatBackground.hashCode}');
-
-    final background = chatBackground;
-    if (background.kind == ChatBackgroundKind.localImage &&
-        background.imagePath != null) {
-      // The background page's preview decodes a 900px variant nothing else
-      // loads; warm it while settings opens so the page switch does not
-      // decode mid-transition.
-      precacheImage(
-        ResizeImage(
-          FileImage(File(background.imagePath!)),
-          width: 900,
-          allowUpscaling: false,
-        ),
-        context,
-      );
-    }
 
     final settingsPage = Column(
       key: const ValueKey('settings-page'),
@@ -6427,22 +7141,6 @@ class _SettingsSheetState extends State<SettingsSheet> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
             children: [
-              const _SettingsSectionLabel('当前偏好'),
-              const SizedBox(height: 10),
-              AnimatedSwitcher(
-                duration: MediaQuery.disableAnimationsOf(context)
-                    ? Duration.zero
-                    : AppMotion.standard,
-                switchInCurve: AppMotion.enter,
-                switchOutCurve: AppMotion.exit,
-                child: _PreferenceGalleryPreview(
-                  key: previewKey,
-                  modelLabel: modelLabel,
-                  chatBackground: chatBackground,
-                  readingFontScale: readingFontScale,
-                ),
-              ),
-              const SizedBox(height: 22),
               const _SettingsSectionLabel('对话偏好'),
               const SizedBox(height: 10),
               _SettingsGroupCard(
@@ -6462,20 +7160,25 @@ class _SettingsSheetState extends State<SettingsSheet> {
                             dimension: 20,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(LucideIcons.chevronRight, size: 20),
+                        : const SmartIcon(
+                            LucideIcons.chevronRight,
+                            size: AppIconSizes.control,
+                          ),
                     onTap: changingModel ? null : chooseModel,
                   ),
                   const _SettingsDivider(),
-                  _SettingsPreferenceRow(
-                    key: const ValueKey('chat-background-setting'),
-                    leading: ChatBackgroundThumbnail(
-                      preference: chatBackground,
+                  if (appearance != null)
+                    _SettingsPreferenceRow(
+                      key: const ValueKey('appearance-setting'),
+                      icon: LucideIcons.sunMoon,
+                      title: '外观',
+                      subtitle: appearanceLabel(appearance.value),
+                      trailing: const SmartIcon(
+                        LucideIcons.chevronRight,
+                        size: AppIconSizes.control,
+                      ),
+                      onTap: changingAppearance ? null : chooseAppearance,
                     ),
-                    title: '聊天背景',
-                    subtitle: chatBackgroundLabel(chatBackground),
-                    trailing: const Icon(LucideIcons.chevronRight, size: 20),
-                    onTap: () => setState(() => showingChatBackground = true),
-                  ),
                   const _SettingsDivider(),
                   Padding(
                     key: const ValueKey('reading-font-size-setting'),
@@ -6491,7 +7194,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
                             Text(
                               readingFontSizeLabel(readingFontScale),
                               style: textTheme.labelLarge?.copyWith(
-                                color: _SettingsPalette.accent,
+                                color: AppPalette.of(context).accent,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
@@ -6518,7 +7221,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
                               'A',
                               style: textTheme.bodySmall?.copyWith(
                                 fontSize: 12,
-                                color: _SettingsPalette.secondary,
+                                color: AppPalette.of(context).muted,
                               ),
                             ),
                             Expanded(
@@ -6541,7 +7244,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
                               style: textTheme.bodySmall?.copyWith(
                                 fontSize: 18,
                                 fontWeight: FontWeight.w700,
-                                color: _SettingsPalette.ink,
+                                color: AppPalette.of(context).ink,
                               ),
                             ),
                           ],
@@ -6614,18 +7317,18 @@ class _SettingsSheetState extends State<SettingsSheet> {
                   _SettingsActionRow(
                     icon: LucideIcons.unlink,
                     label: '退出配对',
-                    color: _SettingsPalette.danger,
+                    color: AppPalette.of(context).danger,
                     onTap: () => confirmLogout(context, widget.onLogout),
                   ),
                 ],
               ),
               const SizedBox(height: 12),
-              const Padding(
+              Padding(
                 padding: EdgeInsets.symmetric(horizontal: 8),
                 child: Text(
                   '偏好只保存在这台手机；模型与阅读设置会用于之后发送的消息。',
                   style: TextStyle(
-                    color: _SettingsPalette.secondary,
+                    color: AppPalette.of(context).muted,
                     fontSize: 12,
                     height: 1.45,
                   ),
@@ -6637,87 +7340,21 @@ class _SettingsSheetState extends State<SettingsSheet> {
         ),
       ],
     );
-    final page = showingChatBackground
-        ? ChatBackgroundSheet(
-            key: const ValueKey('settings-background-page'),
-            preference: chatBackground,
-            onChanged: changeChatBackground,
-            onPickImage: pickChatBackgroundImage,
-            onBack: () => setState(() => showingChatBackground = false),
-          )
-        : settingsPage;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    return PopScope(
-      canPop: !showingChatBackground,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && showingChatBackground) {
-          setState(() => showingChatBackground = false);
-        }
-      },
-      child: appModalSheetScaffold(
-        _SettingsModalSurface(
-          surfaceKey: const ValueKey('settings-surface'),
-          child: AnimatedSwitcher(
-            duration: reduceMotion ? Duration.zero : AppMotion.standard,
-            reverseDuration: reduceMotion ? Duration.zero : AppMotion.fast,
-            switchInCurve: AppMotion.enter,
-            switchOutCurve: AppMotion.exit,
-            layoutBuilder: (currentChild, previousChildren) => Stack(
-              fit: StackFit.expand,
-              children: [...previousChildren, ?currentChild],
-            ),
-            transitionBuilder: (child, animation) {
-              final backgroundPage =
-                  child.key == const ValueKey('settings-background-page');
-              final position = Tween<Offset>(
-                begin: Offset(backgroundPage ? 0.08 : -0.08, 0),
-                end: Offset.zero,
-              ).animate(animation);
-              // Slide + fade, but over a boundary: the page raster is cached,
-              // so each transition frame only re-composites that texture at a
-              // new offset/alpha. Without the fade the outgoing page stays
-              // ~fully visible under the incoming one and pops out at the end
-              // of its exit; without the boundary the fade saveLayers the
-              // whole sheet every frame. The snapshot freezes both pages into
-              // textures while the switch runs, so the frames composite two
-              // quads instead of re-rasterizing two near-fullscreen pages.
-              return FadeTransition(
-                opacity: animation,
-                child: SlideTransition(
-                  position: position,
-                  child: SnapshotWhileAnimating(
-                    animation: animation,
-                    child: RepaintBoundary(child: child),
-                  ),
-                ),
-              );
-            },
-            child: page,
-          ),
-        ),
-        barrierColor: _SettingsPalette.barrier,
+    return appModalSheetScaffold(
+      _SettingsModalSurface(
+        surfaceKey: const ValueKey('settings-surface'),
+        child: settingsPage,
       ),
+      barrierColor: AppPalette.of(context).scrim,
     );
   }
 }
 
-String _settingsModelLabel(
-  ClaudeModelPreference preference,
-  String? currentModel,
-) {
-  if (preference != ClaudeModelPreference.followComputer) {
-    return preference.label;
-  }
-  final current = currentModel?.trim();
-  return current == null || current.isEmpty ? '跟随电脑' : formatModelName(current);
-}
-
 class _SettingsPageHeader extends StatelessWidget {
-  const _SettingsPageHeader({required this.title, this.onClose, this.onBack});
+  const _SettingsPageHeader({required this.title, this.onClose});
 
   final String title;
   final VoidCallback? onClose;
-  final VoidCallback? onBack;
 
   @override
   Widget build(BuildContext context) {
@@ -6725,21 +7362,13 @@ class _SettingsPageHeader extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(20, 16, 16, 12),
       child: Row(
         children: [
-          if (onBack != null) ...[
-            _SettingsIconButton(
-              icon: LucideIcons.chevronLeft,
-              tooltip: '返回设置',
-              onPressed: onBack!,
-            ),
-            const SizedBox(width: 8),
-          ],
           Expanded(
             child: Text(
               title,
-              style: TextStyle(
-                fontSize: onBack == null ? 32 : 28,
-                fontWeight: FontWeight.w800,
-                letterSpacing: onBack == null ? -0.9 : -0.65,
+              style: const TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w600,
+                letterSpacing: -0.4,
                 height: 1.08,
               ),
             ),
@@ -6776,13 +7405,13 @@ class _SettingsIconButton extends StatelessWidget {
         tooltip: tooltip,
         padding: EdgeInsets.zero,
         icon: DecoratedBox(
-          decoration: const BoxDecoration(
-            color: _SettingsPalette.surface,
+          decoration: BoxDecoration(
+            color: AppPalette.of(context).surface,
             shape: BoxShape.circle,
           ),
           child: SizedBox.square(
             dimension: AppSizes.iconControl,
-            child: Icon(icon, size: 19),
+            child: Icon(icon, size: AppIconSizes.control),
           ),
         ),
       ),
@@ -6801,243 +7430,11 @@ class _SettingsSectionLabel extends StatelessWidget {
       padding: const EdgeInsets.only(left: 4),
       child: Text(
         label,
-        style: const TextStyle(
-          color: _SettingsPalette.secondary,
+        style: TextStyle(
+          color: AppPalette.of(context).muted,
           fontSize: 13,
           fontWeight: FontWeight.w600,
           letterSpacing: 0.1,
-        ),
-      ),
-    );
-  }
-}
-
-class _PreferenceGalleryPreview extends StatelessWidget {
-  const _PreferenceGalleryPreview({
-    super.key,
-    required this.modelLabel,
-    required this.chatBackground,
-    required this.readingFontScale,
-  });
-
-  final String modelLabel;
-  final ChatBackgroundPreference chatBackground;
-  final double readingFontScale;
-
-  @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      key: const ValueKey('settings-preference-preview'),
-      container: true,
-      label:
-          '当前偏好预览。模型 $modelLabel，背景 ${chatBackgroundLabel(chatBackground)}，阅读 ${readingFontSizeLabel(readingFontScale)}',
-      child: ExcludeSemantics(
-        child: MediaQuery(
-          data: MediaQuery.of(
-            context,
-          ).copyWith(textScaler: TextScaler.noScaling),
-          child: Container(
-            height: 214,
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              color: _SettingsPalette.surface,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: AppElevation.surfaceCard(),
-            ),
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final compact = constraints.maxWidth < 330;
-                final railWidth = compact ? 104.0 : 116.0;
-                return Row(
-                  children: [
-                    SizedBox(
-                      width: railWidth,
-                      child: Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          compact ? 13 : 16,
-                          22,
-                          compact ? 10 : 14,
-                          18,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Container(
-                                  width: 8,
-                                  height: 8,
-                                  margin: const EdgeInsets.only(top: 5),
-                                  decoration: const BoxDecoration(
-                                    color: _SettingsPalette.accent,
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                                const SizedBox(width: 9),
-                                Expanded(
-                                  child: Text(
-                                    modelLabel,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: TextStyle(
-                                      fontSize: compact ? 15 : 17,
-                                      fontWeight: FontWeight.w700,
-                                      height: 1.25,
-                                      letterSpacing: -0.3,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const Spacer(),
-                            const Divider(),
-                            const SizedBox(height: 10),
-                            Text(
-                              '背景 ${chatBackgroundLabel(chatBackground)}',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                color: _SettingsPalette.secondary,
-                                fontSize: 12,
-                                height: 1.35,
-                              ),
-                            ),
-                            const SizedBox(height: 7),
-                            Text(
-                              '阅读 ${readingFontSizeLabel(readingFontScale)}',
-                              style: const TextStyle(
-                                color: _SettingsPalette.secondary,
-                                fontSize: 12,
-                                height: 1.35,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const VerticalDivider(width: 1),
-                    Expanded(
-                      child: Stack(
-                        fit: StackFit.expand,
-                        children: [
-                          _ChatBackgroundLayer(
-                            preference: chatBackground,
-                            cacheWidth: 720,
-                          ),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(14, 16, 14, 13),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                const Text(
-                                  'CC Remote',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w600,
-                                  ),
-                                ),
-                                const SizedBox(height: 14),
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: Container(
-                                    constraints: BoxConstraints(
-                                      maxWidth: compact ? 126 : 154,
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 11,
-                                      vertical: 8,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.surfaceElevated,
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    child: Text(
-                                      '你好，我能帮你做些什么？',
-                                      maxLines: 2,
-                                      style: TextStyle(
-                                        fontSize: 12 * readingFontScale,
-                                        height: 1.35,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(height: 10),
-                                Align(
-                                  alignment: Alignment.centerRight,
-                                  child: Container(
-                                    constraints: BoxConstraints(
-                                      maxWidth: compact ? 126 : 154,
-                                    ),
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 11,
-                                      vertical: 8,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFDCEEFF),
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    child: Text(
-                                      '分析一下这个项目的整体架构',
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontSize: 12 * readingFontScale,
-                                        height: 1.35,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                                const Spacer(),
-                                Container(
-                                  height: 32,
-                                  padding: const EdgeInsets.only(left: 12),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.82),
-                                    borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(
-                                      color: _SettingsPalette.line,
-                                    ),
-                                  ),
-                                  child: const Row(
-                                    children: [
-                                      Expanded(
-                                        child: Text(
-                                          '发送消息…',
-                                          style: TextStyle(
-                                            color: _SettingsPalette.tertiary,
-                                            fontSize: 11,
-                                          ),
-                                        ),
-                                      ),
-                                      SizedBox.square(
-                                        dimension: 32,
-                                        child: DecoratedBox(
-                                          decoration: BoxDecoration(
-                                            color: _SettingsPalette.accent,
-                                            shape: BoxShape.circle,
-                                          ),
-                                          child: Icon(
-                                            LucideIcons.arrowUp,
-                                            color: Colors.white,
-                                            size: 16,
-                                          ),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
         ),
       ),
     );
@@ -7054,12 +7451,12 @@ class _SettingsLeadingIcon extends StatelessWidget {
     return Container(
       width: 42,
       height: 42,
-      decoration: const BoxDecoration(
-        color: _SettingsPalette.iconFill,
+      decoration: BoxDecoration(
+        color: AppPalette.of(context).control,
         shape: BoxShape.circle,
       ),
       alignment: Alignment.center,
-      child: Icon(icon, size: 19, color: _SettingsPalette.ink),
+      child: SmartIcon(icon, size: AppIconSizes.control),
     );
   }
 }
@@ -7068,7 +7465,6 @@ class _SettingsPreferenceRow extends StatelessWidget {
   const _SettingsPreferenceRow({
     super.key,
     this.icon,
-    this.leading,
     required this.title,
     required this.subtitle,
     this.trailing,
@@ -7076,7 +7472,6 @@ class _SettingsPreferenceRow extends StatelessWidget {
   });
 
   final IconData? icon;
-  final Widget? leading;
   final String title;
   final String subtitle;
   final Widget? trailing;
@@ -7090,9 +7485,7 @@ class _SettingsPreferenceRow extends StatelessWidget {
       builder: (context, pressed, child) => SignalAnimatedSurface(
         duration: appPressAnimationDuration(context, pressed),
         decoration: BoxDecoration(
-          color: pressed
-              ? _SettingsPalette.iconFill.withValues(alpha: 0.72)
-              : Colors.transparent,
+          color: pressed ? AppPalette.of(context).control : Colors.transparent,
         ),
         child: child,
       ),
@@ -7106,7 +7499,7 @@ class _SettingsPreferenceRow extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
               child: Row(
                 children: [
-                  leading ?? _SettingsLeadingIcon(icon: icon!),
+                  _SettingsLeadingIcon(icon: icon!),
                   const SizedBox(width: 14),
                   Expanded(
                     child: Column(
@@ -7126,8 +7519,8 @@ class _SettingsPreferenceRow extends StatelessWidget {
                           subtitle,
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: _SettingsPalette.secondary,
+                          style: TextStyle(
+                            color: AppPalette.of(context).muted,
                             fontSize: 12,
                             height: 1.35,
                           ),
@@ -7138,9 +7531,7 @@ class _SettingsPreferenceRow extends StatelessWidget {
                   if (trailing != null) ...[
                     const SizedBox(width: 10),
                     IconTheme(
-                      data: const IconThemeData(
-                        color: _SettingsPalette.secondary,
-                      ),
+                      data: IconThemeData(color: AppPalette.of(context).muted),
                       child: trailing!,
                     ),
                   ],
@@ -7172,9 +7563,9 @@ class _SettingsGroupCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: _SettingsPalette.surface,
+        color: AppPalette.of(context).surface,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: AppElevation.surfaceCard(),
+        boxShadow: AppElevation.surfaceCard(context: context),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
@@ -7199,8 +7590,8 @@ class _SettingsDetailLine extends StatelessWidget {
           width: 38,
           child: Text(
             label,
-            style: const TextStyle(
-              color: _SettingsPalette.secondary,
+            style: TextStyle(
+              color: AppPalette.of(context).muted,
               fontSize: 12,
               fontWeight: FontWeight.w600,
               height: 1.35,
@@ -7213,8 +7604,8 @@ class _SettingsDetailLine extends StatelessWidget {
             value,
             maxLines: 2,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: _SettingsPalette.ink,
+            style: TextStyle(
+              color: AppPalette.of(context).ink,
               fontFamily: 'monospace',
               fontSize: 12,
               height: 1.4,
@@ -7231,16 +7622,17 @@ class _SettingsActionRow extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
-    this.color = _SettingsPalette.accent,
+    this.color,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback onTap;
-  final Color color;
+  final Color? color;
 
   @override
   Widget build(BuildContext context) {
+    final color = this.color ?? AppPalette.of(context).ink;
     return SignalPressEffect(
       scaleOnPress: false,
       builder: (context, pressed, child) => SignalAnimatedSurface(
@@ -7261,7 +7653,7 @@ class _SettingsActionRow extends StatelessWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(icon, size: 17, color: color),
+                  Icon(icon, size: AppIconSizes.inline, color: color),
                   const SizedBox(width: 8),
                   Text(
                     label,
@@ -7287,475 +7679,47 @@ Future<ClaudeModelPreference?> showClaudeModelPicker(
 }) {
   return showAppOptionPicker<ClaudeModelPreference>(
     context,
-    builder: (sheetContext) => Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const AppOptionSheetHeader(
-          title: '选择模型',
-          detail: '仅影响之后发送的消息；当前运行不会切换模型。',
-        ),
-        const SizedBox(height: 12),
+    scrollContent: false,
+    builder: (sheetContext) => ConversationOptionSheet<ClaudeModelPreference>(
+      title: '选择模型',
+      detail: '用于之后发送的消息，当前任务继续使用原模型。',
+      selected: selected,
+      options: [
         for (final preference in ClaudeModelPreference.values)
-          AppOptionRow(
-            key: ValueKey('model-option-${preference.wireName ?? 'follow'}'),
+          ConversationPickerOption(
+            value: preference,
+            id: 'model-option-${preference.wireName ?? 'follow'}',
             title: preference == ClaudeModelPreference.followComputer
                 ? '跟随电脑配置'
                 : preference.label,
             description: modelPreferenceOptionDescription(preference),
-            selected: preference == selected,
-            boxedLeading: false,
-            showDisclosure: false,
-            leading: PhosphorIcon(
-              switch (preference) {
-                ClaudeModelPreference.followComputer =>
-                  PhosphorIconsFill.monitor,
-                ClaudeModelPreference.opus => PhosphorIconsFill.diamond,
-                ClaudeModelPreference.sonnet => PhosphorIconsFill.sparkle,
-                ClaudeModelPreference.fable => PhosphorIconsFill.feather,
-              },
-              size: AppMark.size,
-              color: switch (preference) {
-                ClaudeModelPreference.followComputer => AppMark.slate,
-                ClaudeModelPreference.opus => AppMark.azure,
-                ClaudeModelPreference.sonnet => AppMark.teal,
-                ClaudeModelPreference.fable => AppMark.emerald,
-              },
-            ),
-            onTap: () => Navigator.pop(sheetContext, preference),
+            group: preference == ClaudeModelPreference.followComputer
+                ? '电脑默认'
+                : 'Claude 模型',
+            leading: SmartIcon(switch (preference) {
+              ClaudeModelPreference.followComputer =>
+                LucideIcons.monitor,
+              ClaudeModelPreference.opus => LucideIcons.diamond,
+              ClaudeModelPreference.sonnet => LucideIcons.sparkle,
+              ClaudeModelPreference.fable => LucideIcons.feather,
+            }, size: AppIconSizes.control),
           ),
       ],
     ),
   );
 }
 
-class ChatBackgroundSheet extends StatefulWidget {
-  const ChatBackgroundSheet({
-    super.key,
-    required this.preference,
-    required this.onChanged,
-    required this.onPickImage,
-    required this.onBack,
-  });
-
-  final ChatBackgroundPreference preference;
-  final Future<ChatBackgroundPreference> Function(ChatBackgroundPreference)
-  onChanged;
-  final Future<ChatBackgroundPreference?> Function(double) onPickImage;
-  final VoidCallback onBack;
-
-  @override
-  State<ChatBackgroundSheet> createState() => _ChatBackgroundSheetState();
-}
-
-class _ChatBackgroundSheetState extends State<ChatBackgroundSheet> {
-  late ChatBackgroundPreference preference = widget.preference;
-  late ChatBackgroundPreference savedPreference = widget.preference;
-  bool changing = false;
-
-  Future<void> apply(ChatBackgroundPreference next) async {
-    if (changing || next == savedPreference) {
-      setState(() => preference = next);
-      return;
-    }
-    setState(() {
-      changing = true;
-      preference = next;
-    });
-    try {
-      final updated = await widget.onChanged(next);
-      if (!mounted) return;
-      setState(() {
-        preference = updated;
-        savedPreference = updated;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => preference = savedPreference);
-      showBackgroundError('背景保存失败，请重试');
-    } finally {
-      if (mounted) setState(() => changing = false);
-    }
-  }
-
-  Future<void> pickImage() async {
-    if (changing) return;
-    setState(() => changing = true);
-    try {
-      final updated = await widget.onPickImage(preference.overlayOpacity);
-      if (updated == null || !mounted) return;
-      setState(() {
-        preference = updated;
-        savedPreference = updated;
-      });
-    } catch (_) {
-      if (mounted) showBackgroundError('无法读取这张图片，请换一张重试');
-    } finally {
-      if (mounted) setState(() => changing = false);
-    }
-  }
-
-  void showBackgroundError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final options = <(String, ChatBackgroundPreference)>[
-      ('暖纸', ChatBackgroundPreference.defaultValue),
-      ('亚麻', const ChatBackgroundPreference.preset(ChatBackgroundPreset.mint)),
-      (
-        '陶纸',
-        const ChatBackgroundPreference.preset(ChatBackgroundPreset.sunrise),
-      ),
-      ('砂岩', const ChatBackgroundPreference.preset(ChatBackgroundPreset.rose)),
-    ];
-    return Column(
-      key: const ValueKey('settings-background-surface'),
-      children: [
-        _SettingsPageHeader(title: '聊天背景', onBack: widget.onBack),
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const _SettingsSectionLabel('实时预览'),
-                const SizedBox(height: 10),
-                ChatBackgroundPreview(preference: preference),
-                const SizedBox(height: 22),
-                const _SettingsSectionLabel('内置背景'),
-                const SizedBox(height: 10),
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final width = (constraints.maxWidth - 10) / 2;
-                    return Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
-                      children: [
-                        for (final option in options)
-                          ChatBackgroundChoice(
-                            width: width,
-                            label: option.$1,
-                            preference: option.$2,
-                            selected:
-                                preference.kind == option.$2.kind &&
-                                preference.preset == option.$2.preset,
-                            onPressed: changing ? null : () => apply(option.$2),
-                          ),
-                      ],
-                    );
-                  },
-                ),
-                const SizedBox(height: 20),
-                _SettingsGroupCard(
-                  children: [
-                    _SettingsPreferenceRow(
-                      key: const ValueKey('pick-chat-background-image'),
-                      icon: LucideIcons.image,
-                      title: '从相册选择',
-                      subtitle: '使用这台手机上的图片作为聊天背景',
-                      trailing: changing
-                          ? const SizedBox.square(
-                              dimension: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(LucideIcons.chevronRight, size: 20),
-                      onTap: changing ? null : pickImage,
-                    ),
-                    if (preference.kind == ChatBackgroundKind.localImage) ...[
-                      const _SettingsDivider(),
-                      Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
-                        child: Column(
-                          children: [
-                            Row(
-                              children: [
-                                const Expanded(
-                                  child: Text(
-                                    '图片淡化',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                ),
-                                Text(
-                                  '${(preference.overlayOpacity * 100).round()}%',
-                                  style: const TextStyle(
-                                    color: _SettingsPalette.accent,
-                                    fontWeight: FontWeight.w700,
-                                    fontFeatures: [
-                                      FontFeature.tabularFigures(),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
-                            Slider(
-                              key: const ValueKey(
-                                'chat-background-opacity-slider',
-                              ),
-                              value: preference.overlayOpacity,
-                              min: 0.16,
-                              max: 0.64,
-                              divisions: 12,
-                              label:
-                                  '${(preference.overlayOpacity * 100).round()}%',
-                              onChanged: changing
-                                  ? null
-                                  : (value) => setState(
-                                      () => preference = preference.copyWith(
-                                        overlayOpacity: value,
-                                      ),
-                                    ),
-                              onChangeEnd: changing
-                                  ? null
-                                  : (value) => apply(
-                                      preference.copyWith(
-                                        overlayOpacity: value,
-                                      ),
-                                    ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Center(
-                  child: TextButton.icon(
-                    key: const ValueKey('reset-chat-background'),
-                    onPressed:
-                        changing ||
-                            savedPreference.kind ==
-                                ChatBackgroundKind.defaultStyle
-                        ? null
-                        : () => apply(ChatBackgroundPreference.defaultValue),
-                    icon: const Icon(LucideIcons.rotateCcw, size: 17),
-                    label: const Text('恢复默认背景'),
-                  ),
-                ),
-                const SizedBox(height: 2),
-                const Text(
-                  '图片只保存在这台手机，不会上传到电脑端',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: _SettingsPalette.secondary,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class ChatBackgroundChoice extends StatelessWidget {
-  const ChatBackgroundChoice({
-    super.key,
-    required this.width,
-    required this.label,
-    required this.preference,
-    required this.selected,
-    required this.onPressed,
-  });
-
-  final double width;
-  final String label;
-  final ChatBackgroundPreference preference;
-  final bool selected;
-  final VoidCallback? onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: '背景：$label',
-      child: SizedBox(
-        width: width,
-        child: InkWell(
-          onTap: onPressed,
-          borderRadius: BorderRadius.circular(14),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 4),
-            child: Column(
-              children: [
-                AnimatedContainer(
-                  duration: MediaQuery.disableAnimationsOf(context)
-                      ? Duration.zero
-                      : AppMotion.fast,
-                  width: width,
-                  height: 96,
-                  clipBehavior: Clip.antiAlias,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: selected
-                          ? _SettingsPalette.accent
-                          : _SettingsPalette.line,
-                      width: selected ? 2 : 1,
-                    ),
-                  ),
-                  child: Stack(
-                    fit: StackFit.expand,
-                    children: [
-                      _ChatBackgroundLayer(
-                        preference: preference,
-                        cacheWidth: 480,
-                      ),
-                      if (selected)
-                        const Positioned(
-                          top: 8,
-                          right: 8,
-                          child: DecoratedBox(
-                            decoration: BoxDecoration(
-                              color: _SettingsPalette.accent,
-                              shape: BoxShape.circle,
-                            ),
-                            child: SizedBox.square(
-                              dimension: 24,
-                              child: Icon(
-                                LucideIcons.check,
-                                size: 15,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: selected
-                        ? _SettingsPalette.accent
-                        : _SettingsPalette.ink,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class ChatBackgroundPreview extends StatelessWidget {
-  const ChatBackgroundPreview({super.key, required this.preference});
-
-  final ChatBackgroundPreference preference;
-
-  @override
-  Widget build(BuildContext context) {
-    return Semantics(
-      label: '当前聊天背景预览',
-      image: true,
-      child: Container(
-        height: 190,
-        clipBehavior: Clip.antiAlias,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: _SettingsPalette.line),
-        ),
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            _ChatBackgroundLayer(preference: preference, cacheWidth: 900),
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: _PreviewBubble(
-                      color: AppColors.userBubble,
-                      width: 150,
-                    ),
-                  ),
-                  SizedBox(height: 12),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: _PreviewBubble(
-                      color: AppColors.surfaceElevated,
-                      width: 206,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _PreviewBubble extends StatelessWidget {
-  const _PreviewBubble({required this.color, required this.width});
-
-  final Color color;
-  final double width;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: width,
-      height: 46,
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.bubbleOutline),
-      ),
-    );
-  }
-}
-
-class ChatBackgroundThumbnail extends StatelessWidget {
-  const ChatBackgroundThumbnail({super.key, required this.preference});
-
-  final ChatBackgroundPreference preference;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 36,
-      height: 36,
-      clipBehavior: Clip.antiAlias,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: _SettingsPalette.line),
-        color: _SettingsPalette.iconFill,
-      ),
-      child: _ChatBackgroundLayer(preference: preference, cacheWidth: 144),
-    );
-  }
-}
-
-String chatBackgroundLabel(ChatBackgroundPreference preference) {
-  return switch (preference.kind) {
-    ChatBackgroundKind.defaultStyle => '默认纸感',
-    ChatBackgroundKind.localImage => '自定义图片',
-    ChatBackgroundKind.preset => switch (preference.preset) {
-      ChatBackgroundPreset.mint => '亚麻纸感',
-      ChatBackgroundPreset.sunrise => '陶纸纸感',
-      ChatBackgroundPreset.rose => '砂岩纸感',
-      null => '内置背景',
-    },
-  };
+Future<String?> showCodexModelPicker(
+  BuildContext context, {
+  required String? selected,
+  required Future<List<CodexModelOption>> Function() loadModels,
+}) {
+  return showAppOptionPicker<String>(
+    context,
+    scrollContent: false,
+    builder: (_) =>
+        CodexModelPicker(selected: selected, loadModels: loadModels),
+  );
 }
 
 Future<AttachmentSource?> showAttachmentSourceSheet(
@@ -7773,20 +7737,20 @@ Future<AttachmentSource?> showAttachmentSourceSheet(
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              leading: const Icon(LucideIcons.camera),
+              leading: const SmartIcon(LucideIcons.camera),
               title: const Text('拍照'),
               subtitle: const Text('拍一张照片作为附件'),
               onTap: () => Navigator.pop(context, AttachmentSource.camera),
             ),
             ListTile(
-              leading: const Icon(LucideIcons.image),
+              leading: const SmartIcon(LucideIcons.image),
               title: const Text('选择图片'),
               subtitle: const Text('从相册选择一张或多张图片'),
               onTap: () => Navigator.pop(context, AttachmentSource.photos),
             ),
             if (!imagesOnly)
               ListTile(
-                leading: const Icon(LucideIcons.folderOpen),
+                leading: const SmartIcon(LucideIcons.folderOpen),
                 title: const Text('选择文件'),
                 subtitle: const Text('发送代码、日志、文档或压缩包'),
                 onTap: () => Navigator.pop(context, AttachmentSource.files),
@@ -7819,8 +7783,8 @@ Future<void> confirmLogout(BuildContext context, VoidCallback onLogout) async {
         FilledButton(
           onPressed: () => Navigator.pop(context, true),
           style: FilledButton.styleFrom(
-            backgroundColor: AppColors.stop,
-            foregroundColor: Colors.white,
+            backgroundColor: AppPalette.of(context).stop,
+            foregroundColor: AppPalette.of(context).onStop,
           ),
           child: const Text('退出'),
         ),
@@ -7845,11 +7809,14 @@ class TranscriptView extends StatefulWidget {
     required this.respondingPermissionIds,
     required this.connected,
     this.offline = false,
+    this.topPadding = 8,
+    this.workspaceChangeEcho,
     required this.onFillPrompt,
     required this.onReconnect,
     required this.onPermissionAllow,
     required this.onPermissionDeny,
     this.onJumpHandled,
+    this.onOpenWorkspaceChanges,
   });
 
   final List<TranscriptMessage> messages;
@@ -7862,11 +7829,14 @@ class TranscriptView extends StatefulWidget {
   final Set<String> respondingPermissionIds;
   final bool connected;
   final bool offline;
+  final double topPadding;
+  final WorkspaceChangeEcho? workspaceChangeEcho;
   final ValueChanged<String> onFillPrompt;
   final VoidCallback onReconnect;
   final ValueChanged<RemotePermissionRequest> onPermissionAllow;
   final ValueChanged<RemotePermissionRequest> onPermissionDeny;
   final ValueChanged<TranscriptJumpRequest>? onJumpHandled;
+  final VoidCallback? onOpenWorkspaceChanges;
 
   @override
   State<TranscriptView> createState() => _TranscriptViewState();
@@ -7879,43 +7849,214 @@ class _VisibleTranscriptRow {
   final TranscriptMessage message;
 }
 
-class _ActivityGroupRow {
-  const _ActivityGroupRow(this.rows);
+class _ProcessGroupRow {
+  const _ProcessGroupRow(this.rows, {required this.running});
 
   final List<_VisibleTranscriptRow> rows;
+  final bool running;
 
   TranscriptMessage get message => rows.first.message;
-
   int get rawIndex => rows.first.rawIndex;
 }
 
-List<Object> _groupTranscriptRows(List<_VisibleTranscriptRow> rows) {
+List<Object> _groupTranscriptRows(
+  List<_VisibleTranscriptRow> rows, {
+  required bool running,
+}) {
   final items = <Object>[];
+  final lastUserIndex =
+      rows
+          .where((row) => row.message.role == MessageRole.user)
+          .lastOrNull
+          ?.rawIndex ??
+      -1;
+  bool isProcessPart(TranscriptMessage message) =>
+      message.role == MessageRole.assistant ||
+      (message.role == MessageRole.activity &&
+          (message.activityKind == ActivityKind.tool ||
+              message.activityKind == ActivityKind.thinking));
   var index = 0;
   while (index < rows.length) {
     final row = rows[index];
-    final isToolActivity =
-        row.message.role == MessageRole.activity &&
-        row.message.activityKind == ActivityKind.tool;
-    if (!isToolActivity) {
+    if (!isProcessPart(row.message)) {
       items.add(row);
       index++;
       continue;
     }
-    final group = <_VisibleTranscriptRow>[row];
-    index++;
-    while (index < rows.length) {
-      final next = rows[index];
-      if (next.message.role != MessageRole.activity ||
-          next.message.activityKind != ActivityKind.tool) {
-        break;
-      }
-      group.add(next);
-      index++;
+    final process = <_VisibleTranscriptRow>[];
+    while (index < rows.length && isProcessPart(rows[index].message)) {
+      process.add(rows[index++]);
     }
-    items.add(_ActivityGroupRow(group));
+    final result = process.last.message.role == MessageRole.assistant
+        ? process.removeLast()
+        : null;
+    if (process.isNotEmpty) {
+      items.add(
+        _ProcessGroupRow(
+          process,
+          running: running && process.first.rawIndex > lastUserIndex,
+        ),
+      );
+    }
+    if (result != null) items.add(result);
   }
   return items;
+}
+
+class _TranscriptProcessBlock extends StatefulWidget {
+  const _TranscriptProcessBlock({
+    super.key,
+    required this.group,
+    required this.buildPart,
+    this.revealRawIndex,
+  });
+
+  final _ProcessGroupRow group;
+  final Widget Function(_VisibleTranscriptRow) buildPart;
+  final int? revealRawIndex;
+
+  @override
+  State<_TranscriptProcessBlock> createState() =>
+      _TranscriptProcessBlockState();
+}
+
+class _TranscriptProcessBlockState extends State<_TranscriptProcessBlock> {
+  bool processExpanded = false;
+  bool toolsExpanded = false;
+  ValueNotifier<TranscriptMessage>? openActivity;
+
+  @override
+  void didUpdateWidget(covariant _TranscriptProcessBlock oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.group.rawIndex != widget.group.rawIndex) {
+      processExpanded = false;
+      toolsExpanded = false;
+    } else if (oldWidget.group.running && !widget.group.running) {
+      processExpanded = toolsExpanded;
+    }
+    final detail = openActivity;
+    if (detail != null) {
+      final updated = widget.group.rows
+          .map((row) => row.message)
+          .where((message) => message.activityId == detail.value.activityId)
+          .firstOrNull;
+      if (updated != null && !identical(updated, detail.value)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && identical(openActivity, detail)) {
+            detail.value = updated;
+          }
+        });
+      }
+    }
+  }
+
+  Future<void> openDetail(TranscriptMessage activity) async {
+    if (openActivity != null) return;
+    final detail = ValueNotifier(activity);
+    openActivity = detail;
+    try {
+      await showToolActivityDetail(
+        context,
+        activity: detail,
+        title: activityToolTitle(activity),
+      );
+    } finally {
+      if (identical(openActivity, detail)) openActivity = null;
+      detail.dispose();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final group = widget.group;
+    final tools = group.rows
+        .where((row) => row.message.activityKind == ActivityKind.tool)
+        .map((row) => row.message)
+        .toList();
+    final reveal = group.rows.any(
+      (row) => row.rawIndex == widget.revealRawIndex,
+    );
+    final liveThought = group.running
+        ? group.rows
+              .where(
+                (row) =>
+                    row.message.activityKind == ActivityKind.thinking &&
+                    row.message.activityState == ActivityState.running,
+              )
+              .lastOrNull
+        : null;
+    final historyRows = group.rows.where((row) => row != liveThought).toList();
+    Widget buildParts(Widget Function(TranscriptMessage)? buildTool) => Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (var i = 0; i < historyRows.length; i++) ...[
+          if (i > 0) const SizedBox(height: 4),
+          if (historyRows[i].message.activityKind == ActivityKind.tool)
+            buildTool!(historyRows[i].message)
+          else
+            widget.buildPart(historyRows[i]),
+        ],
+      ],
+    );
+    final content = tools.isEmpty
+        ? buildParts(null)
+        : ActivityTimelineCard(
+            activities: tools,
+            running: group.running,
+            expanded: toolsExpanded || reveal,
+            onExpandedChanged: (value) => setState(() => toolsExpanded = value),
+            onToolTap: openDetail,
+            contentBuilder: (context, buildTool) => buildParts(buildTool),
+          );
+    if (group.running) {
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          content,
+          if (liveThought != null) widget.buildPart(liveThought),
+        ],
+      );
+    }
+    final palette = AppPalette.of(context);
+    final failedCount = tools
+        .where((tool) => tool.activityState == ActivityState.error)
+        .length;
+    final stoppedCount = tools
+        .where((tool) => tool.activityState == ActivityState.stopped)
+        .length;
+    final status = failedCount > 0
+        ? '$failedCount 个失败'
+        : stoppedCount > 0
+        ? '$stoppedCount 个已停止'
+        : null;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      child: ActivityCardSurface(
+        key: const ValueKey('process-history-surface'),
+        child: ActivityDisclosure(
+          leading: SmartIcon(
+            tools.isEmpty ? LucideIcons.brain : LucideIcons.wrench,
+            size: AppIconSizes.inline,
+          ),
+          title: tools.isEmpty
+              ? '思考过程'
+              : '${failedCount > 0 ? '工具执行失败' : stoppedCount > 0 ? '工具执行已停止' : '工具执行完成'} · ${tools.length} 步',
+          expanded: processExpanded || reveal,
+          toggleKey: const ValueKey('process-history-toggle'),
+          statusText: status,
+          tone: failedCount > 0
+              ? palette.danger
+              : stoppedCount > 0
+              ? palette.warning
+              : null,
+          onToggle: () => setState(() => processExpanded = !processExpanded),
+          child: content,
+        ),
+      ),
+    );
+  }
 }
 
 class _TranscriptViewState extends State<TranscriptView> {
@@ -7995,6 +8136,7 @@ class _TranscriptViewState extends State<TranscriptView> {
             last.activityState,
             last.activityTool,
             last.activityDetail,
+            last.activityDurationMs,
           );
     if (!reset &&
         !followingBottom &&
@@ -8066,8 +8208,10 @@ class _TranscriptViewState extends State<TranscriptView> {
     final rows = <_VisibleTranscriptRow>[];
     for (var index = 0; index < widget.messages.length; index++) {
       final message = widget.messages[index];
-      if (isBlankAssistantMessage(message) ||
-          isHiddenThinkingActivity(message)) {
+      if (isBlankAssistantMessage(message)) continue;
+      if (message.activityKind == ActivityKind.thinking &&
+          message.activityState != ActivityState.running &&
+          (message.activityDetail?.trim().isEmpty ?? true)) {
         continue;
       }
       rows.add(_VisibleTranscriptRow(index, message));
@@ -8181,13 +8325,31 @@ class _TranscriptViewState extends State<TranscriptView> {
         return false;
       }
       final targetContext = rowKeys[targetRawIndex]?.currentContext;
-      if (targetContext != null && targetContext.mounted) {
-        await Scrollable.ensureVisible(
-          targetContext,
-          alignment: 0.18,
-          duration: reduceMotion ? Duration.zero : AppMotion.standard,
-          curve: AppMotion.enter,
+      final targetObject = targetContext?.findRenderObject();
+      if (targetContext != null &&
+          targetContext.mounted &&
+          targetObject != null &&
+          scrollController.hasClients) {
+        final position = scrollController.position;
+        final inset = max(
+          widget.topPadding + 12,
+          position.viewportDimension * 0.18,
         );
+        final revealOffset = RenderAbstractViewport.of(
+          targetObject,
+        ).getOffsetToReveal(targetObject, 0).offset;
+        final targetOffset = (revealOffset - inset)
+            .clamp(position.minScrollExtent, position.maxScrollExtent)
+            .toDouble();
+        if (reduceMotion) {
+          scrollController.jumpTo(targetOffset);
+        } else {
+          await scrollController.animateTo(
+            targetOffset,
+            duration: AppMotion.standard,
+            curve: AppMotion.enter,
+          );
+        }
         return true;
       }
 
@@ -8289,7 +8451,12 @@ class _TranscriptViewState extends State<TranscriptView> {
               constraints: BoxConstraints(minHeight: constraints.maxHeight),
               child: Padding(
                 // Extra bottom inset so empty-state chips clear the floating composer.
-                padding: const EdgeInsets.fromLTRB(0, 1, 0, 188),
+                padding: EdgeInsets.fromLTRB(
+                  0,
+                  max(1.0, widget.topPadding - 7),
+                  0,
+                  188,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.start,
@@ -8307,8 +8474,8 @@ class _TranscriptViewState extends State<TranscriptView> {
                       workspaceName == null
                           ? '从下方输入，或先点一个快捷任务'
                           : '从下方输入指令，或先点一个快捷任务',
-                      style: const TextStyle(
-                        color: AppColors.muted,
+                      style: TextStyle(
+                        color: AppPalette.of(context).muted,
                         fontSize: 14,
                       ),
                     ),
@@ -8362,9 +8529,30 @@ class _TranscriptViewState extends State<TranscriptView> {
     scheduleJump();
     scheduleBottomJump(force: !didInitialBottomJump);
     final items = <Object>[
-      ..._groupTranscriptRows(visibleMessages),
+      ..._groupTranscriptRows(visibleMessages, running: widget.running),
       ...widget.pendingPermissions,
+      if (widget.workspaceChangeEcho != null &&
+          widget.onOpenWorkspaceChanges != null)
+        widget.workspaceChangeEcho!,
     ];
+    final lastUserIndex = widget.messages.lastIndexWhere(
+      (message) => message.role == MessageRole.user,
+    );
+    final lastAssistantIndex = widget.messages.lastIndexWhere(
+      (message) => message.role == MessageRole.assistant,
+    );
+    final streamingAssistantIndex =
+        widget.running && lastAssistantIndex > lastUserIndex
+        ? lastAssistantIndex
+        : -1;
+    final jump = widget.jumpRequest;
+    final revealRawIndex =
+        highlightedRawIndex ??
+        (jump != null &&
+                jump.sessionId == widget.activeSessionId &&
+                jump.generation != handledJumpGeneration
+            ? resolveTargetRawIndex(jump)
+            : null);
     final workspaceDir = widget.session?.workspaceDir;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     final newOutputLabel =
@@ -8380,7 +8568,7 @@ class _TranscriptViewState extends State<TranscriptView> {
               controller: scrollController,
               // Tall bottom padding: last bubble can rest above the dock, while
               // earlier lines still scroll *under* the floating composer.
-              padding: const EdgeInsets.fromLTRB(0, 8, 0, 188),
+              padding: EdgeInsets.fromLTRB(0, widget.topPadding, 0, 188),
               // Keep prefetch small so long markdown rows are not all built at once.
               cacheExtent: 180,
               addAutomaticKeepAlives: false,
@@ -8400,6 +8588,7 @@ class _TranscriptViewState extends State<TranscriptView> {
                     activeSessionId: widget.activeSessionId,
                     runStartedAt: widget.runStartedAt,
                     searchHighlighted: highlighted,
+                    isStreaming: item.rawIndex == streamingAssistantIndex,
                   );
                   if (highlighted) {
                     row = Semantics(
@@ -8408,12 +8597,44 @@ class _TranscriptViewState extends State<TranscriptView> {
                       child: row,
                     );
                   }
-                } else if (item is _ActivityGroupRow) {
-                  row = ActivityTimelineCard(
-                    key: ValueKey('activity-timeline-${item.rawIndex}'),
-                    activities: [
-                      for (final groupRow in item.rows) groupRow.message,
-                    ],
+                } else if (item is _ProcessGroupRow) {
+                  row = _TranscriptProcessBlock(
+                    key: ValueKey('transcript-process-${item.rawIndex}'),
+                    group: item,
+                    revealRawIndex: revealRawIndex,
+                    buildPart: (part) {
+                      final highlighted = highlightedRawIndex == part.rawIndex;
+                      Widget child = MessageBlock(
+                        key: ValueKey(
+                          transcriptRowKey(part.message, part.rawIndex),
+                        ),
+                        message: part.message,
+                        session: widget.session,
+                        activeSessionId: widget.activeSessionId,
+                        runStartedAt: widget.runStartedAt,
+                        searchHighlighted: highlighted,
+                        isStreaming: part.rawIndex == streamingAssistantIndex,
+                      );
+                      if (highlighted) {
+                        child = Semantics(
+                          key: ValueKey(
+                            'transcript-search-hit-${part.rawIndex}',
+                          ),
+                          label: '搜索命中消息',
+                          child: child,
+                        );
+                      }
+                      return SizedBox(
+                        key: rowKeys[part.rawIndex],
+                        child: child,
+                      );
+                    },
+                  );
+                } else if (item is WorkspaceChangeEcho) {
+                  row = WorkspaceChangeEchoChip(
+                    key: const ValueKey('workspace-change-echo'),
+                    echo: item,
+                    onTap: widget.onOpenWorkspaceChanges!,
                   );
                 } else {
                   final request = item as RemotePermissionRequest;
@@ -8431,7 +8652,7 @@ class _TranscriptViewState extends State<TranscriptView> {
                 }
                 Object gapItem(Object value) {
                   if (value is _VisibleTranscriptRow) return value.message;
-                  if (value is _ActivityGroupRow) return value.message;
+                  if (value is _ProcessGroupRow) return value.message;
                   return value;
                 }
 
@@ -8480,7 +8701,7 @@ class _TranscriptViewState extends State<TranscriptView> {
                       child: ExcludeSemantics(
                         child: SignalPressEffect(
                           child: Material(
-                            color: AppColors.ink,
+                            color: AppPalette.of(context).ink,
                             borderRadius: BorderRadius.circular(AppRadii.pill),
                             child: InkWell(
                               onTap: scrollToLatest,
@@ -8495,16 +8716,16 @@ class _TranscriptViewState extends State<TranscriptView> {
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    const Icon(
+                                    Icon(
                                       LucideIcons.arrowDown,
-                                      size: 16,
-                                      color: AppColors.onCta,
+                                      size: AppIconSizes.inline,
+                                      color: AppPalette.of(context).onCta,
                                     ),
                                     const SizedBox(width: 7),
                                     Text(
                                       newOutputLabel,
-                                      style: const TextStyle(
-                                        color: AppColors.onCta,
+                                      style: TextStyle(
+                                        color: AppPalette.of(context).onCta,
                                         fontSize: 12,
                                         height: 1.25,
                                         fontWeight: FontWeight.w700,
@@ -8576,7 +8797,10 @@ class PermissionRequestCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final enabled = connected && !responding;
-    final riskTone = permissionRiskTone(request.toolName);
+    final riskTone = permissionRiskTone(
+      request.toolName,
+      AppPalette.of(context),
+    );
     final summary = request.detail?.trim().isNotEmpty == true
         ? request.detail!.trim()
         : (request.description?.trim().isNotEmpty == true
@@ -8589,9 +8813,9 @@ class PermissionRequestCard extends StatelessWidget {
       key: ValueKey('permission-request-${request.requestId}'),
       width: double.infinity,
       decoration: BoxDecoration(
-        color: AppColors.surfaceElevated,
+        color: AppPalette.of(context).surfaceElevated,
         borderRadius: BorderRadius.circular(AppRadii.surface),
-        border: Border.all(color: AppColors.line),
+        border: Border.all(color: AppPalette.of(context).line),
       ),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
@@ -8605,22 +8829,26 @@ class PermissionRequestCard extends StatelessWidget {
                   width: AppSizes.iconControl,
                   height: AppSizes.iconControl,
                   decoration: BoxDecoration(
-                    color: AppColors.control,
+                    color: AppPalette.of(context).control,
                     borderRadius: BorderRadius.circular(AppRadii.control),
                   ),
                   alignment: Alignment.center,
-                  child: Icon(LucideIcons.shield, size: 20, color: riskTone),
+                  child: Icon(
+                    LucideIcons.shield,
+                    size: AppIconSizes.control,
+                    color: riskTone,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     _headline,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 18,
                       height: 1.25,
                       fontWeight: FontWeight.w700,
                       letterSpacing: -0.28,
-                      color: AppColors.ink,
+                      color: AppPalette.of(context).ink,
                     ),
                   ),
                 ),
@@ -8638,14 +8866,15 @@ class PermissionRequestCard extends StatelessWidget {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: AppColors.control,
+                color: AppPalette.of(context).control,
                 borderRadius: BorderRadius.circular(AppRadii.compact),
-                border: Border.all(color: AppColors.line),
+                border: Border.all(color: AppPalette.of(context).line),
               ),
-              child: SelectableText(
+              child: WorkspacePathText(
                 summary,
+                selectable: false,
                 style: TextStyle(
-                  color: AppColors.ink,
+                  color: AppPalette.of(context).ink,
                   fontFamily: request.detail == null
                       ? AppTypography.fontFamily
                       : AppTypography.codeFontFamily,
@@ -8664,8 +8893,8 @@ class PermissionRequestCard extends StatelessWidget {
               const SizedBox(height: 10),
               Text(
                 description,
-                style: const TextStyle(
-                  color: AppColors.muted,
+                style: TextStyle(
+                  color: AppPalette.of(context).muted,
                   fontSize: 13,
                   height: 1.45,
                 ),
@@ -8682,8 +8911,8 @@ class PermissionRequestCard extends StatelessWidget {
               }(),
               style: TextStyle(
                 color: workspaceDir?.trim().isNotEmpty == true
-                    ? AppColors.ink
-                    : AppColors.muted,
+                    ? AppPalette.of(context).ink
+                    : AppPalette.of(context).muted,
                 fontFamily: workspaceDir?.trim().isNotEmpty == true
                     ? AppTypography.codeFontFamily
                     : AppTypography.fontFamily,
@@ -8710,8 +8939,8 @@ class PermissionRequestCard extends StatelessWidget {
               const SizedBox(height: 6),
               Text(
                 reason,
-                style: const TextStyle(
-                  color: AppColors.muted,
+                style: TextStyle(
+                  color: AppPalette.of(context).muted,
                   fontSize: 12,
                   height: 1.4,
                 ),
@@ -8726,14 +8955,10 @@ class PermissionRequestCard extends StatelessWidget {
                 child: FilledButton(
                   onPressed: enabled ? onAllow : null,
                   style: FilledButton.styleFrom(
-                    backgroundColor: riskTone == AppColors.danger
-                        ? AppColors.warning
-                        : AppColors.cta,
-                    foregroundColor: riskTone == AppColors.danger
-                        ? AppColors.surfaceElevated
-                        : AppColors.onCta,
-                    disabledBackgroundColor: AppColors.control,
-                    disabledForegroundColor: AppColors.inactive,
+                    backgroundColor: AppPalette.of(context).cta,
+                    foregroundColor: AppPalette.of(context).onCta,
+                    disabledBackgroundColor: AppPalette.of(context).control,
+                    disabledForegroundColor: AppPalette.of(context).inactive,
                     minimumSize: const Size.fromHeight(52),
                   ),
                   child: const Text('仅本次允许'),
@@ -8749,9 +8974,9 @@ class PermissionRequestCard extends StatelessWidget {
                 child: OutlinedButton(
                   onPressed: enabled ? onDeny : null,
                   style: OutlinedButton.styleFrom(
-                    foregroundColor: AppColors.ink,
-                    backgroundColor: AppColors.surface,
-                    side: const BorderSide(color: AppColors.lineStrong),
+                    foregroundColor: AppPalette.of(context).ink,
+                    backgroundColor: AppPalette.of(context).surface,
+                    side: BorderSide(color: AppPalette.of(context).lineStrong),
                     minimumSize: const Size.fromHeight(48),
                   ),
                   child: const Text('拒绝并返回'),
@@ -8768,7 +8993,10 @@ class PermissionRequestCard extends StatelessWidget {
 /// Shared risk semantics for permission requests. Command execution and
 /// file mutation can change the desktop host, so they carry danger weight;
 /// read-only tools stay calm. Matches the card's impact copy (_impactLabel).
-Color permissionRiskTone(String toolName) {
+Color permissionRiskTone(
+  String toolName, [
+  AppPalette colors = AppPalette.light,
+]) {
   final tool = toolName.toLowerCase();
   final mutating =
       tool.contains('write') ||
@@ -8776,14 +9004,14 @@ Color permissionRiskTone(String toolName) {
       tool.contains('bash') ||
       tool.contains('shell') ||
       tool.contains('command');
-  if (mutating) return AppColors.danger;
+  if (mutating) return colors.danger;
   final reading =
       tool.contains('read') ||
       tool.contains('glob') ||
       tool.contains('grep') ||
       tool.contains('search') ||
       tool.contains('list');
-  return reading ? AppColors.warning : AppColors.accentStrong;
+  return reading ? colors.warning : colors.accentStrong;
 }
 
 class _PermissionSectionLabel extends StatelessWidget {
@@ -8795,8 +9023,8 @@ class _PermissionSectionLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Text(
       text,
-      style: const TextStyle(
-        color: AppColors.muted,
+      style: TextStyle(
+        color: AppPalette.of(context).muted,
         fontSize: 12,
         fontWeight: FontWeight.w600,
         height: 1.3,
@@ -8808,14 +9036,17 @@ class _PermissionSectionLabel extends StatelessWidget {
 String transcriptRowKey(TranscriptMessage message, int index) {
   final activityId = message.activityId;
   if (activityId != null && activityId.isNotEmpty) {
-    return 'act-$activityId';
+    return 'act-$index-$activityId';
   }
   // Index + role keeps identity stable while streaming only mutates last row.
   return 'msg-$index-${message.role.name}';
 }
 
-Color transcriptSearchHighlightFill(Color base) {
-  return Color.alphaBlend(AppColors.accent.withValues(alpha: 0.18), base);
+Color transcriptSearchHighlightFill(
+  Color base, {
+  Color accent = AppColors.accent,
+}) {
+  return Color.alphaBlend(accent.withValues(alpha: 0.18), base);
 }
 
 double transcriptGapBetween(Object current, Object next) {
@@ -8824,8 +9055,8 @@ double transcriptGapBetween(Object current, Object next) {
     return 8;
   }
   // Two-tier rhythm: a new round breathes wide, work inside one turn binds tight.
-  if (next.role == MessageRole.user) return 14;
-  if (current.role == MessageRole.user) return 9;
+  if (next.role == MessageRole.user) return 20;
+  if (current.role == MessageRole.user) return 12;
   if (current.role == MessageRole.assistant &&
       next.role == MessageRole.activity) {
     return 12;
@@ -8842,16 +9073,14 @@ const TextStyle _kAssistantPlainStyle = TextStyle(
   fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
   height: AppTypography.assistantBodyHeight,
   fontSize: AppTypography.assistantBodySize,
-  color: AppColors.ink,
   letterSpacing: 0.1,
 );
 
 const TextStyle _kAssistantCodeStyle = TextStyle(
   fontFamily: AppTypography.codeFontFamily,
   fontFamilyFallback: AppTypography.codeFontFamilyFallback,
-  fontSize: AppTypography.assistantBodySize,
-  height: AppTypography.assistantBodyHeight,
-  color: AppColors.ink,
+  fontSize: 13.5,
+  height: 1.45,
 );
 
 /// Shared once — rebuilding MarkdownStyleSheet.fromTheme per bubble is costly
@@ -8861,17 +9090,22 @@ const TextStyle _kAssistantCodeStyle = TextStyle(
 final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
   p: _kAssistantPlainStyle,
   pPadding: EdgeInsets.zero,
-  a: const TextStyle(color: AppColors.accentStrong),
+  a: const TextStyle(
+    color: AppColors.link,
+    fontWeight: FontWeight.w500,
+    decoration: TextDecoration.underline,
+    decorationThickness: 1,
+  ),
   code: _kAssistantCodeStyle,
   h1: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
-    fontSize: 21,
+    fontSize: 20,
     fontWeight: FontWeight.w700,
     height: 1.3,
     color: AppColors.ink,
   ),
-  h1Padding: const EdgeInsets.only(top: 12, bottom: 4),
+  h1Padding: const EdgeInsets.only(top: 18, bottom: 6),
   h2: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
@@ -8880,7 +9114,7 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
     height: 1.35,
     color: AppColors.ink,
   ),
-  h2Padding: const EdgeInsets.only(top: 10, bottom: 4),
+  h2Padding: const EdgeInsets.only(top: 16, bottom: 6),
   h3: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
@@ -8889,28 +9123,28 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
     height: 1.4,
     color: AppColors.ink,
   ),
-  h3Padding: const EdgeInsets.only(top: 8, bottom: 4),
+  h3Padding: const EdgeInsets.only(top: 14, bottom: 4),
   h4: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: FontWeight.w700,
     height: 1.4,
     color: AppColors.ink,
   ),
-  h4Padding: const EdgeInsets.only(top: 8, bottom: 4),
+  h4Padding: const EdgeInsets.only(top: 12, bottom: 4),
   h5: _kAssistantPlainStyle.copyWith(fontWeight: FontWeight.w700, height: 1.45),
-  h5Padding: const EdgeInsets.only(top: 8, bottom: 4),
+  h5Padding: const EdgeInsets.only(top: 10, bottom: 4),
   h6: _kAssistantPlainStyle.copyWith(fontWeight: FontWeight.w700, height: 1.45),
-  h6Padding: const EdgeInsets.only(top: 8, bottom: 4),
+  h6Padding: const EdgeInsets.only(top: 10, bottom: 4),
   em: const TextStyle(fontStyle: FontStyle.italic),
   strong: const TextStyle(fontWeight: FontWeight.w700),
   del: const TextStyle(decoration: TextDecoration.lineThrough),
   blockquote: _kAssistantPlainStyle,
   img: _kAssistantPlainStyle,
   checkbox: _kAssistantPlainStyle,
-  blockSpacing: 8,
-  listIndent: 24,
+  blockSpacing: 12,
+  listIndent: 22,
   listBullet: _kAssistantPlainStyle,
   listBulletPadding: const EdgeInsets.only(right: 8),
   tableHead: _kAssistantPlainStyle.copyWith(fontWeight: FontWeight.w600),
@@ -8921,23 +9155,67 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
   // here even though Flex would be cheaper.
   tableColumnWidth: const IntrinsicColumnWidth(),
   tableCellsPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-  blockquotePadding: const EdgeInsets.fromLTRB(12, 8, 10, 8),
+  blockquotePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
   blockquoteDecoration: const BoxDecoration(
-    border: Border(left: BorderSide(color: AppColors.accent, width: 1)),
+    border: Border(left: BorderSide(color: AppColors.lineStrong, width: 1)),
   ),
   horizontalRuleDecoration: const BoxDecoration(
     border: Border(top: BorderSide(color: AppColors.line)),
   ),
 );
 
+final _assistantMarkdownThemes = <Brightness, MarkdownStyleSheet>{};
+
+MarkdownStyleSheet assistantMarkdownStyleSheet(BuildContext context) {
+  final colors = AppPalette.of(context);
+  return _assistantMarkdownThemes.putIfAbsent(colors.brightness, () {
+    final base = kAssistantMarkdownStyleSheet;
+    final body = _kAssistantPlainStyle.copyWith(color: colors.ink);
+    return base.copyWith(
+      p: body,
+      a: base.a!.copyWith(color: colors.link),
+      code: _kAssistantCodeStyle.copyWith(
+        color: colors.ink,
+        backgroundColor: colors.control,
+      ),
+      h1: base.h1!.copyWith(color: colors.ink),
+      h2: base.h2!.copyWith(color: colors.ink),
+      h3: base.h3!.copyWith(color: colors.ink),
+      h4: base.h4!.copyWith(color: colors.ink),
+      h5: base.h5!.copyWith(color: colors.ink),
+      h6: base.h6!.copyWith(color: colors.ink),
+      blockquote: body.copyWith(color: colors.muted),
+      img: body,
+      checkbox: body,
+      listBullet: body,
+      tableHead: body.copyWith(fontWeight: FontWeight.w600),
+      tableBody: body,
+      blockquoteDecoration: BoxDecoration(
+        border: Border(left: BorderSide(color: colors.lineStrong, width: 2)),
+      ),
+      horizontalRuleDecoration: BoxDecoration(
+        border: Border(top: BorderSide(color: colors.line)),
+      ),
+    );
+  });
+}
+
 /// Replaces the default `pre` rendering with a card that carries a language
 /// label and a copy button (RikkaHub-style code block toolbar).
+class _MarkdownPreGate {
+  int depth = 0;
+}
+
 class _CodeBlockBuilder extends MarkdownElementBuilder {
+  _CodeBlockBuilder(this.preGate);
+
+  final _MarkdownPreGate preGate;
   String? language;
   String code = '';
 
   @override
   void visitElementBefore(md.Element element) {
+    preGate.depth += 1;
     language = null;
     code = '';
     final children = element.children;
@@ -8965,7 +9243,11 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
     TextStyle? preferredStyle,
     TextStyle? parentStyle,
   ) {
-    return _CodeBlockCard(language: language, code: trimCodeBlock(code));
+    try {
+      return _CodeBlockCard(language: language, code: trimCodeBlock(code));
+    } finally {
+      preGate.depth -= 1;
+    }
   }
 
   static String trimCodeBlock(String raw) {
@@ -8975,11 +9257,74 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
   }
 }
 
+class _WorkspacePathMarkdownBuilder extends MarkdownElementBuilder {
+  _WorkspacePathMarkdownBuilder(this.preGate);
+
+  final _MarkdownPreGate preGate;
+
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    if (element.tag == 'code') {
+      if (preGate.depth > 0) return null;
+      final cls = element.attributes['class'] ?? '';
+      if (cls.startsWith('language-')) return null;
+      if (element.textContent.contains('\n')) return null;
+    } else if (element.children != null &&
+        element.children!.any((node) => node is md.Element)) {
+      return null;
+    }
+    final text = element.textContent;
+    if (text.trim().isEmpty) return null;
+    final portal = WorkspacePortal.of(context);
+    if (portal?.onOpenPath == null) return null;
+    final matches = findWorkspacePaths(
+      text,
+      workspaceDir: portal?.workspaceDir,
+    );
+    if (matches.isEmpty) {
+      return null;
+    }
+    // Inline Markdown builders are inserted as WidgetSpans. A long path can
+    // wrap inside that child and paint over the next Markdown line, so leave
+    // long paths in the parent RichText's native layout.
+    // ponytail: long inline Markdown paths lose the path tap affordance; use a
+    // custom span renderer if that interaction becomes necessary.
+    if (matches.any(
+      (match) => text.substring(match.start, match.end).length > 20,
+    )) {
+      return null;
+    }
+    final style =
+        preferredStyle ??
+        parentStyle ??
+        (element.tag == 'code' ? _kAssistantCodeStyle : _kAssistantPlainStyle);
+    return Text.rich(
+      workspacePathInlineSpan(
+        text,
+        style: style,
+        linkColor: AppPalette.of(context).link,
+        workspaceDir: portal?.workspaceDir,
+        onOpenPath: (path) => WorkspacePortal.openPath(context, path),
+      ),
+    );
+  }
+}
+
 class _CodeBlockCard extends StatefulWidget {
-  const _CodeBlockCard({this.language, required this.code});
+  const _CodeBlockCard({
+    this.language,
+    required this.code,
+    this.fullScreen = false,
+  });
 
   final String? language;
   final String code;
+  final bool fullScreen;
 
   @override
   State<_CodeBlockCard> createState() => _CodeBlockCardState();
@@ -8988,11 +9333,143 @@ class _CodeBlockCard extends StatefulWidget {
 class _CodeBlockCardState extends State<_CodeBlockCard> {
   Timer? copiedResetTimer;
   bool copied = false;
+  bool wrapLines = false;
+  double fontSize = _kAssistantCodeStyle.fontSize!;
+  late final ScrollController verticalController = ScrollController();
+  late final ScrollController horizontalController = ScrollController();
 
   @override
   void dispose() {
     copiedResetTimer?.cancel();
+    if (widget.fullScreen) {
+      verticalController.dispose();
+      horizontalController.dispose();
+    }
     super.dispose();
+  }
+
+  void openFullScreen() {
+    FocusManager.instance.primaryFocus?.unfocus();
+    Navigator.of(context).push(
+      AppMaterialPageRoute<void>(
+        reduceMotion: MediaQuery.disableAnimationsOf(context),
+        builder: (_) => _CodeBlockCard(
+          language: widget.language,
+          code: widget.code,
+          fullScreen: true,
+        ),
+      ),
+    );
+  }
+
+  Widget buildCodeText() {
+    return Text(
+      widget.code,
+      key: widget.fullScreen ? const ValueKey('code-reader-text') : null,
+      softWrap: widget.fullScreen && wrapLines,
+      style: _kAssistantCodeStyle.copyWith(
+        color: AppPalette.of(context).ink,
+        fontSize: widget.fullScreen ? fontSize : null,
+      ),
+    );
+  }
+
+  Widget buildFullScreen() {
+    final palette = AppPalette.of(context);
+    return Scaffold(
+      key: const ValueKey('code-reader-page'),
+      backgroundColor: palette.paper,
+      appBar: AppBar(
+        backgroundColor: palette.paper,
+        surfaceTintColor: Colors.transparent,
+        leading: IconButton(
+          key: const ValueKey('code-reader-back'),
+          tooltip: '返回对话',
+          onPressed: () => Navigator.pop(context),
+          icon: const SmartIcon(LucideIcons.arrowLeft),
+        ),
+        title: Text(
+          widget.language ?? '代码',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        actions: [
+          IconButton(
+            key: const ValueKey('code-reader-wrap'),
+            tooltip: '自动换行',
+            isSelected: wrapLines,
+            onPressed: () => setState(() => wrapLines = !wrapLines),
+            icon: const SmartIcon(LucideIcons.arrowLeftRight),
+            selectedIcon: const SmartIcon(LucideIcons.wrapText),
+            style: IconButton.styleFrom(
+              backgroundColor: wrapLines ? palette.accentSoft : null,
+              foregroundColor: palette.ink,
+            ),
+          ),
+          PopupMenuButton<double>(
+            key: const ValueKey('code-reader-font-size'),
+            tooltip: '代码字号',
+            icon: const SmartIcon(LucideIcons.type),
+            onSelected: (value) => setState(() => fontSize = value),
+            itemBuilder: (_) => [
+              for (final size in <double>{
+                12,
+                _kAssistantCodeStyle.fontSize!,
+                16,
+                18,
+              }.toList()..sort())
+                CheckedPopupMenuItem<double>(
+                  key: ValueKey('code-reader-font-${size.toInt()}'),
+                  value: size,
+                  checked: fontSize == size,
+                  child: Text('${size.toInt()} pt'),
+                ),
+            ],
+          ),
+          IconButton(
+            key: const ValueKey('code-reader-copy'),
+            tooltip: copied ? '已复制' : '复制代码',
+            onPressed: copyCode,
+            icon: SmartIcon(copied ? LucideIcons.check : LucideIcons.copy),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: SelectionArea(
+          child: LayoutBuilder(
+            builder: (context, constraints) => Scrollbar(
+              controller: verticalController,
+              child: SingleChildScrollView(
+                key: const ValueKey('code-reader-vertical-scroll'),
+                controller: verticalController,
+                padding: const EdgeInsets.all(16),
+                child: wrapLines
+                    ? SizedBox(
+                        width: constraints.maxWidth - 32,
+                        child: buildCodeText(),
+                      )
+                    : Scrollbar(
+                        controller: horizontalController,
+                        notificationPredicate: (notification) =>
+                            notification.depth == 0,
+                        child: SingleChildScrollView(
+                          key: const ValueKey('code-reader-horizontal-scroll'),
+                          controller: horizontalController,
+                          scrollDirection: Axis.horizontal,
+                          child: ConstrainedBox(
+                            constraints: BoxConstraints(
+                              minWidth: constraints.maxWidth - 32,
+                            ),
+                            child: buildCodeText(),
+                          ),
+                        ),
+                      ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> copyCode() async {
@@ -9007,70 +9484,87 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.fullScreen) return buildFullScreen();
     return Container(
       key: const ValueKey('code-block-card'),
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: AppColors.control,
+        color: AppPalette.of(context).control,
         borderRadius: BorderRadius.circular(AppRadii.control),
+        border: Border.all(color: AppPalette.of(context).line, width: 0.8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            color: AppColors.surface,
+            color: AppPalette.of(context).surface,
             padding: const EdgeInsets.fromLTRB(12, 5, 6, 5),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    widget.language ?? '代码',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.muted,
-                      fontFamily: AppTypography.codeFontFamily,
-                      fontFamilyFallback: AppTypography.codeFontFamilyFallback,
+            child: SelectionContainer.disabled(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      widget.language ?? '代码',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: AppPalette.of(context).muted,
+                        fontFamily: AppTypography.codeFontFamily,
+                        fontFamilyFallback:
+                            AppTypography.codeFontFamilyFallback,
+                      ),
                     ),
                   ),
-                ),
-                AnimatedSwitcher(
-                  duration: MediaQuery.disableAnimationsOf(context)
-                      ? Duration.zero
-                      : const Duration(milliseconds: 150),
-                  transitionBuilder: (child, animation) =>
-                      FadeTransition(opacity: animation, child: child),
-                  child: copied
-                      ? const Text(
-                          '已复制',
-                          key: ValueKey('code-copied-label'),
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: AppColors.accentStrong,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        )
-                      : const SizedBox.shrink(),
-                ),
-                IconButton(
-                  key: const ValueKey('code-copy-button'),
-                  tooltip: '复制代码',
-                  visualDensity: VisualDensity.compact,
-                  iconSize: 15,
-                  color: AppColors.muted,
-                  onPressed: copyCode,
-                  icon: Icon(copied ? LucideIcons.check : LucideIcons.copy),
-                ),
-              ],
+                  AnimatedSwitcher(
+                    duration: MediaQuery.disableAnimationsOf(context)
+                        ? Duration.zero
+                        : const Duration(milliseconds: 150),
+                    transitionBuilder: (child, animation) =>
+                        FadeTransition(opacity: animation, child: child),
+                    child: copied
+                        ? Text(
+                            '已复制',
+                            key: ValueKey('code-copied-label'),
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: AppPalette.of(context).success,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          )
+                        : const SizedBox.shrink(),
+                  ),
+                  IconButton(
+                    key: const ValueKey('code-expand-button'),
+                    tooltip: '全屏阅读代码',
+                    onPressed: openFullScreen,
+                    iconSize: 18,
+                    color: AppPalette.of(context).muted,
+                    icon: const SmartIcon(LucideIcons.maximize2),
+                  ),
+                  IconButton(
+                    key: const ValueKey('code-copy-button'),
+                    tooltip: '复制代码',
+                    visualDensity: VisualDensity.compact,
+                    iconSize: 15,
+                    color: copied
+                        ? AppPalette.of(context).success
+                        : AppPalette.of(context).muted,
+                    onPressed: copyCode,
+                    icon: SmartIcon(
+                      copied ? LucideIcons.check : LucideIcons.copy,
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            child: Text(widget.code, style: _kAssistantCodeStyle),
+            child: buildCodeText(),
           ),
         ],
       ),
@@ -9083,7 +9577,6 @@ const TextStyle _kUserBubbleStyle = TextStyle(
   fontFamilyFallback: AppTypography.fontFamilyFallback,
   height: AppTypography.userBodyHeight,
   fontSize: AppTypography.userBodySize,
-  color: AppColors.ink,
   fontWeight: FontWeight.w400,
 );
 
@@ -9108,6 +9601,49 @@ Uri? searchSourceUri(String? href) {
     return null;
   }
   return uri;
+}
+
+class MarkdownSourceLink {
+  const MarkdownSourceLink({required this.uri, required this.label});
+
+  final Uri uri;
+  final String label;
+}
+
+List<MarkdownSourceLink> extractMarkdownSourceLinks(String data) {
+  final document = md.Document(
+    extensionSet: md.ExtensionSet.gitHubFlavored,
+    encodeHtml: false,
+  );
+  final sources = <Uri, MarkdownSourceLink>{};
+
+  void visit(md.Node node) {
+    if (node is! md.Element ||
+        node.tag == 'pre' ||
+        node.tag == 'code' ||
+        node.tag == 'img') {
+      return;
+    }
+    if (node.tag == 'a') {
+      final uri = searchSourceUri(node.attributes['href']);
+      final label = node.textContent.trim();
+      if (uri != null && label.isNotEmpty) {
+        sources.putIfAbsent(
+          uri,
+          () => MarkdownSourceLink(uri: uri, label: label),
+        );
+      }
+      return;
+    }
+    for (final child in node.children ?? const <md.Node>[]) {
+      visit(child);
+    }
+  }
+
+  for (final node in document.parseLines(const LineSplitter().convert(data))) {
+    visit(node);
+  }
+  return List.unmodifiable(sources.values);
 }
 
 Future<void> openSearchSource(BuildContext context, String? href) async {
@@ -9138,10 +9674,10 @@ class _SystemNotice extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       child: Row(
         children: [
-          const Expanded(
+          Expanded(
             child: SizedBox(
               height: 1,
-              child: ColoredBox(color: AppColors.line),
+              child: ColoredBox(color: AppPalette.of(context).line),
             ),
           ),
           Flexible(
@@ -9150,22 +9686,60 @@ class _SystemNotice extends StatelessWidget {
               child: SelectableText(
                 text,
                 textAlign: TextAlign.center,
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
                   height: 1.4,
-                  color: AppColors.muted,
+                  color: AppPalette.of(context).muted,
                 ),
               ),
             ),
           ),
-          const Expanded(
+          Expanded(
             child: SizedBox(
               height: 1,
-              child: ColoredBox(color: AppColors.line),
+              child: ColoredBox(color: AppPalette.of(context).line),
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+Future<void> _copyAssistantReply(String text) async {
+  await Clipboard.setData(ClipboardData(text: text));
+  await HapticFeedback.selectionClick();
+}
+
+class AssistantSelectionArea extends StatelessWidget {
+  const AssistantSelectionArea({
+    super.key,
+    required this.text,
+    required this.child,
+  });
+
+  final String text;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return SelectionArea(
+      contextMenuBuilder: (context, state) {
+        return AdaptiveTextSelectionToolbar.buttonItems(
+          anchors: state.contextMenuAnchors,
+          buttonItems: [
+            ContextMenuButtonItem(
+              label: '复制全部',
+              onPressed: () {
+                ContextMenuController.removeAny();
+                unawaited(_copyAssistantReply(text));
+              },
+            ),
+            ...state.contextMenuButtonItems,
+          ],
+        );
+      },
+      child: child,
     );
   }
 }
@@ -9178,6 +9752,7 @@ class MessageBlock extends StatelessWidget {
     this.activeSessionId,
     this.runStartedAt,
     this.searchHighlighted = false,
+    this.isStreaming = false,
   });
 
   final TranscriptMessage message;
@@ -9185,6 +9760,7 @@ class MessageBlock extends StatelessWidget {
   final String? activeSessionId;
   final DateTime? runStartedAt;
   final bool searchHighlighted;
+  final bool isStreaming;
 
   @override
   Widget build(BuildContext context) {
@@ -9198,16 +9774,21 @@ class MessageBlock extends StatelessWidget {
 
     final isUser = message.role == MessageRole.user;
     if (!isUser) {
-      if (message.text.trim().isEmpty) {
+      final text = normalizeAssistantCitations(
+        message.text,
+        isStreaming: isStreaming,
+      );
+      if (text.trim().isEmpty) {
         return const SizedBox.shrink();
       }
-      // Plain text stays Text. Markdown (including while streaming) uses
-      // MarkdownBody so lists/headings/code don't pop in when the turn stops.
+      // Defer parsing a growing Markdown reply until its turn is complete.
       final Widget assistantBody;
-      if (assistantTextLooksPlain(message.text)) {
-        assistantBody = Text(message.text, style: _kAssistantPlainStyle);
+      if (isStreaming) {
+        assistantBody = Text(text, style: _kAssistantPlainStyle);
+      } else if (assistantTextLooksPlain(text)) {
+        assistantBody = WorkspacePathText(text, style: _kAssistantPlainStyle);
       } else {
-        assistantBody = _CachedMarkdownBody(data: message.text);
+        assistantBody = _CachedMarkdownBody(data: text);
       }
       return Semantics(
         container: true,
@@ -9215,12 +9796,12 @@ class MessageBlock extends StatelessWidget {
         child: AssistantBubbleFrame(
           bubbleKey: const ValueKey('assistant-message'),
           searchHighlighted: searchHighlighted,
-          child: assistantBody,
+          child: AssistantSelectionArea(text: text, child: assistantBody),
         ),
       );
     }
 
-    final maxWidth = MediaQuery.sizeOf(context).width * 0.88;
+    final maxWidth = MediaQuery.sizeOf(context).width * 0.84;
     return Semantics(
       container: true,
       label: '你',
@@ -9232,15 +9813,17 @@ class MessageBlock extends StatelessWidget {
             key: const ValueKey('user-message'),
             decoration: BoxDecoration(
               color: searchHighlighted
-                  ? transcriptSearchHighlightFill(AppColors.userBubble)
-                  : AppColors.userBubble,
+                  ? transcriptSearchHighlightFill(
+                      AppPalette.of(context).userBubble,
+                      accent: AppPalette.of(context).accent,
+                    )
+                  : AppPalette.of(context).userBubble,
               borderRadius: const BorderRadius.all(
                 Radius.circular(AppRadii.bubble),
               ),
-              border: Border.all(color: AppColors.bubbleOutline),
             ),
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              padding: const EdgeInsets.fromLTRB(16, 11, 16, 11),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.min,
@@ -9280,6 +9863,10 @@ class _CachedMarkdownBody extends StatefulWidget {
 
 class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
   Widget? cached;
+  String? sourcesData;
+  List<MarkdownSourceLink> sources = const [];
+  String? cachedWorkspaceDir;
+  ValueChanged<String>? cachedOnOpenPath;
 
   @override
   void didUpdateWidget(covariant _CachedMarkdownBody oldWidget) {
@@ -9288,14 +9875,132 @@ class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    cached = null;
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return cached ??= MarkdownBody(
+    Theme.of(context);
+    final portal = WorkspacePortal.of(context);
+    if (cachedWorkspaceDir != portal?.workspaceDir ||
+        cachedOnOpenPath != portal?.onOpenPath) {
+      cachedWorkspaceDir = portal?.workspaceDir;
+      cachedOnOpenPath = portal?.onOpenPath;
+      cached = null;
+    }
+    if (cached != null) return cached!;
+    if (sourcesData != widget.data) {
+      sources = extractMarkdownSourceLinks(widget.data);
+      sourcesData = widget.data;
+    }
+    final preGate = _MarkdownPreGate();
+    final pathBuilder = _WorkspacePathMarkdownBuilder(preGate);
+    final markdown = MarkdownBody(
       data: widget.data,
-      selectable: false,
+      selectable: false, // Parent AssistantSelectionArea owns selection.
       softLineBreak: true,
       onTapLink: (_, href, _) => unawaited(openSearchSource(context, href)),
-      styleSheet: kAssistantMarkdownStyleSheet,
-      builders: <String, MarkdownElementBuilder>{'pre': _CodeBlockBuilder()},
+      styleSheet: assistantMarkdownStyleSheet(context),
+      builders: <String, MarkdownElementBuilder>{
+        'pre': _CodeBlockBuilder(preGate),
+        'code': pathBuilder,
+        'strong': pathBuilder,
+        'em': pathBuilder,
+        'del': pathBuilder,
+      },
+    );
+    if (sources.isEmpty) return cached = markdown;
+    return cached = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        markdown,
+        const SizedBox(height: 12),
+        _MarkdownSourcesBar(sources: sources),
+      ],
+    );
+  }
+}
+
+class _MarkdownSourcesBar extends StatelessWidget {
+  const _MarkdownSourcesBar({required this.sources});
+
+  final List<MarkdownSourceLink> sources;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    return SelectionContainer.disabled(
+      child: Column(
+        key: const ValueKey('markdown-sources-bar'),
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '链接来源 · ${sources.length}',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: palette.muted,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          const SizedBox(height: 4),
+          SingleChildScrollView(
+            key: const ValueKey('markdown-sources-scroll'),
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                for (var index = 0; index < sources.length; index++)
+                  Padding(
+                    padding: EdgeInsets.only(
+                      right: index == sources.length - 1 ? 0 : 8,
+                    ),
+                    child: Tooltip(
+                      message:
+                          sources[index].label == sources[index].uri.toString()
+                          ? sources[index].uri.toString()
+                          : '${sources[index].label}\n${sources[index].uri}',
+                      child: OutlinedButton.icon(
+                        key: ValueKey('markdown-source-$index'),
+                        onPressed: () => unawaited(
+                          openSearchSource(
+                            context,
+                            sources[index].uri.toString(),
+                          ),
+                        ),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: palette.ink,
+                          backgroundColor: palette.control,
+                          side: BorderSide(color: palette.lineStrong),
+                          minimumSize: const Size(0, 48),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(AppRadii.pill),
+                          ),
+                          textStyle: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        icon: const SmartIcon(
+                          LucideIcons.externalLink,
+                          size: AppIconSizes.inline,
+                        ),
+                        label: Text(
+                          '${index + 1} · ${sources[index].uri.host}',
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -9362,7 +10067,7 @@ class RemoteAttachmentTile extends StatelessWidget {
               return DecoratedBox(
                 position: DecorationPosition.foreground,
                 decoration: BoxDecoration(
-                  border: Border.all(color: const Color(0x1A000000)),
+                  border: Border.all(color: AppPalette.of(context).line),
                 ),
                 child: child,
               );
@@ -9399,23 +10104,38 @@ class AttachmentFileTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      constraints: const BoxConstraints(minHeight: 58),
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
+      constraints: const BoxConstraints(minHeight: 64),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: AppColors.porcelainMuted,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: AppColors.line),
+        color: AppPalette.of(context).porcelainMuted,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: AppPalette.of(context).bubbleOutline,
+          width: 0.5,
+        ),
       ),
       child: Row(
         children: [
-          Icon(
-            mimeType == 'application/pdf'
-                ? LucideIcons.fileText
-                : LucideIcons.file,
-            size: 22,
-            color: AppColors.accent,
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: AppPalette.of(context).surface,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: AppPalette.of(context).bubbleOutline,
+                width: 0.5,
+              ),
+            ),
+            child: Icon(
+              mimeType == 'application/pdf'
+                  ? LucideIcons.fileText
+                  : LucideIcons.file,
+              size: AppIconSizes.control,
+              color: AppPalette.of(context).ink,
+            ),
           ),
-          const SizedBox(width: 9),
+          const SizedBox(width: 12),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -9426,13 +10146,16 @@ class AttachmentFileTile extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     fontSize: 14,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   formatAttachmentSize(size),
-                  style: const TextStyle(color: AppColors.muted, fontSize: 12),
+                  style: TextStyle(
+                    color: AppPalette.of(context).muted,
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ),
@@ -9459,29 +10182,23 @@ class AssistantBubbleFrame extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Hug short replies. Long ones wrap at the column (minus this inset) so
-    // the paper plate is not a full-bleed band.
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: DecoratedBox(
-          key: bubbleKey,
-          decoration: BoxDecoration(
-            color: searchHighlighted
-                ? transcriptSearchHighlightFill(AppColors.surfaceElevated)
-                : AppColors.surfaceElevated,
-            borderRadius: const BorderRadius.all(
-              Radius.circular(AppRadii.bubble),
-            ),
-            border: Border.all(color: AppColors.bubbleOutline),
-          ),
-          child: Padding(
-            padding: compact
-                ? const EdgeInsets.fromLTRB(14, 8, 16, 8)
-                : const EdgeInsets.fromLTRB(16, 9, 16, 9),
-            child: child,
-          ),
+    final palette = AppPalette.of(context);
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: DecoratedBox(
+        key: bubbleKey,
+        decoration: BoxDecoration(
+          color: searchHighlighted
+              ? transcriptSearchHighlightFill(
+                  palette.paper,
+                  accent: palette.accent,
+                )
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(AppRadii.compact),
+        ),
+        child: Padding(
+          padding: EdgeInsets.symmetric(vertical: compact ? 6 : 10),
+          child: SizedBox(width: double.infinity, child: child),
         ),
       ),
     );
@@ -9495,9 +10212,10 @@ Map<String, Object> buildPromptMessage({
   required PermissionMode permissionMode,
   required String sessionId,
   required ClaudeModelPreference model,
+  String? codexModel,
   ClaudeEffortPreference effort = ClaudeEffortPreference.automatic,
   SessionEngine engine = SessionEngine.claude,
-  CodexSandboxMode codexSandboxMode = CodexSandboxMode.readOnly,
+  CodexSandboxMode codexSandboxMode = CodexSandboxMode.dangerFullAccess,
 }) {
   final attachments = attachmentIds.toList(growable: false);
   return {
@@ -9512,6 +10230,9 @@ Map<String, Object> buildPromptMessage({
     'sessionId': sessionId,
     if (engine == SessionEngine.claude && model.wireName != null)
       'model': model.wireName!,
+    if (engine == SessionEngine.codex &&
+        normalizeCodexModel(codexModel) != null)
+      'model': normalizeCodexModel(codexModel)!,
     'effort': effort.wireName,
   };
 }
@@ -9524,6 +10245,164 @@ String createPromptId() {
   return '$timestamp-$random';
 }
 
+IconData activityToolIconData(String? toolName, {bool isSkill = false}) {
+  return switch (toolName) {
+    'Skill' => LucideIcons.sparkles,
+    'Bash' => LucideIcons.terminal,
+    'Read' || 'Write' || 'Edit' => LucideIcons.fileCode,
+    'WebSearch' || 'WebFetch' => LucideIcons.globe,
+    'Grep' || 'Glob' => LucideIcons.search,
+    'Task' => LucideIcons.blocks,
+    _ => (isSkill ? LucideIcons.sparkles : LucideIcons.wrench),
+  };
+}
+
+Widget buildActivityIcon(TranscriptMessage activity, BuildContext context) {
+  final state = activity.activityState;
+  final tool = activity.activityTool;
+  final isSkill =
+      tool == 'Skill' ||
+      activity.text.contains('Skill') ||
+      activity.text.contains('技能');
+
+  if (state == ActivityState.running) {
+    return Container(
+      width: 20,
+      height: 20,
+      decoration: BoxDecoration(
+        color: AppPalette.of(context).accentSoft,
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: SizedBox.square(
+          dimension: AppIconSizes.badge,
+          child: CircularProgressIndicator(
+            strokeWidth: 1.8,
+            value: MediaQuery.disableAnimationsOf(context) ? 0.65 : null,
+            color: AppPalette.of(context).accent,
+          ),
+        ),
+      ),
+    );
+  }
+
+  if (state == ActivityState.error) {
+    return Container(
+      width: 20,
+      height: 20,
+      decoration: BoxDecoration(
+        color: AppPalette.of(context).danger.withValues(alpha: 0.12),
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: Icon(
+          LucideIcons.circleAlert,
+          size: AppIconSizes.badge,
+          color: AppPalette.of(context).danger,
+        ),
+      ),
+    );
+  }
+
+  if (state == ActivityState.stopped) {
+    return Container(
+      width: 20,
+      height: 20,
+      decoration: BoxDecoration(
+        color: AppPalette.of(context).control,
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: Icon(
+          LucideIcons.square,
+          size: AppIconSizes.badge,
+          color: AppPalette.of(context).muted,
+        ),
+      ),
+    );
+  }
+
+  final iconData = activityToolIconData(tool, isSkill: isSkill);
+  final badgeColor = AppPalette.of(context).control;
+  final iconColor = AppPalette.of(context).muted;
+
+  return Container(
+    width: 20,
+    height: 20,
+    decoration: BoxDecoration(color: badgeColor, shape: BoxShape.circle),
+    child: Center(
+      child: SmartIcon(
+        iconData,
+        size: AppIconSizes.badge,
+        color: notoGlyphFor(iconData) == null ? iconColor : null,
+      ),
+    ),
+  );
+}
+
+Widget buildActivityTitle(TranscriptMessage activity, BuildContext context) {
+  final isError = activity.activityState == ActivityState.error;
+  final isSkill =
+      activity.activityTool == 'Skill' ||
+      activity.text.contains('Skill') ||
+      activity.text.contains('技能');
+  final skillName = isSkill ? activity.activityDetail : null;
+
+  final displayText = activity.text == '已调用 Skill'
+      ? '已调用技能'
+      : (activity.text == '正在调用 Skill' ? '正在调用技能' : activity.text);
+
+  return Row(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.center,
+    children: [
+      Flexible(
+        child: Text(
+          displayText,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: isError
+                ? AppPalette.of(context).danger
+                : AppPalette.of(context).ink,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            height: 1.35,
+          ),
+        ),
+      ),
+      if (skillName != null && skillName.trim().isNotEmpty) ...[
+        const SizedBox(width: 6),
+        Flexible(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+            decoration: BoxDecoration(
+              color: AppPalette.of(context).accentSoft,
+              borderRadius: BorderRadius.circular(AppRadii.compact),
+              border: Border.all(
+                color: AppPalette.of(context).accent.withValues(alpha: 0.25),
+                width: 0.6,
+              ),
+            ),
+            child: Text(
+              skillName.trim(),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 11,
+                fontFamily: AppTypography.codeFontFamily,
+                fontFamilyFallback: AppTypography.codeFontFamilyFallback,
+                fontWeight: FontWeight.w600,
+                color: AppPalette.of(context).accentStrong,
+              ),
+            ),
+          ),
+        ),
+      ],
+    ],
+  );
+}
+
 class ActivityBlock extends StatelessWidget {
   const ActivityBlock({super.key, required this.message, this.runStartedAt});
 
@@ -9533,74 +10412,41 @@ class ActivityBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (message.activityKind == ActivityKind.thinking) {
-      // Only live thinking is useful; done/error thinking is noise next to replies.
-      if (message.activityState != ActivityState.running) {
-        return const SizedBox.shrink();
-      }
       return Padding(
         key: const ValueKey('thinking-bubble'),
         padding: const EdgeInsets.fromLTRB(8, 2, 8, 2),
-        child: ThinkingIndicator(
+        child: ThinkingHistoryBlock(
+          message: message,
           initialElapsedSeconds: elapsedSecondsSince(runStartedAt),
         ),
       );
     }
 
+    if (message.activityKind == ActivityKind.tool) {
+      return ActivityTimelineCard(activities: [message]);
+    }
+
     final railTone = switch (message.activityState) {
-      ActivityState.running => AppColors.accent,
-      ActivityState.done => AppColors.inactive,
-      ActivityState.error => AppColors.danger,
-      ActivityState.stopped => AppColors.muted,
-      null => AppColors.muted,
+      ActivityState.running => AppPalette.of(context).accent,
+      ActivityState.done => AppPalette.of(context).inactive,
+      ActivityState.error => AppPalette.of(context).danger,
+      ActivityState.stopped => AppPalette.of(context).muted,
+      null => AppPalette.of(context).muted,
     };
 
     final detail = message.activityDetail;
-    final title = Text(
-      message.text,
-      style: TextStyle(
-        color: message.activityState == ActivityState.error
-            ? AppColors.danger
-            : AppColors.muted,
-        fontSize: 13,
-        fontWeight: FontWeight.w600,
-      ),
-    );
-    final icon = switch (message.activityState) {
-      // Keep Material spinner: reliable dispose in tests, no pending timers.
-      ActivityState.running => const SizedBox.square(
-        dimension: 16,
-        child: CircularProgressIndicator(
-          strokeWidth: 1.8,
-          color: AppColors.accent,
-        ),
-      ),
-      ActivityState.done => const Icon(
-        LucideIcons.check,
-        size: 17,
-        color: AppColors.muted,
-      ),
-      ActivityState.error => const Icon(
-        LucideIcons.circleAlert,
-        size: 17,
-        color: AppColors.danger,
-      ),
-      ActivityState.stopped => const Icon(
-        LucideIcons.square,
-        size: 17,
-        color: AppColors.muted,
-      ),
-      null => const SizedBox.square(dimension: 16),
-    };
+    final title = buildActivityTitle(message, context);
+    final icon = buildActivityIcon(message, context);
 
     if (message.activityKind == ActivityKind.summary) {
       return TaskRailFrame(
         color: railTone,
         active: message.activityState == ActivityState.running,
         child: Material(
-          color: AppColors.surface,
+          color: AppPalette.of(context).glassControl,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppRadii.surface),
-            side: const BorderSide(color: AppColors.line),
+            borderRadius: BorderRadius.circular(AppRadii.control + 2),
+            side: BorderSide(color: AppPalette.of(context).line, width: 0.8),
           ),
           clipBehavior: Clip.antiAlias,
           child: Padding(
@@ -9616,10 +10462,10 @@ class ActivityBlock extends StatelessWidget {
                       title,
                       if (detail != null && detail.isNotEmpty) ...[
                         const SizedBox(height: 3),
-                        Text(
+                        WorkspacePathText(
                           detail,
-                          style: const TextStyle(
-                            color: AppColors.muted,
+                          style: TextStyle(
+                            color: AppPalette.of(context).muted,
                             fontSize: 12,
                           ),
                         ),
@@ -9658,10 +10504,10 @@ class ActivityBlock extends StatelessWidget {
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: Material(
-          color: AppColors.surface,
+          color: AppPalette.of(context).glassControl,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(AppRadii.surface),
-            side: const BorderSide(color: AppColors.line),
+            borderRadius: BorderRadius.circular(AppRadii.control + 2),
+            side: BorderSide(color: AppPalette.of(context).line, width: 0.8),
           ),
           clipBehavior: Clip.antiAlias,
           child: ExpansionTile(
@@ -9675,21 +10521,39 @@ class ActivityBlock extends StatelessWidget {
               detail,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(color: AppColors.muted, fontSize: 12),
+              style: TextStyle(
+                color: AppPalette.of(context).muted,
+                fontSize: 12,
+              ),
             ),
             shape: const Border(),
             collapsedShape: const Border(),
             children: [
               Align(
                 alignment: Alignment.centerLeft,
-                child: Text(
-                  detail,
-                  style: const TextStyle(
-                    color: AppColors.ink,
-                    fontFamily: AppTypography.codeFontFamily,
-                    fontFamilyFallback: AppTypography.codeFontFamilyFallback,
-                    fontSize: 12,
-                    height: 1.45,
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 7,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppPalette.of(context).control,
+                    borderRadius: BorderRadius.circular(AppRadii.compact),
+                    border: Border.all(
+                      color: AppPalette.of(context).line,
+                      width: 0.6,
+                    ),
+                  ),
+                  child: WorkspacePathText(
+                    detail,
+                    style: TextStyle(
+                      color: AppPalette.of(context).ink,
+                      fontFamily: AppTypography.codeFontFamily,
+                      fontFamilyFallback: AppTypography.codeFontFamilyFallback,
+                      fontSize: 11.5,
+                      height: 1.45,
+                    ),
                   ),
                 ),
               ),
@@ -9702,400 +10566,270 @@ class ActivityBlock extends StatelessWidget {
 }
 
 class ActivityTimelineCard extends StatefulWidget {
-  const ActivityTimelineCard({super.key, required this.activities});
+  const ActivityTimelineCard({
+    super.key,
+    required this.activities,
+    this.running,
+    this.thinking = false,
+    this.expanded,
+    this.onExpandedChanged,
+    this.onToolTap,
+    this.contentBuilder,
+  });
 
   final List<TranscriptMessage> activities;
+  final bool? running;
+  final bool thinking;
+  final bool? expanded;
+  final ValueChanged<bool>? onExpandedChanged;
+  final ValueChanged<TranscriptMessage>? onToolTap;
+  final Widget Function(BuildContext, Widget Function(TranscriptMessage))?
+  contentBuilder;
 
   @override
   State<ActivityTimelineCard> createState() => _ActivityTimelineCardState();
 }
 
+String activityToolTitle(TranscriptMessage activity) {
+  return switch (activity.activityTool) {
+    'Read' => '读取文件',
+    'Write' => '写入文件',
+    'Edit' => '编辑文件',
+    'Grep' => '搜索代码',
+    'Glob' => '查找文件',
+    'Bash' => '运行命令',
+    'WebSearch' => '搜索网页',
+    'WebFetch' => '读取网页',
+    'Task' => '委派任务',
+    'Skill' =>
+      (activity.activityDetail?.trim().isNotEmpty ?? false)
+          ? '使用技能 · ${activity.activityDetail!.trim()}'
+          : '使用技能',
+    final tool? when tool.trim().isNotEmpty => tool.trim(),
+    _ => activity.text,
+  };
+}
+
 class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
-  static const collapsedVisibleCount = 2;
-
   bool expanded = false;
-  final Set<String> expandedDetails = <String>{};
+  late String displayedTitle;
+  DateTime titleChangedAt = DateTime.now();
+  Timer? titleTimer;
+  ValueNotifier<TranscriptMessage>? openActivity;
 
-  bool hasDetail(TranscriptMessage message) =>
-      (message.activityDetail ?? '').trim().isNotEmpty;
-
-  void toggleDetail(String activityId) {
-    setState(() {
-      if (!expandedDetails.add(activityId)) expandedDetails.remove(activityId);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final activities = widget.activities;
-    final hiddenCount = expanded || activities.length <= collapsedVisibleCount
-        ? 0
-        : activities.length - collapsedVisibleCount;
-    return Material(
-      color: AppColors.surface,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(AppRadii.surface),
-        side: const BorderSide(color: AppColors.line),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(10, 6, 12, 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (hiddenCount > 0)
-              InkWell(
-                key: const ValueKey('activity-timeline-expand'),
-                onTap: () => setState(() => expanded = true),
-                borderRadius: BorderRadius.circular(AppRadii.control),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 10,
-                    vertical: 5,
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(
-                        LucideIcons.history,
-                        size: 13,
-                        color: AppColors.accentStrong,
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        '显示之前 $hiddenCount 步',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.accentStrong,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            for (var i = hiddenCount; i < activities.length; i++)
-              _buildStep(
-                activities[i],
-                isFirst: i == hiddenCount,
-                isLast: i == activities.length - 1,
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStep(
-    TranscriptMessage activity, {
-    required bool isFirst,
-    required bool isLast,
-  }) {
-    final detail = activity.activityDetail;
-    final hasVisibleDetail = hasDetail(activity);
-    final activityId = activity.activityId ?? activity.text;
-    final isOpen = expandedDetails.contains(activityId);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        InkWell(
-          onTap: hasVisibleDetail ? () => toggleDetail(activityId) : null,
-          borderRadius: BorderRadius.circular(AppRadii.control),
-          child: IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                SizedBox(
-                  width: 21,
-                  child: Stack(
-                    children: [
-                      // Connector segment spans the full row so adjacent
-                      // steps form one continuous line without an outer
-                      // Stack; detail text stays outside this row.
-                      Positioned(
-                        top: isFirst ? 14 : 0,
-                        bottom: isLast ? 14 : 0,
-                        left: 10,
-                        width: 1,
-                        child: const ColoredBox(color: AppColors.line),
-                      ),
-                      // Opaque backdrop masks the line behind the icon.
-                      Center(
-                        child: Container(
-                          color: AppColors.surface,
-                          padding: const EdgeInsets.symmetric(vertical: 3),
-                          child: _activityIcon(activity),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(7, 5, 0, 5),
-                    child: Row(
-                      children: [
-                        Expanded(child: _activityTitle(activity)),
-                        if (hasVisibleDetail)
-                          Icon(
-                            isOpen
-                                ? LucideIcons.chevronUp
-                                : LucideIcons.chevronDown,
-                            size: 15,
-                            color: AppColors.muted,
-                          ),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (isOpen && hasVisibleDetail)
-          Padding(
-            key: ValueKey('activity-detail-$activityId'),
-            padding: const EdgeInsets.only(left: 28, top: 1, bottom: 4),
-            child: Text(
-              detail!,
-              style: const TextStyle(
-                color: AppColors.ink,
-                fontSize: 12,
-                height: 1.45,
-                fontFamily: AppTypography.codeFontFamily,
-                fontFamilyFallback: AppTypography.codeFontFamilyFallback,
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _activityIcon(TranscriptMessage activity) {
-    return switch (activity.activityState) {
-      // Keep Material spinner: reliable dispose in tests, no pending timers.
-      ActivityState.running => const SizedBox.square(
-        dimension: 15,
-        child: CircularProgressIndicator(
-          strokeWidth: 1.8,
-          color: AppColors.accent,
-        ),
-      ),
-      ActivityState.done => const Icon(
-        LucideIcons.check,
-        size: 15,
-        color: AppColors.muted,
-      ),
-      ActivityState.error => const Icon(
-        LucideIcons.circleAlert,
-        size: 15,
-        color: AppColors.danger,
-      ),
-      ActivityState.stopped => const Icon(
-        LucideIcons.square,
-        size: 14,
-        color: AppColors.muted,
-      ),
-      null => const SizedBox.square(dimension: 15),
+  String groupTitle(List<TranscriptMessage> activities) {
+    if (widget.thinking && widget.running != false) return '思考中';
+    if (widget.running != false) {
+      for (final activity in activities.reversed) {
+        if (activity.activityState == ActivityState.running) {
+          return activityToolTitle(activity);
+        }
+      }
+    }
+    if (widget.running == true) return '正在使用工具';
+    final titles = activities.map(activityToolTitle).toSet().toList();
+    return switch (titles.length) {
+      1 => titles.first,
+      2 => '${titles[0]}与${titles[1]}',
+      _ => '工具操作',
     };
   }
-
-  Widget _activityTitle(TranscriptMessage activity) {
-    final isError = activity.activityState == ActivityState.error;
-    return Text(
-      activity.text,
-      maxLines: 2,
-      overflow: TextOverflow.ellipsis,
-      style: TextStyle(
-        color: isError ? AppColors.danger : AppColors.muted,
-        fontSize: 13,
-        fontWeight: FontWeight.w600,
-        height: 1.35,
-      ),
-    );
-  }
-}
-
-class ThinkingIndicator extends StatefulWidget {
-  const ThinkingIndicator({super.key, this.initialElapsedSeconds = 0});
-
-  final int initialElapsedSeconds;
-
-  @override
-  State<ThinkingIndicator> createState() => _ThinkingIndicatorState();
-}
-
-class _ThinkingIndicatorState extends State<ThinkingIndicator>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController animation;
-  Timer? timer;
-  var elapsedSeconds = 0;
-  var reduceMotion = false;
 
   @override
   void initState() {
     super.initState();
-    elapsedSeconds = widget.initialElapsedSeconds;
-    animation = AnimationController(vsync: this, duration: AppMotion.signal);
-    timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => elapsedSeconds += 1);
-    });
+    displayedTitle = groupTitle(widget.activities);
   }
 
   @override
-  void didUpdateWidget(covariant ThinkingIndicator oldWidget) {
+  void didUpdateWidget(covariant ActivityTimelineCard oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.initialElapsedSeconds > elapsedSeconds) {
-      elapsedSeconds = widget.initialElapsedSeconds;
+    final changedGroup =
+        oldWidget.activities.isNotEmpty &&
+        widget.activities.isNotEmpty &&
+        oldWidget.activities.first.activityId !=
+            widget.activities.first.activityId;
+    if (changedGroup) expanded = false;
+    titleTimer?.cancel();
+    titleTimer = null;
+    final nextTitle = groupTitle(widget.activities);
+    if (nextTitle != displayedTitle) {
+      final running =
+          widget.running ??
+          widget.activities.any(
+            (activity) => activity.activityState == ActivityState.running,
+          );
+      final urgent = widget.activities.any(
+        (activity) =>
+            activity.activityState == ActivityState.error ||
+            activity.activityState == ActivityState.stopped,
+      );
+      final remaining =
+          1200 - DateTime.now().difference(titleChangedAt).inMilliseconds;
+      if (running && !urgent && !changedGroup && remaining > 0) {
+        titleTimer = Timer(Duration(milliseconds: remaining), () {
+          if (!mounted) return;
+          setState(() {
+            displayedTitle = nextTitle;
+            titleChangedAt = DateTime.now();
+            titleTimer = null;
+          });
+        });
+      } else {
+        displayedTitle = nextTitle;
+        titleChangedAt = DateTime.now();
+      }
     }
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final nextReduceMotion = MediaQuery.disableAnimationsOf(context);
-    if (nextReduceMotion == reduceMotion && animation.isAnimating) return;
-    reduceMotion = nextReduceMotion;
-    if (reduceMotion) {
-      animation
-        ..stop()
-        ..value = 0.5;
-    } else if (!animation.isAnimating) {
-      animation.repeat();
+    final detail = openActivity;
+    if (detail != null) {
+      final updated = widget.activities
+          .where((activity) => activity.activityId == detail.value.activityId)
+          .firstOrNull;
+      if (updated != null && !identical(updated, detail.value)) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && identical(openActivity, detail)) {
+            detail.value = updated;
+          }
+        });
+      }
     }
   }
 
   @override
   void dispose() {
-    timer?.cancel();
-    animation.dispose();
+    titleTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> openDetail(TranscriptMessage activity) async {
+    if (openActivity != null) return;
+    final detail = ValueNotifier(activity);
+    openActivity = detail;
+    try {
+      await showToolActivityDetail(
+        context,
+        activity: detail,
+        title: activityToolTitle(activity),
+      );
+    } finally {
+      if (identical(openActivity, detail)) openActivity = null;
+      detail.dispose();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // Long waits need their own stages, or a 4-minute run feels identical
-    // to 40 seconds and the user assumes it hung. The label itself carries
-    // the phase; the animation stays unchanged (and frozen under reduce
-    // motion).
-    final elapsedLabel = elapsedSeconds <= 0
-        ? '本轮刚开始'
-        : elapsedSeconds < 90
-        ? '本轮已运行 $elapsedSeconds 秒'
-        : elapsedSeconds < 300
-        ? '本轮已运行 ${(elapsedSeconds / 60).toStringAsFixed(1)} 分钟'
-        : '本轮已运行 ${(elapsedSeconds / 60).round()} 分钟，仍在思考';
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Semantics(
-          liveRegion: true,
-          label: '正在思考',
-          excludeSemantics: true,
-          // Boundary keeps the per-frame pulse repaint inside this 16x16
-          // icon instead of re-recording the transcript row.
-          child: RepaintBoundary(
-            child: AnimatedBuilder(
-              animation: animation,
-              builder: (context, _) {
-                final frame = (animation.value * 12)
-                    .floor()
-                    .clamp(0, 11)
-                    .toInt();
-                return CustomPaint(
-                  key: const ValueKey('thinking-icon'),
-                  size: const Size.square(16),
-                  painter: _ThinkingBloomPainter(frame),
-                );
-              },
-            ),
+    final activities = widget.activities;
+    if (activities.isEmpty) return const SizedBox.shrink();
+    final palette = AppPalette.of(context);
+    final running =
+        widget.running ??
+        activities.any(
+          (activity) => activity.activityState == ActivityState.running,
+        );
+    final isExpanded = widget.expanded ?? expanded;
+    final failedCount = activities
+        .where((activity) => activity.activityState == ActivityState.error)
+        .length;
+    final stoppedCount = activities
+        .where((activity) => activity.activityState == ActivityState.stopped)
+        .length;
+    final status = failedCount > 0
+        ? '$failedCount 个失败'
+        : stoppedCount > 0
+        ? '$stoppedCount 个已停止'
+        : null;
+    final tone = failedCount > 0
+        ? palette.danger
+        : stoppedCount > 0
+        ? palette.warning
+        : null;
+    Widget buildToolRow(TranscriptMessage activity) => ActivityStatusRow(
+      buttonKey: ValueKey('activity-step-toggle-${activity.activityId}'),
+      title: activity.text,
+      titleWidget: buildActivityTitle(activity, context),
+      leading: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SmartIcon(
+            activityToolIconData(activity.activityTool),
+            size: AppIconSizes.inline,
           ),
-        ),
-        const SizedBox(width: 7),
-        Semantics(
-          label: elapsedLabel,
-          excludeSemantics: true,
-          child: Text(
-            elapsedSeconds <= 0 ? '思考中' : '思考中 · $elapsedLabel',
-            key: const ValueKey('thinking-elapsed'),
-            style: const TextStyle(
-              color: AppColors.muted,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              height: 1.3,
-              fontFeatures: [FontFeature.tabularFigures()],
-            ),
-          ),
-        ),
-      ],
+          if (activity.activityState != ActivityState.done) ...[
+            const SizedBox(width: 4),
+            buildActivityIcon(activity, context),
+          ],
+        ],
+      ),
+      running: running && activity.activityState == ActivityState.running,
+      statusText: switch (activity.activityState) {
+        ActivityState.error => '调用错误',
+        ActivityState.stopped => '已停止',
+        _ => null,
+      },
+      tone: activity.activityState == ActivityState.error
+          ? palette.danger
+          : activity.activityState == ActivityState.stopped
+          ? palette.warning
+          : null,
+      semanticLabel:
+          '${activityToolTitle(activity)}，'
+          '${toolActivityStateLabel(activity.activityState)}',
+      onTap: () {
+        final onToolTap = widget.onToolTap;
+        if (onToolTap == null) {
+          openDetail(activity);
+        } else {
+          onToolTap(activity);
+        }
+      },
     );
-  }
-}
-
-class _ThinkingBloomPainter extends CustomPainter {
-  const _ThinkingBloomPainter(this.frame);
-
-  final int frame;
-
-  // The controller ticks continuously; the bloom only changes per frame step.
-  // Equality lets CustomPaint skip repaint on identical frames.
-  @override
-  bool operator ==(Object other) =>
-      other is _ThinkingBloomPainter && other.frame == frame;
-
-  @override
-  int get hashCode => frame;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final stage = frame <= 5 ? frame : 11 - frame;
-    final center = size.center(Offset.zero);
-    if (stage == 0) {
-      canvas.drawCircle(center, 1.45, Paint()..color = AppColors.accent);
-      return;
-    }
-
-    final spokes = switch (stage) {
-      1 => 4,
-      2 || 4 => 8,
-      _ => 6,
-    };
-    final radius = switch (stage) {
-      1 => 4.1,
-      2 => 4.8,
-      3 => 5.2,
-      4 => 5.5,
-      _ => 5.8,
-    };
-    final rotation = switch (stage) {
-      1 => pi / 4,
-      2 => pi / 8,
-      3 => pi / 6,
-      _ => 0.0,
-    };
-    final paint = Paint()
-      ..color = AppColors.accent
-      ..strokeCap = StrokeCap.round
-      ..strokeWidth = stage == 5 ? 1.9 : 1.55;
-
-    for (var index = 0; index < spokes; index++) {
-      final angle = rotation + index * 2 * pi / spokes;
-      final direction = Offset(cos(angle), sin(angle));
-      final lengthFactor = spokes == 8 && index.isOdd ? 0.74 : 1.0;
-      canvas.drawLine(
-        center + direction * 1.35,
-        center + direction * radius * lengthFactor,
-        paint,
-      );
-    }
-    canvas.drawCircle(center, 1.05, Paint()..color = AppColors.accent);
-  }
-
-  @override
-  bool shouldRepaint(covariant _ThinkingBloomPainter oldDelegate) {
-    return oldDelegate.frame != frame;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      child: ActivityCardSurface(
+        key: const ValueKey('activity-timeline-surface'),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ActivityDisclosure(
+              expanded: isExpanded,
+              title: displayedTitle,
+              leading: const SmartIcon(
+                LucideIcons.wrench,
+                size: AppIconSizes.inline,
+              ),
+              running: running,
+              statusText: status,
+              tone: tone,
+              toggleKey: const ValueKey('activity-process-toggle'),
+              semanticLabel:
+                  '$displayedTitle，${activities.length} 次操作'
+                  '${status == null ? '' : '，$status'}',
+              onToggle: () {
+                final next = !isExpanded;
+                setState(() => expanded = next);
+                widget.onExpandedChanged?.call(next);
+              },
+              child:
+                  widget.contentBuilder?.call(context, buildToolRow) ??
+                  Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      for (final activity in activities) buildToolRow(activity),
+                    ],
+                  ),
+            ),
+            if (running && !isExpanded)
+              for (final activity in activities.skip(
+                max(0, activities.length - 2),
+              ))
+                buildToolRow(activity),
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -10111,6 +10845,9 @@ class PromptBar extends StatelessWidget {
     required this.controller,
     this.attachments = const [],
     required this.commands,
+    this.commandsLoading = false,
+    this.commandsFailed = false,
+    this.onRefreshCommands,
     required this.running,
     this.stopping = false,
     this.uploading = false,
@@ -10122,8 +10859,10 @@ class PromptBar extends StatelessWidget {
     this.contextWindow,
     this.remainingContext,
     this.engine = SessionEngine.claude,
-    this.codexSandboxMode = CodexSandboxMode.readOnly,
+    this.codexSandboxMode = CodexSandboxMode.dangerFullAccess,
+    this.codexSandboxModes = CodexSandboxMode.supportedModes,
     this.selectedModel = ClaudeModelPreference.followComputer,
+    this.selectedCodexModel,
     this.selectedEffort = ClaudeEffortPreference.automatic,
     this.presentation,
     this.suggestionMaxHeight = 292,
@@ -10137,11 +10876,17 @@ class PromptBar extends StatelessWidget {
     required this.onReconnect,
     required this.onSend,
     required this.onStop,
+
+    this.queuedPreview,
+    this.onCancelQueue,
   });
 
   final TextEditingController controller;
   final List<AttachmentDraft> attachments;
   final List<String> commands;
+  final bool commandsLoading;
+  final bool commandsFailed;
+  final VoidCallback? onRefreshCommands;
   final bool running;
   final bool stopping;
   final bool uploading;
@@ -10154,7 +10899,9 @@ class PromptBar extends StatelessWidget {
   final int? remainingContext;
   final SessionEngine engine;
   final CodexSandboxMode codexSandboxMode;
+  final List<CodexSandboxMode> codexSandboxModes;
   final ClaudeModelPreference selectedModel;
+  final String? selectedCodexModel;
   final ClaudeEffortPreference selectedEffort;
   final ConsolePresentation? presentation;
   final double suggestionMaxHeight;
@@ -10168,6 +10915,8 @@ class PromptBar extends StatelessWidget {
   final VoidCallback onReconnect;
   final VoidCallback onSend;
   final VoidCallback onStop;
+  final String? queuedPreview;
+  final VoidCallback? onCancelQueue;
 
   @override
   Widget build(BuildContext context) {
@@ -10185,6 +10934,7 @@ class PromptBar extends StatelessWidget {
           running: running,
           stopping: stopping,
           uploading: uploading,
+          engine: engine,
         );
     if (console.showsReconnect) {
       return Semantics(
@@ -10194,6 +10944,7 @@ class PromptBar extends StatelessWidget {
           key: const ValueKey('composer'),
           blurSigma: 8,
           decoration: AppLiquidGlass.strong(
+            context: context,
             borderRadius: composerRadius,
             elevated: composerElevated,
             backdrop: true,
@@ -10213,31 +10964,31 @@ class PromptBar extends StatelessWidget {
                       width: AppSizes.iconControl,
                       height: AppSizes.iconControl,
                       decoration: BoxDecoration(
-                        color: AppColors.glassControl,
+                        color: AppPalette.of(context).glassControl,
                         borderRadius: BorderRadius.circular(AppRadii.control),
                       ),
                       alignment: Alignment.center,
-                      child: const Icon(
+                      child: Icon(
                         LucideIcons.refreshCw,
-                        size: 22,
-                        color: AppColors.ink,
+                        size: AppIconSizes.control,
+                        color: AppPalette.of(context).ink,
                       ),
                     ),
                     const SizedBox(width: 12),
-                    const Expanded(
+                    Expanded(
                       child: Text(
                         '重新连接',
                         style: TextStyle(
-                          color: AppColors.ink,
+                          color: AppPalette.of(context).ink,
                           fontSize: 15,
                           fontWeight: FontWeight.w700,
                         ),
                       ),
                     ),
-                    const Icon(
+                    Icon(
                       LucideIcons.chevronRight,
-                      size: 20,
-                      color: AppColors.muted,
+                      size: AppIconSizes.control,
+                      color: AppPalette.of(context).muted,
                     ),
                   ],
                 ),
@@ -10280,14 +11031,18 @@ class PromptBar extends StatelessWidget {
                   valueListenable: controller,
                   builder: (context, value, _) {
                     final query = commandQuery(value.text);
-                    if (query == null || !console.canCompose) {
+                    if (query == null ||
+                        !console.canDraft ||
+                        queuedPreview != null) {
                       return const SizedBox.shrink();
                     }
                     return Padding(
                       padding: const EdgeInsets.only(bottom: 6),
                       child: CommandSuggestions(
                         commands: filterCommands(commands, query),
-                        loading: commands.isEmpty,
+                        loading: commandsLoading,
+                        failed: commandsFailed,
+                        onRefresh: onRefreshCommands,
                         maxHeight: suggestionMaxHeight,
                         onSelected: onCommandSelected,
                       ),
@@ -10298,6 +11053,7 @@ class PromptBar extends StatelessWidget {
                   key: const ValueKey('composer'),
                   blurSigma: 8,
                   decoration: AppLiquidGlass.strong(
+                    context: context,
                     borderRadius: composerRadius,
                     focused: composerFocused,
                     elevated: composerElevated,
@@ -10323,14 +11079,22 @@ class PromptBar extends StatelessWidget {
                           ),
                           const SizedBox(height: 8),
                         ],
+                        if (queuedPreview != null) ...[
+                          _QueuedPromptChip(
+                            preview: queuedPreview!,
+                            onCancel: onCancelQueue,
+                          ),
+                          const SizedBox(height: 8),
+                        ],
                         TextField(
                           controller: controller,
-                          enabled: console.canCompose,
+                          enabled: console.canDraft && queuedPreview == null,
+
                           onTapOutside: (_) =>
                               FocusManager.instance.primaryFocus?.unfocus(),
-                          cursorColor: AppColors.accent,
-                          style: const TextStyle(
-                            color: AppColors.ink,
+                          cursorColor: AppPalette.of(context).accent,
+                          style: TextStyle(
+                            color: AppPalette.of(context).ink,
                             fontSize: 15,
                             height: 1.45,
                             fontWeight: FontWeight.w400,
@@ -10340,8 +11104,8 @@ class PromptBar extends StatelessWidget {
                           decoration: InputDecoration(
                             filled: false,
                             hintText: console.inputHint,
-                            hintStyle: const TextStyle(
-                              color: AppColors.muted,
+                            hintStyle: TextStyle(
+                              color: AppPalette.of(context).muted,
                               fontSize: 14,
                             ),
                             border: InputBorder.none,
@@ -10364,7 +11128,7 @@ class PromptBar extends StatelessWidget {
                                 child: DecoratedBox(
                                   key: const ValueKey('composer-control-rail'),
                                   decoration: BoxDecoration(
-                                    color: AppColors.composerControlRest,
+                                    color: Colors.transparent,
                                     borderRadius: BorderRadius.circular(
                                       AppRadii.pill,
                                     ),
@@ -10378,7 +11142,9 @@ class PromptBar extends StatelessWidget {
                                         ),
                                         tooltip: '添加附件',
                                         icon: LucideIcons.plus,
-                                        onPressed: console.canCompose
+                                        onPressed:
+                                            console.canDraft &&
+                                                queuedPreview == null
                                             ? onAddAttachment
                                             : null,
                                       ),
@@ -10398,10 +11164,9 @@ class PromptBar extends StatelessWidget {
                                           engine: engine,
                                           modelName: modelName,
                                           selectedModel: selectedModel,
-                                          onPressed:
-                                              engine == SessionEngine.claude
-                                              ? onModelPressed
-                                              : null,
+                                          selectedCodexModel:
+                                              selectedCodexModel,
+                                          onPressed: onModelPressed,
                                         ),
                                       ),
                                       if (engine == SessionEngine.codex)
@@ -10415,6 +11180,7 @@ class PromptBar extends StatelessWidget {
                                               showCodexSandboxModePicker(
                                                 context,
                                                 selected: codexSandboxMode,
+                                                modes: codexSandboxModes,
                                                 onSelected:
                                                     onCodexSandboxModeSelected!,
                                               ),
@@ -10438,35 +11204,39 @@ class PromptBar extends StatelessWidget {
                                 ),
                               ),
                             ),
-                            if (remainingContext != null) ...[
-                              const SizedBox(width: AppSpacing.xxs),
-                              _ComposerContextIndicator(
-                                contextWindow: contextWindow,
-                                remainingContext: remainingContext!,
-                              ),
-                            ],
-                            const SizedBox(width: AppSpacing.xs),
                             ValueListenableBuilder<TextEditingValue>(
                               valueListenable: controller,
                               builder: (context, value, _) {
+                                final hasContent =
+                                    value.text.trim().isNotEmpty ||
+                                    attachments.isNotEmpty;
                                 final canSend =
-                                    (value.text.trim().isNotEmpty ||
-                                        attachments.isNotEmpty) &&
-                                    console.canCompose;
+                                    hasContent && console.canCompose;
+                                final canQueueSend =
+                                    hasContent &&
+                                    console.canQueue &&
+                                    queuedPreview == null;
+                                final isStoppingActive =
+                                    stoppingAction && console.canStop;
                                 final primaryAction = waiting
                                     ? null
                                     : stoppingAction
                                     ? (console.canStop ? onStop : null)
                                     : (canSend ? onSend : null);
+
                                 final primaryColor = waiting
-                                    ? AppColors.composerDisabledFill
+                                    ? AppPalette.of(
+                                        context,
+                                      ).composerDisabledFill
                                     : stoppingAction
                                     ? (console.canStop
-                                          ? AppColors.danger
-                                          : AppColors.composerDisabledFill)
+                                          ? AppPalette.of(context).stop
+                                          : AppPalette.of(
+                                              context,
+                                            ).composerDisabledFill)
                                     : (canSend
-                                          ? AppColors.cta
-                                          : AppColors.glassControl);
+                                          ? AppPalette.of(context).cta
+                                          : AppPalette.of(context).control);
                                 final primaryIcon = waiting
                                     ? SizedBox.square(
                                         key: const ValueKey(
@@ -10474,120 +11244,198 @@ class PromptBar extends StatelessWidget {
                                         ),
                                         dimension: 20,
                                         child: reduceMotion
-                                            ? const Icon(
+                                            ? Icon(
                                                 LucideIcons.loader,
-                                                size: 18,
-                                                color: AppColors.accentStrong,
+                                                size: AppIconSizes.control,
+                                                color: AppPalette.of(
+                                                  context,
+                                                ).accentStrong,
                                               )
-                                            : const CircularProgressIndicator(
+                                            : CircularProgressIndicator(
                                                 strokeWidth: 2.2,
-                                                color: AppColors.accentStrong,
+                                                color: AppPalette.of(
+                                                  context,
+                                                ).accentStrong,
                                               ),
                                       )
                                     : Icon(
                                         stoppingAction
-                                            ? LucideIcons.square
+                                            ? PhosphorIconsFill.square
                                             : LucideIcons.arrowUp,
                                         key: ValueKey(
                                           stoppingAction
                                               ? 'composer-primary-stop'
                                               : 'composer-primary-send',
                                         ),
-                                        size: stoppingAction ? 18 : 20,
+                                        size: stoppingAction ? 14 : 20,
                                         color: stoppingAction
                                             ? console.canStop
-                                                  ? AppColors.onCta
-                                                  : AppColors.inactive
+                                                  ? AppPalette.of(
+                                                      context,
+                                                    ).onStop
+                                                  : AppPalette.of(
+                                                      context,
+                                                    ).inactive
                                             : canSend
-                                            ? AppColors.onCta
-                                            : AppColors.inactive,
+                                            ? AppPalette.of(context).onCta
+                                            : AppPalette.of(context).inactive,
                                       );
-                                return SignalPressEffect(
-                                  enabled: primaryAction != null,
-                                  child: SizedBox.square(
-                                    dimension: AppSizes.touchTarget,
-                                    child: IconButton(
-                                      key: const ValueKey(
-                                        'composer-primary-action',
+                                return Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    if (remainingContext != null &&
+                                        !canQueueSend) ...[
+                                      _ComposerContextIndicator(
+                                        contextWindow: contextWindow,
+                                        remainingContext: remainingContext!,
                                       ),
-                                      onPressed: primaryAction,
-                                      tooltip: primaryTooltip,
-                                      padding: EdgeInsets.zero,
-                                      icon: Container(
-                                        key: const ValueKey(
-                                          'composer-primary-visual',
-                                        ),
-                                        width: 40,
-                                        height: 40,
-                                        decoration: BoxDecoration(
-                                          color: primaryColor,
-                                          shape: BoxShape.circle,
-                                          boxShadow: !waiting && !stoppingAction
-                                              ? AppElevation.surfaceCard()
-                                              : null,
-                                        ),
-                                        alignment: Alignment.center,
-                                        child: AnimatedSwitcher(
-                                          key: const ValueKey(
-                                            'composer-primary-icon-switcher',
-                                          ),
-                                          duration: reduceMotion
-                                              ? Duration.zero
-                                              : AppMotion.fast,
-                                          reverseDuration: reduceMotion
-                                              ? Duration.zero
-                                              : AppMotion.fast,
-                                          switchInCurve: const Cubic(
-                                            0.2,
-                                            0,
-                                            0,
-                                            1,
-                                          ),
-                                          switchOutCurve: const Cubic(
-                                            0.2,
-                                            0,
-                                            0,
-                                            1,
-                                          ),
-                                          transitionBuilder:
-                                              (
-                                                child,
-                                                animation,
-                                              ) => AnimatedBuilder(
-                                                animation: animation,
-                                                child: child,
-                                                builder: (context, child) {
-                                                  final progress =
-                                                      animation.value;
-                                                  return Opacity(
-                                                    opacity: progress,
-                                                    child: Transform.scale(
-                                                      scale:
-                                                          0.25 +
-                                                          progress * 0.75,
-                                                      child: ImageFiltered(
-                                                        imageFilter:
-                                                            ui.ImageFilter.blur(
-                                                              sigmaX:
-                                                                  4 *
-                                                                  (1 -
-                                                                      progress),
-                                                              sigmaY:
-                                                                  4 *
-                                                                  (1 -
-                                                                      progress),
-                                                            ),
-                                                        child: child,
-                                                      ),
-                                                    ),
-                                                  );
-                                                },
+                                      const SizedBox(width: AppSpacing.xs),
+                                    ],
+                                    if (canQueueSend) ...[
+                                      SignalPressEffect(
+                                        child: SizedBox.square(
+                                          dimension: AppSizes.touchTarget,
+                                          child: IconButton(
+                                            key: const ValueKey(
+                                              'composer-queue-action',
+                                            ),
+                                            onPressed: onSend,
+                                            tooltip: '排队发送',
+                                            padding: EdgeInsets.zero,
+                                            icon: Container(
+                                              width: 40,
+                                              height: 40,
+                                              decoration: BoxDecoration(
+                                                color: AppPalette.of(
+                                                  context,
+                                                ).accentStrong,
+                                                shape: BoxShape.circle,
                                               ),
-                                          child: primaryIcon,
+                                              alignment: Alignment.center,
+                                              child: Icon(
+                                                LucideIcons.listPlus,
+                                                size: AppIconSizes.control,
+                                                color: AppPalette.of(
+                                                  context,
+                                                ).onCta,
+                                              ),
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: AppSpacing.xs),
+                                    ],
+                                    SignalPressEffect(
+                                      key: const ValueKey(
+                                        'composer-primary-press',
+                                      ),
+                                      enabled: primaryAction != null,
+
+                                      child: SizedBox.square(
+                                        dimension: AppSizes.touchTarget,
+                                        child: IconButton(
+                                          key: const ValueKey(
+                                            'composer-primary-action',
+                                          ),
+                                          onPressed: primaryAction,
+                                          tooltip: primaryTooltip,
+                                          padding: EdgeInsets.zero,
+                                          icon: Container(
+                                            key: const ValueKey(
+                                              'composer-primary-visual',
+                                            ),
+                                            width: 40,
+                                            height: 40,
+                                            decoration: BoxDecoration(
+                                              color: primaryColor,
+                                              shape: BoxShape.circle,
+                                              border: isStoppingActive
+                                                  ? Border.all(
+                                                      color:
+                                                          AppPalette.of(
+                                                            context,
+                                                          ).onStop.withValues(
+                                                            alpha: 0.28,
+                                                          ),
+                                                      width: 0.8,
+                                                    )
+                                                  : null,
+                                              boxShadow: isStoppingActive
+                                                  ? AppElevation.stopControl(
+                                                      context: context,
+                                                    )
+                                                  : (!waiting &&
+                                                            !stoppingAction &&
+                                                            canSend
+                                                        ? AppElevation.surfaceCard(
+                                                            context: context,
+                                                          )
+                                                        : null),
+                                            ),
+                                            alignment: Alignment.center,
+                                            child: AnimatedSwitcher(
+                                              key: const ValueKey(
+                                                'composer-primary-icon-switcher',
+                                              ),
+                                              duration: reduceMotion
+                                                  ? Duration.zero
+                                                  : AppMotion.fast,
+                                              reverseDuration: reduceMotion
+                                                  ? Duration.zero
+                                                  : AppMotion.fast,
+                                              switchInCurve: const Cubic(
+                                                0.2,
+                                                0,
+                                                0,
+                                                1,
+                                              ),
+                                              switchOutCurve: const Cubic(
+                                                0.2,
+                                                0,
+                                                0,
+                                                1,
+                                              ),
+                                              transitionBuilder:
+                                                  (
+                                                    child,
+                                                    animation,
+                                                  ) => AnimatedBuilder(
+                                                    animation: animation,
+                                                    child: child,
+                                                    builder: (context, child) {
+                                                      final progress =
+                                                          animation.value;
+                                                      return Opacity(
+                                                        opacity: progress,
+                                                        child: Transform.scale(
+                                                          scale:
+                                                              0.25 +
+                                                              progress * 0.75,
+                                                          child: ImageFiltered(
+                                                            imageFilter:
+                                                                ui.ImageFilter.blur(
+                                                                  sigmaX:
+                                                                      4 *
+                                                                      (1 -
+                                                                          progress),
+                                                                  sigmaY:
+                                                                      4 *
+                                                                      (1 -
+                                                                          progress),
+                                                                ),
+                                                            child: child,
+                                                          ),
+                                                        ),
+                                                      );
+                                                    },
+                                                  ),
+                                              child: primaryIcon,
+                                            ),
+                                          ),
                                         ),
                                       ),
                                     ),
-                                  ),
+                                  ],
                                 );
                               },
                             ),
@@ -10606,6 +11454,56 @@ class PromptBar extends StatelessWidget {
   }
 }
 
+class _QueuedPromptChip extends StatelessWidget {
+  const _QueuedPromptChip({required this.preview, this.onCancel});
+
+  final String preview;
+  final VoidCallback? onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      key: const ValueKey('composer-queued-chip'),
+      decoration: BoxDecoration(
+        color: AppPalette.of(context).composerControlFill,
+        borderRadius: BorderRadius.circular(AppRadii.pill),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+        child: Row(
+          children: [
+            Icon(
+              LucideIcons.listPlus,
+              size: AppIconSizes.inline,
+              color: AppPalette.of(context).accentStrong,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                preview,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  color: AppPalette.of(context).ink,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            IconButton(
+              key: const ValueKey('composer-queued-cancel'),
+              tooltip: '取消排队',
+              onPressed: onCancel,
+              visualDensity: VisualDensity.compact,
+              icon: const SmartIcon(LucideIcons.x, size: AppIconSizes.inline),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _ComposerGlassIconButton extends StatelessWidget {
   const _ComposerGlassIconButton({
     this.buttonKey,
@@ -10613,6 +11511,7 @@ class _ComposerGlassIconButton extends StatelessWidget {
     required this.tooltip,
     required this.onPressed,
     required this.child,
+    this.filled = false,
   });
 
   final Key? buttonKey;
@@ -10620,6 +11519,7 @@ class _ComposerGlassIconButton extends StatelessWidget {
   final String tooltip;
   final VoidCallback? onPressed;
   final Widget child;
+  final bool filled;
 
   @override
   Widget build(BuildContext context) {
@@ -10637,12 +11537,14 @@ class _ComposerGlassIconButton extends StatelessWidget {
             duration: appPressAnimationDuration(context, pressed),
             decoration: BoxDecoration(
               color: pressed
-                  ? AppColors.composerControlPressed
+                  ? AppPalette.of(context).composerControlPressed
+                  : filled
+                  ? AppPalette.of(context).glassControl
                   : Colors.transparent,
               shape: BoxShape.circle,
             ),
             child: SizedBox.square(
-              dimension: AppSizes.iconControl,
+              dimension: filled ? 38 : AppSizes.iconControl,
               child: Center(child: child),
             ),
           ),
@@ -10669,13 +11571,16 @@ class _ComposerIconButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final enabled = onPressed != null;
     return _ComposerGlassIconButton(
+      filled: true,
       visualKey: const ValueKey('composer-expand-visual'),
       tooltip: tooltip,
       onPressed: onPressed,
       child: Icon(
         icon,
-        size: 20,
-        color: enabled ? AppColors.composerControlInk : AppColors.inactive,
+        size: AppIconSizes.control,
+        color: enabled
+            ? AppPalette.of(context).composerControlInk
+            : AppPalette.of(context).inactive,
       ),
     );
   }
@@ -10712,68 +11617,37 @@ class _ComposerModelButton extends StatelessWidget {
     required this.engine,
     required this.modelName,
     required this.selectedModel,
+    this.selectedCodexModel,
     this.onPressed,
   });
 
   final SessionEngine engine;
   final String? modelName;
   final ClaudeModelPreference selectedModel;
+  final String? selectedCodexModel;
   final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
     final label = engine == SessionEngine.codex
-        ? modelName == null
-              ? 'Codex'
+        ? selectedCodexModel != null
+              ? formatModelName(selectedCodexModel!)
+              : modelName == null
+              ? '模型'
               : formatModelName(modelName!)
         : selectedModel == ClaudeModelPreference.followComputer
         ? modelName == null
               ? '模型'
               : formatModelName(modelName!)
         : selectedModel.label;
-    return ConstrainedBox(
-      constraints: const BoxConstraints(
-        minHeight: AppSizes.touchTarget,
-        maxWidth: 148,
-      ),
-      child: SignalPressEffect(
-        enabled: onPressed != null,
-        builder: (context, pressed, child) => TextButton(
-          key: const ValueKey('composer-model-button'),
-          onPressed: onPressed,
-          style: TextButton.styleFrom(
-            foregroundColor: AppColors.composerControlInk,
-            disabledForegroundColor: AppColors.inactive,
-            minimumSize: const Size(0, AppSizes.touchTarget),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            padding: EdgeInsets.zero,
-            visualDensity: VisualDensity.compact,
-            textStyle: const TextStyle(
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              height: 1.2,
-            ),
-            shape: const StadiumBorder(),
-          ),
-          child: SignalAnimatedSurface(
-            key: const ValueKey('composer-model-visual'),
-            duration: appPressAnimationDuration(context, pressed),
-            decoration: BoxDecoration(
-              color: pressed
-                  ? AppColors.composerControlPressed
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(AppRadii.pill),
-            ),
-            child: SizedBox(
-              height: AppSizes.iconControl,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 10),
-                child: Center(child: child),
-              ),
-            ),
-          ),
-        ),
-        child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+    return _ComposerGlassIconButton(
+      buttonKey: const ValueKey('composer-model-button'),
+      visualKey: const ValueKey('composer-model-visual'),
+      tooltip: '选择模型：$label',
+      onPressed: onPressed,
+      child: Opacity(
+        opacity: onPressed == null ? 0.4 : 1,
+        child: const SmartIcon(LucideIcons.brain, size: AppIconSizes.primary),
       ),
     );
   }
@@ -10800,16 +11674,16 @@ class _ComposerPermissionButton extends StatelessWidget {
     final icon = sandboxMode?.icon ?? mode?.icon ?? LucideIcons.shield;
     final label = sandboxMode?.label ?? mode?.label ?? '权限';
     final ink = !enabled
-        ? AppColors.inactive
+        ? AppPalette.of(context).inactive
         : danger
-        ? AppColors.stop
-        : AppColors.composerControlInk;
+        ? AppPalette.of(context).stop
+        : AppPalette.of(context).composerControlInk;
     return _ComposerGlassIconButton(
       buttonKey: const ValueKey('permission-mode-chip'),
       visualKey: const ValueKey('permission-mode-visual'),
       tooltip: '访问权限：$label',
       onPressed: enabled ? onPressed : null,
-      child: Icon(icon, size: 18, color: ink),
+      child: Icon(icon, size: AppIconSizes.control, color: ink),
     );
   }
 }
@@ -10837,7 +11711,9 @@ class _ComposerContextIndicator extends StatelessWidget {
         ? '上下文剩余 ${_formatTokenCount(remainingContext)} / ${_formatTokenCount(contextWindow!)}，$shortLabel'
         : '上下文剩余 ${_formatTokenCount(remainingContext)}';
     final lowRemaining = fraction != null && fraction <= 0.15;
-    final readoutColor = lowRemaining ? AppColors.warning : AppColors.muted;
+    final readoutColor = lowRemaining
+        ? AppPalette.of(context).warning
+        : AppPalette.of(context).muted;
     return Tooltip(
       message: fullLabel,
       child: Semantics(
@@ -10855,10 +11731,10 @@ class _ComposerContextIndicator extends StatelessWidget {
                     value: usedFraction,
                     strokeWidth: 2,
                     strokeCap: StrokeCap.round,
-                    backgroundColor: AppColors.line,
+                    backgroundColor: AppPalette.of(context).line,
                     color: lowRemaining
-                        ? AppColors.warning
-                        : AppColors.inactive,
+                        ? AppPalette.of(context).warning
+                        : AppPalette.of(context).inactive,
                   ),
                 ),
                 const SizedBox(width: 6),
@@ -10918,9 +11794,12 @@ class PendingAttachmentStrip extends StatelessWidget {
             width: 174,
             padding: const EdgeInsets.fromLTRB(7, 7, 2, 7),
             decoration: BoxDecoration(
-              color: AppColors.porcelainMuted,
-              borderRadius: BorderRadius.circular(13),
-              border: Border.all(color: AppColors.line),
+              color: AppPalette.of(context).porcelainMuted,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: AppPalette.of(context).bubbleOutline,
+                width: 0.5,
+              ),
             ),
             child: Row(
               children: [
@@ -10937,11 +11816,11 @@ class PendingAttachmentStrip extends StatelessWidget {
                             semanticLabel: attachment.name,
                           )
                         : ColoredBox(
-                            color: AppColors.accent.withValues(alpha: 0.08),
-                            child: const Icon(
+                            color: AppPalette.of(context).surface,
+                            child: Icon(
                               LucideIcons.file,
-                              color: AppColors.accent,
-                              size: 22,
+                              color: AppPalette.of(context).muted,
+                              size: AppIconSizes.control,
                             ),
                           ),
                   ),
@@ -10959,7 +11838,7 @@ class PendingAttachmentStrip extends StatelessWidget {
                         style: const TextStyle(
                           fontSize: 12,
                           height: 1.2,
-                          fontWeight: FontWeight.w700,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                       const SizedBox(height: 3),
@@ -10967,8 +11846,8 @@ class PendingAttachmentStrip extends StatelessWidget {
                         uploading
                             ? '上传中'
                             : formatAttachmentSize(attachment.size),
-                        style: const TextStyle(
-                          color: AppColors.muted,
+                        style: TextStyle(
+                          color: AppPalette.of(context).muted,
                           fontSize: 12,
                           height: 1.2,
                         ),
@@ -10980,7 +11859,10 @@ class PendingAttachmentStrip extends StatelessWidget {
                   dimension: 44,
                   child: IconButton(
                     onPressed: uploading ? null : () => onRemove(attachment),
-                    icon: const Icon(LucideIcons.x, size: 18),
+                    icon: const SmartIcon(
+                      LucideIcons.x,
+                      size: AppIconSizes.control,
+                    ),
                     tooltip: '移除 ${attachment.name}',
                   ),
                 ),
@@ -11038,36 +11920,35 @@ Future<void> showPermissionModePicker(
 }) async {
   final mode = await showAppOptionPicker<PermissionMode>(
     context,
-    builder: (sheetContext) => Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const AppOptionSheetHeader(title: 'Claude Code 权限模式'),
-        const SizedBox(height: 12),
+    scrollContent: false,
+    builder: (sheetContext) => ConversationOptionSheet<PermissionMode>(
+      title: 'Claude Code 权限模式',
+      detail: '决定文件修改和命令执行是否需要确认。',
+      selected: selected,
+      options: [
         for (final item in PermissionMode.values)
-          AppOptionRow(
-            key: ValueKey('permission-mode-${item.wireName}'),
+          ConversationPickerOption(
+            value: item,
+            id: 'permission-mode-${item.wireName}',
             title: item.label,
             description:
                 item == PermissionMode.bypassPermissions &&
                     !allowBypassPermissions
-                ? '电脑端未开启 ALLOW_BYPASS_PERMISSIONS'
+                ? '电脑端尚未允许跳过权限检查'
                 : item.description,
-            selected: item == selected,
+            group: item == PermissionMode.bypassPermissions ? '跳过检查' : '执行方式',
             enabled:
                 item != PermissionMode.bypassPermissions ||
                 allowBypassPermissions,
             danger: item == PermissionMode.bypassPermissions,
-            leading: Icon(item.icon),
-            onTap:
-                item == PermissionMode.bypassPermissions &&
-                    !allowBypassPermissions
-                ? null
-                : () => Navigator.pop(sheetContext, item),
+            leading: item == PermissionMode.bypassPermissions
+                ? Icon(item.icon)
+                : SmartIcon(item.icon, size: AppIconSizes.control),
           ),
       ],
     ),
   );
+
   if (mode == null || !context.mounted) return;
   if (mode == PermissionMode.bypassPermissions) {
     final confirmed = await showDialog<bool>(
@@ -11085,7 +11966,10 @@ Future<void> showPermissionModePicker(
           ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.stop),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppPalette.of(context).stop,
+              foregroundColor: AppPalette.of(context).onStop,
+            ),
             child: const Text('对当前对话开启'),
           ),
         ],
@@ -11099,40 +11983,43 @@ Future<void> showPermissionModePicker(
 Future<void> showCodexSandboxModePicker(
   BuildContext context, {
   required CodexSandboxMode selected,
+  List<CodexSandboxMode> modes = CodexSandboxMode.supportedModes,
   required ValueChanged<CodexSandboxMode> onSelected,
 }) async {
   final mode = await showAppOptionPicker<CodexSandboxMode>(
     context,
-    builder: (sheetContext) => Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const AppOptionSheetHeader(
-          title: 'Codex 沙箱模式',
-          detail: 'Codex 非交互执行不会在任务中途弹出权限审批。',
-        ),
-        const SizedBox(height: 12),
-        for (final item in CodexSandboxMode.values)
-          AppOptionRow(
-            key: ValueKey('codex-sandbox-${item.wireName}'),
+    scrollContent: false,
+    builder: (sheetContext) => ConversationOptionSheet<CodexSandboxMode>(
+      title: 'Codex 沙箱模式',
+      detail: '所选模式在当前对话沿用。Codex 执行中不会弹出权限审批。',
+      selected: selected,
+      options: [
+        for (final item in modes)
+          ConversationPickerOption(
+            value: item,
+            id: 'codex-sandbox-${item.wireName}',
             title: item.label,
             description: item.description,
-            selected: item == selected,
+            group: item == CodexSandboxMode.dangerFullAccess
+                ? '不限制访问'
+                : '限制访问范围',
             danger: item == CodexSandboxMode.dangerFullAccess,
-            leading: Icon(item.icon),
-            onTap: () => Navigator.pop(sheetContext, item),
+            leading: item == CodexSandboxMode.dangerFullAccess
+                ? Icon(item.icon)
+                : SmartIcon(item.icon, size: AppIconSizes.control),
           ),
       ],
     ),
   );
+
   if (mode == null || !context.mounted) return;
-  if (mode == CodexSandboxMode.dangerFullAccess) {
+  if (mode == CodexSandboxMode.dangerFullAccess && mode != selected) {
     final confirmed = await showDialog<bool>(
       context: context,
       animationStyle: appOverlayAnimationStyle(context),
       builder: (dialogContext) => AlertDialog(
-        title: const Text('为本次任务关闭沙箱'),
-        content: const Text('Codex 将能访问工作区外的文件和命令。任务发送后会恢复为只读。'),
+        title: const Text('当前对话使用完全访问'),
+        content: const Text('Codex 将能访问工作区外的文件和命令。之后的消息沿用此模式，可随时在沙箱模式中切换。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
@@ -11140,8 +12027,11 @@ Future<void> showCodexSandboxModePicker(
           ),
           FilledButton(
             onPressed: () => Navigator.pop(dialogContext, true),
-            style: FilledButton.styleFrom(backgroundColor: AppColors.stop),
-            child: const Text('仅本次开启'),
+            style: FilledButton.styleFrom(
+              backgroundColor: AppPalette.of(context).stop,
+              foregroundColor: AppPalette.of(context).onStop,
+            ),
+            child: const Text('使用完全访问'),
           ),
         ],
       ),
@@ -11174,76 +12064,119 @@ class CommandSuggestions extends StatelessWidget {
     super.key,
     required this.commands,
     required this.loading,
+    this.failed = false,
+    this.onRefresh,
     this.maxHeight = 292,
     required this.onSelected,
   });
 
   final List<String> commands;
   final bool loading;
+  final bool failed;
+  final VoidCallback? onRefresh;
   final double maxHeight;
   final ValueChanged<String> onSelected;
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Container(
       key: const ValueKey('command-suggestions'),
       padding: const EdgeInsets.symmetric(vertical: 6),
       decoration: BoxDecoration(
-        color: AppColors.surfaceElevated,
+        color: palette.surfaceElevated,
         borderRadius: BorderRadius.circular(AppRadii.control),
-        border: Border.all(color: AppColors.line),
+        border: Border.all(color: palette.line),
       ),
       child: ConstrainedBox(
         constraints: BoxConstraints(maxHeight: maxHeight),
-        child: loading
-            ? const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (onRefresh != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 16, right: 4),
                 child: Row(
                   children: [
-                    SizedBox.square(
-                      dimension: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 1.8,
-                        color: AppColors.accent,
+                    Expanded(
+                      child: Text(
+                        failed ? '指令获取失败，请刷新重试' : '电脑端指令',
+                        style: TextStyle(
+                          color: failed ? palette.danger : palette.muted,
+                          fontSize: 12,
+                        ),
                       ),
                     ),
-                    SizedBox(width: 10),
-                    Text(
-                      '正在获取 Claude Code 指令',
-                      style: TextStyle(color: AppColors.muted),
+                    IconButton(
+                      tooltip: '刷新指令',
+                      onPressed: loading ? null : onRefresh,
+                      icon: const SmartIcon(
+                        LucideIcons.refreshCw,
+                        size: AppIconSizes.control,
+                      ),
                     ),
                   ],
                 ),
-              )
-            : commands.isEmpty
-            ? const Padding(
-                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                child: Text(
-                  '没有匹配的指令',
-                  style: TextStyle(color: AppColors.muted),
-                ),
-              )
-            : ListView.builder(
-                shrinkWrap: true,
-                padding: EdgeInsets.zero,
-                itemCount: commands.length,
-                itemBuilder: (context, index) {
-                  final command = commands[index];
-                  return ListTile(
-                    dense: true,
-                    visualDensity: VisualDensity.compact,
-                    leading: const Text(
-                      '/',
-                      style: TextStyle(
-                        color: AppColors.accent,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    title: Text(command),
-                    onTap: () => onSelected(command),
-                  );
-                },
               ),
+            Flexible(
+              child: loading
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      child: Row(
+                        children: [
+                          SizedBox.square(
+                            dimension: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.8,
+                              color: palette.accent,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Text(
+                            '正在获取指令',
+                            style: TextStyle(color: palette.muted),
+                          ),
+                        ],
+                      ),
+                    )
+                  : commands.isEmpty
+                  ? Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
+                      child: Text(
+                        failed ? '点击刷新重新获取电脑端指令' : '没有匹配的指令',
+                        style: TextStyle(color: palette.muted),
+                      ),
+                    )
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      padding: EdgeInsets.zero,
+                      itemCount: commands.length,
+                      itemBuilder: (context, index) {
+                        final command = commands[index];
+                        return ListTile(
+                          dense: true,
+                          visualDensity: VisualDensity.compact,
+                          leading: Text(
+                            '/',
+                            style: TextStyle(
+                              color: palette.accent,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          title: Text(command),
+                          onTap: () => onSelected(command),
+                        );
+                      },
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -11259,11 +12192,11 @@ class ScanFrame extends StatelessWidget {
   Widget build(BuildContext context) {
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: AppColors.surfaceElevated,
+        color: AppPalette.of(context).surfaceElevated,
         borderRadius: BorderRadius.circular(
           compact ? AppRadii.surface : AppRadii.header,
         ),
-        border: Border.all(color: AppColors.line),
+        border: Border.all(color: AppPalette.of(context).line),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(
@@ -11281,14 +12214,14 @@ class ScanFrame extends StatelessWidget {
                   vertical: compact ? 4 : 6,
                 ),
                 decoration: BoxDecoration(
-                  color: AppColors.surfaceElevated,
+                  color: AppPalette.of(context).surfaceElevated,
                   borderRadius: BorderRadius.circular(AppRadii.compact),
-                  border: Border.all(color: AppColors.line),
+                  border: Border.all(color: AppPalette.of(context).line),
                 ),
                 child: Text(
                   '对准二维码',
                   style: TextStyle(
-                    color: AppColors.muted,
+                    color: AppPalette.of(context).muted,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
@@ -11336,11 +12269,11 @@ class ScanCorner extends StatelessWidget {
     return SizedBox(
       width: compact ? 22 : 34,
       height: compact ? 22 : 34,
-      child: const DecoratedBox(
+      child: DecoratedBox(
         decoration: BoxDecoration(
           border: Border(
-            top: BorderSide(color: AppColors.accent, width: 3),
-            left: BorderSide(color: AppColors.accent, width: 3),
+            top: BorderSide(color: AppPalette.of(context).accent, width: 3),
+            left: BorderSide(color: AppPalette.of(context).accent, width: 3),
           ),
         ),
       ),
@@ -11349,93 +12282,26 @@ class ScanCorner extends StatelessWidget {
 }
 
 class AppBackground extends StatelessWidget {
-  const AppBackground({
-    super.key,
-    required this.child,
-    this.chatBackground = ChatBackgroundPreference.defaultValue,
-  });
+  const AppBackground({super.key, required this.child});
 
   final Widget child;
-  final ChatBackgroundPreference chatBackground;
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       resizeToAvoidBottomInset: false,
-      backgroundColor: AppColors.bgMid,
+      backgroundColor: AppPalette.of(context).paper,
       body: Stack(
         fit: StackFit.expand,
         children: [
-          RepaintBoundary(
+          DecoratedBox(
             key: const ValueKey('chat-background-layer'),
-            child: _ChatBackgroundLayer(preference: chatBackground),
+            decoration: BoxDecoration(color: AppPalette.of(context).paper),
           ),
           _KeyboardResizeBody(child: BackdropGroup(child: child)),
         ],
       ),
     );
-  }
-}
-
-class _ChatBackgroundLayer extends StatelessWidget {
-  const _ChatBackgroundLayer({required this.preference, this.cacheWidth});
-
-  final ChatBackgroundPreference preference;
-  final int? cacheWidth;
-
-  @override
-  Widget build(BuildContext context) {
-    if (preference.kind == ChatBackgroundKind.defaultStyle) {
-      return const DecoratedBox(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [AppColors.bgTop, AppColors.bgMid, AppColors.bgBottom],
-            stops: [0, 0.56, 1],
-          ),
-        ),
-      );
-    }
-    if (preference.kind == ChatBackgroundKind.localImage &&
-        preference.imagePath != null) {
-      final width =
-          cacheWidth ??
-          (MediaQuery.sizeOf(context).width *
-                  MediaQuery.devicePixelRatioOf(context))
-              .round()
-              .clamp(720, 2160)
-              .toInt();
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          const ColoredBox(color: AppColors.paper),
-          Semantics(
-            excludeSemantics: true,
-            child: Image.file(
-              File(preference.imagePath!),
-              key: const ValueKey('custom-chat-background-image'),
-              fit: BoxFit.cover,
-              cacheWidth: width,
-              filterQuality: FilterQuality.low,
-              gaplessPlayback: true,
-              errorBuilder: (_, _, _) =>
-                  const ColoredBox(color: AppColors.paper),
-            ),
-          ),
-          ColoredBox(
-            color: Colors.white.withValues(alpha: preference.overlayOpacity),
-          ),
-        ],
-      );
-    }
-    final color = switch (preference.preset) {
-      ChatBackgroundPreset.mint => const Color(0xFFECF5F3),
-      ChatBackgroundPreset.sunrise => const Color(0xFFF1F0F7),
-      ChatBackgroundPreset.rose => const Color(0xFFF5EEF2),
-      null => AppColors.paper,
-    };
-    return ColoredBox(color: color);
   }
 }
 
@@ -11469,6 +12335,7 @@ class _KeyboardResizeBody extends StatelessWidget {
 Future<T?> showAppOptionPicker<T>(
   BuildContext context, {
   bool requestFocus = true,
+  bool scrollContent = true,
   required Widget Function(BuildContext sheetContext) builder,
 }) {
   return showModalBottomSheet<T>(
@@ -11493,12 +12360,14 @@ Future<T?> showAppOptionPicker<T>(
               constraints: BoxConstraints(maxHeight: available),
               child: AppSheetSurface(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                child: SingleChildScrollView(child: builder(sheetContext)),
+                child: scrollContent
+                    ? SingleChildScrollView(child: builder(sheetContext))
+                    : builder(sheetContext),
               ),
             ),
           ),
         ),
-        barrierColor: AppColors.scrim,
+        barrierColor: AppPalette.of(sheetContext).scrim,
         onBarrierTap: () => Navigator.pop(sheetContext),
       );
     },
@@ -11523,7 +12392,10 @@ class AppSheetSurface extends StatelessWidget {
   Widget build(BuildContext context) {
     final effectiveBorderRadius = borderRadius ?? BorderRadius.circular(radius);
     return Container(
-      decoration: AppLiquidGlass.strong(borderRadius: effectiveBorderRadius),
+      decoration: AppLiquidGlass.strong(
+        context: context,
+        borderRadius: effectiveBorderRadius,
+      ),
       child: ClipRRect(
         borderRadius: effectiveBorderRadius,
         child: Padding(
@@ -11553,7 +12425,7 @@ class ScreenTitle extends StatelessWidget {
         const SizedBox(height: 8),
         Text(
           subtitle,
-          style: const TextStyle(fontSize: 15, color: AppColors.muted),
+          style: TextStyle(fontSize: 15, color: AppPalette.of(context).muted),
         ),
       ],
     );
@@ -11577,7 +12449,7 @@ class StatusLabel extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 17, color: color),
+        Icon(icon, size: AppIconSizes.inline, color: color),
         const SizedBox(width: 5),
         Text(
           label,
@@ -11614,8 +12486,8 @@ class ActionButton extends StatelessWidget {
         icon: Icon(icon),
         label: Text(label),
         style: FilledButton.styleFrom(
-          backgroundColor: AppColors.accent,
-          foregroundColor: Colors.white,
+          backgroundColor: AppPalette.of(context).accent,
+          foregroundColor: AppPalette.of(context).onCta,
           minimumSize: const Size.fromHeight(48),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(AppRadii.control),
@@ -11647,6 +12519,7 @@ class PromptChip extends StatelessWidget {
       builder: (context, pressed, child) => SignalAnimatedSurface(
         duration: appPressAnimationDuration(context, pressed),
         decoration: AppLiquidGlass.thin(
+          context: context,
           borderRadius: borderRadius,
           pressed: pressed,
         ),
@@ -11666,20 +12539,24 @@ class PromptChip extends StatelessWidget {
                 Row(
                   children: [
                     if (icon != null)
-                      Icon(icon, size: 20, color: AppColors.accentStrong),
+                      Icon(
+                        icon,
+                        size: AppIconSizes.control,
+                        color: AppPalette.of(context).accentStrong,
+                      ),
                     const Spacer(),
-                    const Icon(
+                    Icon(
                       LucideIcons.arrowUpRight,
-                      size: 18,
-                      color: AppColors.inactive,
+                      size: AppIconSizes.control,
+                      color: AppPalette.of(context).inactive,
                     ),
                   ],
                 ),
                 const SizedBox(height: 10),
                 Text(
                   label,
-                  style: const TextStyle(
-                    color: AppColors.ink,
+                  style: TextStyle(
+                    color: AppPalette.of(context).ink,
                     fontSize: 14,
                     fontWeight: FontWeight.w700,
                     letterSpacing: -0.1,
@@ -11691,8 +12568,8 @@ class PromptChip extends StatelessWidget {
                     caption!,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: AppColors.muted,
+                    style: TextStyle(
+                      color: AppPalette.of(context).muted,
                       fontSize: 12,
                       fontWeight: FontWeight.w500,
                     ),
@@ -11715,8 +12592,8 @@ class MonoText extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final base = const TextStyle(
-      color: AppColors.muted,
+    final base = TextStyle(
+      color: AppPalette.of(context).muted,
       fontFamily: AppTypography.codeFontFamily,
       fontFamilyFallback: AppTypography.codeFontFamilyFallback,
       fontSize: 13,
@@ -11856,12 +12733,6 @@ bool isBlankAssistantMessage(TranscriptMessage message) {
   return message.role == MessageRole.assistant && message.text.trim().isEmpty;
 }
 
-bool isHiddenThinkingActivity(TranscriptMessage message) {
-  return message.role == MessageRole.activity &&
-      message.activityKind == ActivityKind.thinking &&
-      message.activityState != ActivityState.running;
-}
-
 bool hasAssistantReplyAfterLastUser(List<TranscriptMessage> messages) {
   final lastUser = messages.lastIndexWhere(
     (message) => message.role == MessageRole.user,
@@ -11922,6 +12793,7 @@ void mergeRemoteActivity(
   final existing = existingIndex >= 0 ? messages[existingIndex] : null;
   final toolName = activity.toolName ?? existing?.activityTool;
   final detail = activity.detail ?? existing?.activityDetail;
+  final durationMs = activity.durationMs ?? existing?.activityDurationMs;
 
   final next = TranscriptMessage.activity(
     activityLabel(activity.kind, toolName, activity.state),
@@ -11930,6 +12802,7 @@ void mergeRemoteActivity(
     state: activity.state,
     tool: toolName,
     detail: detail,
+    durationMs: durationMs,
   );
   if (existingIndex >= 0) {
     messages[existingIndex] = next;
@@ -11942,11 +12815,7 @@ void removeCurrentTurnActivities(List<TranscriptMessage> messages) {
   final start =
       messages.lastIndexWhere((message) => message.role == MessageRole.user) +
       1;
-  for (var index = messages.length - 1; index >= start; index--) {
-    if (messages[index].role == MessageRole.activity) {
-      messages.removeAt(index);
-    }
-  }
+  finishRunningActivities(messages, ActivityState.done, start: start);
 }
 
 void finishRunningActivities(
@@ -11954,6 +12823,7 @@ void finishRunningActivities(
   ActivityState state, {
   int start = 0,
   ActivityKind? kind,
+  int? durationMs,
 }) {
   for (var index = start; index < messages.length; index++) {
     final message = messages[index];
@@ -11968,6 +12838,7 @@ void finishRunningActivities(
       state: state,
       tool: message.activityTool,
       detail: message.activityDetail,
+      durationMs: durationMs ?? message.activityDurationMs,
     );
   }
 }
@@ -11995,6 +12866,7 @@ String activityLabel(ActivityKind kind, String? toolName, ActivityState state) {
     'Task' => '执行子任务',
     'WebSearch' => '搜索网页',
     'WebFetch' => '读取网页',
+    'Skill' => '调用技能',
     final String name when name.isNotEmpty => '调用 $name',
     _ => '调用工具',
   };

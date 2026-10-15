@@ -27,10 +27,31 @@ enum CodexSandboxMode {
   final String label;
   final String description;
 
+  static const supportedModes = <CodexSandboxMode>[
+    readOnly,
+    workspaceWrite,
+    dangerFullAccess,
+  ];
+
   static CodexSandboxMode fromWire(Object? value) {
+    if (value == null) return CodexSandboxMode.dangerFullAccess;
     return values.firstWhere(
       (mode) => mode.wireName == value,
       orElse: () => CodexSandboxMode.readOnly,
     );
+  }
+
+  static List<CodexSandboxMode>? listFromWire(Object? value) {
+    if (value is! List) return null;
+    final modes = <CodexSandboxMode>[];
+    for (final raw in value) {
+      for (final mode in supportedModes) {
+        if (mode.wireName == raw && !modes.contains(mode)) {
+          modes.add(mode);
+          break;
+        }
+      }
+    }
+    return modes.isEmpty ? const [CodexSandboxMode.readOnly] : modes;
   }
 }

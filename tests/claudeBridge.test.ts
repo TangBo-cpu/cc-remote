@@ -10,6 +10,7 @@ import {
   extractClaudePermissionRequest,
   extractClaudeSessionInfo,
   isMissingConversationError,
+  mergeClaudeSessionInfo,
   normalizeClaudeEffort,
   normalizeClaudeModel,
   permissionControlResponse,
@@ -141,8 +142,10 @@ test('ClaudeBridge resets automatic effort through the Claude Code environment',
 
     const environment = JSON.parse((await readFile(envLogPath, 'utf8')).trim()) as {
       effort: string | null;
+      entrypoint: string | null;
     };
     assert.equal(environment.effort, 'auto');
+    assert.equal(environment.entrypoint, 'cc-app');
   } finally {
     bridge?.close();
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
@@ -320,7 +323,7 @@ test('extracts sorted invokable commands from Claude init events', () => {
   }), []);
 });
 
-test('extracts the active model and exact remaining context', () => {
+test('extracts the active model without treating billed totals as context fill', () => {
   assert.deepEqual(extractClaudeSessionInfo({
     type: 'system',
     subtype: 'init',
@@ -341,45 +344,48 @@ test('extracts the active model and exact remaining context', () => {
   }), {
     model: 'claude-opus-4-8',
     contextWindow: 200000,
-    usedTokens: 25081,
-    remainingTokens: 174919,
   });
 });
 
-test('result usage tracks the latest request, not cumulative modelUsage', () => {
-  // modelUsage sums every API turn of the run; only the final request fits
-  // inside the context window.
+test('result usage is ignored because it sums every API turn of the run', () => {
   assert.deepEqual(extractClaudeSessionInfo({
     type: 'result',
-    model: 'claude-opus-4-8',
+    model: 'grok-4.6',
     usage: {
-      input_tokens: 4,
-      cache_read_input_tokens: 24572,
-      cache_creation_input_tokens: 505,
-      output_tokens: 2100,
+      input_tokens: 51388,
+      cache_read_input_tokens: 256,
+      cache_creation_input_tokens: 0,
+      output_tokens: 113,
     },
     modelUsage: {
-      'claude-opus-4-8': {
-        inputTokens: 1009,
-        cacheReadInputTokens: 73716,
-        cacheCreationInputTokens: 1515,
-        outputTokens: 6300,
-        contextWindow: 200000,
-      },
-      'claude-haiku-4-5': {
-        inputTokens: 10,
-        cacheReadInputTokens: 100,
+      'grok-4.6[1m]': {
+        inputTokens: 51388,
+        cacheReadInputTokens: 256,
         cacheCreationInputTokens: 0,
-        outputTokens: 50,
-        contextWindow: 200000,
+        outputTokens: 113,
+        contextWindow: 1000000,
       },
     },
   }), {
-    model: 'claude-opus-4-8',
-    contextWindow: 200000,
-    usedTokens: 25081,
-    remainingTokens: 174919,
+    model: 'grok-4.6[1m]',
+    contextWindow: 1000000,
   });
+});
+
+test('zeroed stream-json assistant usage is not treated as remaining context', () => {
+  assert.equal(extractClaudeSessionInfo({
+    type: 'assistant',
+    message: {
+      model: 'grok-4.6',
+      usage: {
+        input_tokens: 0,
+        cache_read_input_tokens: 0,
+        cache_creation_input_tokens: 0,
+        output_tokens: 0,
+        context_details: { input_tokens: 0, output_tokens: 0 },
+      },
+    },
+  }), null);
 });
 
 test('assistant usage streams live remaining context for the 1M window', () => {
@@ -402,7 +408,24 @@ test('assistant usage streams live remaining context for the 1M window', () => {
   });
 });
 
-test('restores model and remaining context from an existing Claude session', async () => {
+test('merge keeps the 1M window and last-request used tokens', () => {
+  assert.deepEqual(mergeClaudeSessionInfo({
+    model: 'grok-4.6[1m]',
+    contextWindow: 1000000,
+  }, {
+    model: 'grok-4.6',
+    contextWindow: 200000,
+    usedTokens: 72737,
+    remainingTokens: 127263,
+  }), {
+    model: 'grok-4.6[1m]',
+    contextWindow: 1000000,
+    usedTokens: 72737,
+    remainingTokens: 927263,
+  });
+});
+
+test('restores remaining context from the last transcript request', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-remote-session-info-'));
   const projectsDir = join(dir, 'projects');
   const sessionDir = join(projectsDir, 'old-worktree');
@@ -435,10 +458,68 @@ test('restores model and remaining context from an existing Claude session', asy
       settingsPath,
       environment: {},
     }), {
-      model: 'claude-opus-4-8',
+      model: 'gpt-5.6-terra',
       contextWindow: 200000,
       usedTokens: 24952,
       remainingTokens: 175048,
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('restores 1M window from cost-state even when message.model omits [1m]', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-session-1m-'));
+  const projectsDir = join(dir, 'projects');
+  const sessionDir = join(projectsDir, 'worktree');
+  const settingsPath = join(dir, 'settings.json');
+  const sessionId = '13868263-fcb5-46f5-98ba-31084a7c2ed8';
+  try {
+    await mkdir(sessionDir, { recursive: true });
+    await writeFile(settingsPath, '{}', 'utf8');
+    await writeFile(join(sessionDir, `${sessionId}.jsonl`), [
+      JSON.stringify({
+        type: 'assistant',
+        isSidechain: false,
+        message: {
+          model: 'grok-4.6',
+          usage: { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+        },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        isSidechain: false,
+        message: {
+          model: 'grok-4.6',
+          usage: {
+            input_tokens: 59553,
+            cache_read_input_tokens: 13184,
+            cache_creation_input_tokens: 0,
+          },
+        },
+      }),
+      JSON.stringify({
+        type: 'cost-state',
+        modelUsage: {
+          'grok-4.6[1M]': {
+            inputTokens: 423201,
+            cacheReadInputTokens: 52992,
+            cacheCreationInputTokens: 0,
+          },
+        },
+      }),
+    ].join('\n'), 'utf8');
+
+    assert.deepEqual(await restoreClaudeSessionInfo({
+      sessionId,
+      projectsDir,
+      settingsPath,
+      environment: {},
+    }), {
+      model: 'grok-4.6[1M]',
+      contextWindow: 1000000,
+      usedTokens: 72737,
+      remainingTokens: 927263,
     });
   } finally {
     await rm(dir, { recursive: true, force: true });

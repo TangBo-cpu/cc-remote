@@ -123,9 +123,10 @@ export function isClaudePermissionMode(value: unknown): value is ClaudePermissio
 }
 
 export function normalizeCodexSandboxMode(value: unknown): CodexSandboxMode {
-  if (value === undefined || value === null || value === '' || value === 'manual') {
-    return 'read-only';
+  if (value === undefined || value === null || value === '') {
+    return 'danger-full-access';
   }
+  if (value === 'manual') return 'read-only';
   if (value === 'read-only'
     || value === 'workspace-write'
     || value === 'danger-full-access') {
