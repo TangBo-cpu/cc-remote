@@ -181,6 +181,7 @@ class AppTypography {
   static const assistantBodyHeight = 1.6;
   static const userBodySize = 15.0;
   static const userBodyHeight = 1.6;
+  static const activityBodySize = 13.0;
 }
 
 class AppSpacing {

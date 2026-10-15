@@ -1,0 +1,98 @@
+import 'package:flutter/material.dart';
+
+import 'activity_disclosure.dart';
+import 'data/remote_models.dart';
+import 'signal_console_theme.dart';
+import 'thinking_block.dart' show thinkingDurationLabel;
+import 'workspace_paths.dart';
+
+String toolActivityStateLabel(ActivityState? state) => switch (state) {
+  ActivityState.running => '运行中',
+  ActivityState.done => '已完成',
+  ActivityState.error => '执行失败',
+  ActivityState.stopped => '已停止',
+  null => '状态未知',
+};
+
+class ToolActivityDetail extends StatefulWidget {
+  const ToolActivityDetail({
+    super.key,
+    required this.activity,
+    required this.title,
+    required this.titleWidget,
+    required this.leading,
+    this.running = false,
+    this.reveal = false,
+  });
+
+  final TranscriptMessage activity;
+  final String title;
+  final Widget titleWidget;
+  final Widget leading;
+  final bool running;
+  final bool reveal;
+
+  @override
+  State<ToolActivityDetail> createState() => _ToolActivityDetailState();
+}
+
+class _ToolActivityDetailState extends State<ToolActivityDetail> {
+  bool expanded = true;
+
+  @override
+  void didUpdateWidget(covariant ToolActivityDetail oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.activity.activityId != widget.activity.activityId) {
+      expanded = true;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final message = widget.activity;
+    final palette = AppPalette.of(context);
+    final detail = message.activityDetail?.trim() ?? '';
+    final duration = thinkingDurationLabel(message.activityDurationMs);
+    final status = toolActivityStateLabel(message.activityState);
+    final tone = switch (message.activityState) {
+      ActivityState.error => palette.danger,
+      ActivityState.stopped => palette.warning,
+      _ => palette.muted,
+    };
+    return ActivityDisclosure(
+      toggleKey: ValueKey('activity-step-toggle-${message.activityId}'),
+      title: widget.title,
+      titleWidget: widget.titleWidget,
+      leading: widget.leading,
+      running: widget.running,
+      expanded: (expanded || widget.reveal) && detail.isNotEmpty,
+      statusText: '$status${duration.isEmpty ? '' : ' · $duration'}',
+      tone: tone,
+      semanticLabel:
+          '${widget.title}，$status'
+          '${duration.isEmpty ? '' : '，$duration'}',
+      onToggle: detail.isEmpty
+          ? null
+          : () => setState(() => expanded = !expanded),
+      child: Padding(
+        padding: const EdgeInsetsDirectional.fromSTEB(26, 0, 8, 8),
+        child: WorkspacePathText(
+          detail,
+          key: ValueKey('activity-detail-${message.activityId}'),
+          selectable: true,
+          style: TextStyle(
+            color: palette.muted,
+            fontSize: AppTypography.activityBodySize,
+            height: 1.6,
+            fontFamily: message.activityTool == 'Bash'
+                ? AppTypography.codeFontFamily
+                : null,
+            fontFamilyFallback: message.activityTool == 'Bash'
+                ? AppTypography.codeFontFamilyFallback
+                : null,
+          ),
+        ),
+      ),
+    );
+  }
+}

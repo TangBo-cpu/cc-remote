@@ -1566,7 +1566,10 @@ void main() {
     await tester.pumpAndSettle();
 
     final modelButton = find.byKey(const ValueKey('composer-model-button'));
-    expect(tester.getSize(modelButton), const Size.square(AppSizes.touchTarget));
+    expect(
+      tester.getSize(modelButton),
+      const Size.square(AppSizes.touchTarget),
+    );
     expect(
       find.descendant(of: modelButton, matching: find.byType(Text)),
       findsNothing,
@@ -2479,11 +2482,6 @@ void main() {
       ),
     );
 
-    await tester.tap(find.byKey(const ValueKey('process-history-toggle')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-read-1')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('src/daemon.ts').last);
     expect(opened, 'src/daemon.ts');
@@ -4594,14 +4592,14 @@ void main() {
     expect(find.byKey(const ValueKey('thinking-bubble')), findsOneWidget);
     expect(find.text('思考中'), findsOneWidget);
     expect(find.byType(ShaderMask), findsOneWidget);
-    expect(find.text('先检查状态。', findRichText: true), findsNothing);
+    expect(find.text('先检查状态。', findRichText: true), findsOneWidget);
     final liveStatus = tester.getSemantics(
       find.bySemanticsLabel('思考中，本轮已运行 12 秒'),
     );
     expect(liveStatus.getSemanticsData().flagsCollection.isLiveRegion, isTrue);
     await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
     await tester.pump(const Duration(milliseconds: 220));
-    expect(find.text('先检查状态。', findRichText: true), findsOneWidget);
+    expect(find.text('先检查状态。', findRichText: true), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -4632,31 +4630,33 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('expanded reasoning receives streamed Markdown without a preview', (
-    tester,
-  ) async {
-    Widget buildReasoning(String detail) => MaterialApp(
-      home: Scaffold(
-        body: ThinkingHistoryBlock(
-          message: TranscriptMessage.activity(
-            '正在思考',
-            id: 'thinking',
-            kind: ActivityKind.thinking,
-            state: ActivityState.running,
-            detail: detail,
+  testWidgets(
+    'expanded reasoning receives streamed Markdown without a preview',
+    (tester) async {
+      Widget buildReasoning(String detail) => MaterialApp(
+        home: Scaffold(
+          body: ThinkingHistoryBlock(
+            message: TranscriptMessage.activity(
+              '正在思考',
+              id: 'thinking',
+              kind: ActivityKind.thinking,
+              state: ActivityState.running,
+              detail: detail,
+            ),
           ),
         ),
-      ),
-    );
+      );
 
-    await tester.pumpWidget(buildReasoning('第一句。'));
-    expect(find.text('第一句。', findRichText: true), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
-    await tester.pump(const Duration(milliseconds: 220));
-    await tester.pumpWidget(buildReasoning('第一句。第二句。'));
-    expect(find.text('第一句。第二句。', findRichText: true), findsOneWidget);
-    expect(find.byKey(const ValueKey('thinking-history-content')), findsOneWidget);
-  });
+      await tester.pumpWidget(buildReasoning('第一句。'));
+      expect(find.text('第一句。', findRichText: true), findsOneWidget);
+      await tester.pumpWidget(buildReasoning('第一句。第二句。'));
+      expect(find.text('第一句。第二句。', findRichText: true), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('thinking-history-content')),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('completed thinking activity stays as collapsible history', (
     tester,
@@ -4683,26 +4683,24 @@ void main() {
     expect(find.text('已深度思考'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('thinking-history-content')),
+      findsOneWidget,
+    );
+    expect(find.text('先检查状态。再整理结果。', findRichText: true), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('thinking-history-content')),
       findsNothing,
     );
-
     await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('thinking-history-content')),
       findsOneWidget,
     );
-    expect(find.text('先检查状态。再整理结果。', findRichText: true), findsOneWidget);
-
-    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('thinking-history-content')),
-      findsNothing,
-    );
   });
 
-  testWidgets('consecutive tool activities merge into one timeline card', (
+  testWidgets('consecutive tool activities render an inline sequence', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -4756,91 +4754,103 @@ void main() {
 
     expect(find.byType(ActivityTimelineCard), findsOneWidget);
     expect(find.text('运行命令'), findsOneWidget);
-    expect(find.byKey(const ValueKey('activity-step-toggle-t1')), findsNothing);
-    expect(find.byKey(const ValueKey('activity-step-toggle-t2')), findsOneWidget);
-    expect(find.byKey(const ValueKey('activity-step-toggle-t3')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('activity-step-toggle-t1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('activity-step-toggle-t2')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('activity-step-toggle-t3')),
+      findsOneWidget,
+    );
 
     await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
     await tester.pump(const Duration(milliseconds: 220));
-    expect(find.byKey(const ValueKey('activity-step-toggle-t1')), findsOneWidget);
-    expect(find.byKey(const ValueKey('activity-step-toggle-t2')), findsOneWidget);
-
+    expect(find.byKey(const ValueKey('activity-step-toggle-t1')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('activity-step-toggle-t2')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pump(const Duration(milliseconds: 220));
+    expect(find.text('needle pattern'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('activity-step-toggle-t2')));
-    await tester.pump(const Duration(milliseconds: 300));
-    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsOneWidget);
-    expect(find.byKey(const ValueKey('activity-detail-t2')), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 220));
+    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
+    expect(find.byKey(const ValueKey('activity-detail-t2')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-t2')));
+    await tester.pump(const Duration(milliseconds: 220));
     expect(find.text('needle pattern'), findsOneWidget);
   });
 
-  testWidgets(
-    'skill activity renders its name and opens a detail sheet',
-    (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildSignalConsoleTheme(),
-          home: Scaffold(
-            body: TranscriptView(
-              messages: [
-                TranscriptMessage.user('搜索绍兴市中心美食'),
-                TranscriptMessage.activity(
-                  '已调用技能',
-                  id: 'skill-1',
-                  kind: ActivityKind.tool,
-                  state: ActivityState.done,
-                  tool: 'Skill',
-                  detail: 'agent-reach',
-                ),
-                TranscriptMessage.assistant('找到以下推荐'),
-              ],
-              session: null,
-              activeSessionId: null,
-              runStartedAt: null,
-              running: false,
-              connected: true,
-              offline: false,
-              pendingPermissions: const [],
-              respondingPermissionIds: const {},
-              onFillPrompt: (_) {},
-              onPermissionAllow: (_) {},
-              onPermissionDeny: (_) {},
-              onReconnect: () {},
-            ),
+  testWidgets('skill activity shows its name and inline detail', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: TranscriptView(
+            messages: [
+              TranscriptMessage.user('搜索绍兴市中心美食'),
+              TranscriptMessage.activity(
+                '已调用技能',
+                id: 'skill-1',
+                kind: ActivityKind.tool,
+                state: ActivityState.done,
+                tool: 'Skill',
+                detail: 'agent-reach',
+              ),
+              TranscriptMessage.assistant('找到以下推荐'),
+            ],
+            session: null,
+            activeSessionId: null,
+            runStartedAt: null,
+            running: false,
+            connected: true,
+            offline: false,
+            pendingPermissions: const [],
+            respondingPermissionIds: const {},
+            onFillPrompt: (_) {},
+            onPermissionAllow: (_) {},
+            onPermissionDeny: (_) {},
+            onReconnect: () {},
           ),
         ),
-      );
+      ),
+    );
 
-      expect(find.byType(ActivityTimelineCard), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('process-history-toggle')));
-      await tester.pumpAndSettle();
-      expect(find.byType(ActivityTimelineCard), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
-      await tester.pumpAndSettle();
-      expect(find.text('使用技能 · agent-reach'), findsOneWidget);
-      expect(find.text('已调用技能'), findsOneWidget);
-      expect(find.text('agent-reach'), findsOneWidget);
-      expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('activity-step-toggle-skill-1')),
-          matching: find.byType(SmartIcon),
-        ),
-        findsOneWidget,
-      );
+    expect(find.byType(ActivityTimelineCard), findsOneWidget);
+    expect(find.text('使用技能 · agent-reach'), findsOneWidget);
+    expect(find.text('已调用技能'), findsOneWidget);
+    expect(find.text('agent-reach'), findsNWidgets(2));
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('activity-step-toggle-skill-1')),
+        matching: find.byType(SmartIcon),
+      ),
+      findsOneWidget,
+    );
 
-      await tester.tap(find.byKey(const ValueKey('activity-step-toggle-skill-1')));
-      await tester.pumpAndSettle();
-      expect(
-        find.descendant(
-          of: find.byKey(const ValueKey('tool-activity-sheet')),
-          matching: find.text('agent-reach'),
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const ValueKey('activity-detail-skill-1')),
-        findsOneWidget,
-      );
-    },
-  );
+    await tester.tap(
+      find.byKey(const ValueKey('activity-step-toggle-skill-1')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
+    expect(find.byKey(const ValueKey('activity-detail-skill-1')), findsNothing);
+    expect(find.text('agent-reach'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('activity-step-toggle-skill-1')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('activity-detail-skill-1')),
+      findsOneWidget,
+    );
+  });
 
   testWidgets('code blocks render language header with working copy button', (
     tester,
@@ -5151,7 +5161,9 @@ void main() {
     expect(find.byKey(const ValueKey('transcript-new-output')), findsNothing);
   });
 
-  testWidgets('tool activity expands to show its target', (tester) async {
+  testWidgets('tool activity shows its target inline and folds in place', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -5170,18 +5182,14 @@ void main() {
     );
 
     expect(find.text('读取文件'), findsOneWidget);
-    expect(find.text('mobile/lib/main.dart'), findsNothing);
-
-    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
-    await tester.pump(const Duration(milliseconds: 220));
-    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool-1')));
-    await tester.pump(const Duration(milliseconds: 300));
-    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsOneWidget);
     expect(find.text('mobile/lib/main.dart'), findsOneWidget);
-    await tester.tapAt(const Offset(10, 10));
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool-1')));
+    await tester.pump(const Duration(milliseconds: 220));
     expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
     expect(find.text('mobile/lib/main.dart'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool-1')));
+    await tester.pump(const Duration(milliseconds: 220));
+    expect(find.text('mobile/lib/main.dart'), findsOneWidget);
   });
 
   testWidgets('offline recovery panel keeps one reconnect action', (
@@ -5419,14 +5427,14 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    const path = r'D:\Projects\EMBEDDED\项目笔记\学习路线.md';
+    const path = r'D:\Jayson\EMBEDDED\项目笔记\学习路线.md';
     const following = '按你库里的习惯把 YAML、callout 和清单格式写一页可勾选的路线。';
     await tester.pumpWidget(
       MaterialApp(
         theme: buildSignalConsoleTheme(),
         home: Scaffold(
           body: WorkspacePortal(
-            workspaceDir: r'D:\Projects\EMBEDDED',
+            workspaceDir: r'D:\Jayson\EMBEDDED',
             onOpenPath: (_) {},
             child: MessageBlock(
               message: TranscriptMessage.assistant(

@@ -1,5 +1,9 @@
+import 'dart:ui' show Tristate;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:cc_remote/workspace_paths.dart';
 import 'package:cc_remote/main.dart';
 import 'package:cc_remote/data/remote_models.dart';
 import 'package:cc_remote/signal_console_theme.dart';
@@ -111,20 +115,23 @@ void main() {
     );
   });
 
-  testWidgets('reasoning keeps manual disclosure state when it finishes', (
+  testWidgets('reasoning is inline and retains manual state on completion', (
     tester,
   ) async {
     await tester.pumpWidget(
       host(ThinkingHistoryBlock(message: thought(ActivityState.running))),
     );
     expect(find.text('思考中'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
-    await tester.pump(const Duration(milliseconds: 220));
     expect(
       find.byKey(const ValueKey('thinking-history-content')),
       findsOneWidget,
     );
-    expect(find.byType(AnimatedSize), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+    await tester.pump(const Duration(milliseconds: 220));
+    expect(
+      find.byKey(const ValueKey('thinking-history-content')),
+      findsNothing,
+    );
     await tester.pumpWidget(
       host(ThinkingHistoryBlock(message: thought(ActivityState.done))),
     );
@@ -132,107 +139,119 @@ void main() {
     expect(find.text('已深度思考'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('thinking-history-content')),
-      findsOneWidget,
+      findsNothing,
     );
     await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('thinking-history-content')),
-      findsNothing,
+      findsOneWidget,
     );
+    expect(find.byType(AnimatedSize), findsNothing);
   });
 
-  testWidgets(
-    'empty streaming reasoning remains visible and empty history is hidden',
-    (tester) async {
-      await tester.pumpWidget(
-        host(
-          ThinkingHistoryBlock(
-            message: thought(ActivityState.running, detail: ''),
-          ),
+  testWidgets('empty reasoning shows only its live indicator', (tester) async {
+    await tester.pumpWidget(
+      host(
+        ThinkingHistoryBlock(
+          message: thought(ActivityState.running, detail: ''),
         ),
-      );
-      expect(find.text('思考中'), findsOneWidget);
-      await tester.pumpWidget(
-        host(
-          ThinkingHistoryBlock(
-            message: thought(ActivityState.done, detail: ''),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('thinking-history-toggle')),
-        findsNothing,
-      );
-    },
-  );
+      ),
+    );
+    expect(find.text('思考中'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('thinking-history-content')),
+      findsNothing,
+    );
+    await tester.pumpWidget(
+      host(
+        ThinkingHistoryBlock(message: thought(ActivityState.done, detail: '')),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('thinking-history-toggle')), findsNothing);
+  });
 
-  testWidgets('reasoning survives enlarged text in both palettes', (
+  testWidgets('reasoning remains smaller than body with enlarged text', (
     tester,
   ) async {
     for (final brightness in Brightness.values) {
       await tester.pumpWidget(
         host(
           SingleChildScrollView(
-            child: ThinkingHistoryBlock(message: thought(ActivityState.done)),
+            child: ThinkingHistoryBlock(
+              message: thought(
+                ActivityState.done,
+                detail: '# 检查\n\n- 先检查代码\n\n`flutter test`',
+              ),
+            ),
           ),
           brightness: brightness,
           scale: 2,
         ),
       );
-      await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
-      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('thinking-history-content')),
+        findsOneWidget,
+      );
+      final markdown = tester.widget<MarkdownBody>(find.byType(MarkdownBody));
+      expect(
+        markdown.styleSheet!.p!.fontSize,
+        lessThan(AppTypography.assistantBodySize),
+      );
+      expect(markdown.styleSheet!.h1!.fontSize, AppTypography.activityBodySize);
+      expect(
+        markdown.styleSheet!.listBullet!.fontSize,
+        AppTypography.activityBodySize,
+      );
+      expect(
+        markdown.styleSheet!.code!.fontSize,
+        AppTypography.activityBodySize,
+      );
       expect(tester.takeException(), isNull);
-      expect(find.text('先检查代码。再运行测试。', findRichText: true), findsWidgets);
       await tester.pumpWidget(const SizedBox());
     }
   });
 
-  testWidgets(
-    'tool groups default to a folded summary and open an independent detail sheet',
-    (tester) async {
-      await tester.pumpWidget(
-        host(
-          ActivityTimelineCard(
-            activities: [
-              tool(
-                ActivityState.done,
-                id: 'read',
-                name: 'Read',
-                detail: 'README.md',
-              ),
-              tool(ActivityState.done, id: 'test'),
-            ],
-          ),
+  testWidgets('tool details are visible inline and collapse independently', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      host(
+        ActivityTimelineCard(
+          activities: [
+            tool(
+              ActivityState.done,
+              id: 'read',
+              name: 'Read',
+              detail: 'README.md',
+            ),
+            tool(ActivityState.done, id: 'test'),
+          ],
         ),
-      );
-      expect(find.text('读取文件与运行命令'), findsOneWidget);
-      expect(
-        find.byKey(const ValueKey('activity-step-toggle-read')),
-        findsNothing,
-      );
-      await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
-      await tester.pumpAndSettle();
-      final before = tester.getSize(find.byType(ActivityTimelineCard));
-      final row = find.byKey(const ValueKey('activity-step-toggle-read'));
-      expect(tester.getSize(row).height, greaterThanOrEqualTo(48));
-      await tester.tap(row);
-      await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('tool-activity-sheet')), findsOneWidget);
-      expect(find.text('README.md'), findsOneWidget);
-      expect(tester.getSize(find.byType(ActivityTimelineCard)), before);
-      await tester.tapAt(const Offset(10, 10));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
-      expect(
-        find.byKey(const ValueKey('activity-step-toggle-read')),
-        findsOneWidget,
-      );
-    },
-  );
+      ),
+    );
+    expect(find.text('README.md'), findsOneWidget);
+    expect(find.text('flutter test'), findsOneWidget);
+    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
+    final row = find.byKey(const ValueKey('activity-step-toggle-read'));
+    expect(tester.getSize(row).height, greaterThanOrEqualTo(48));
+    final before = tester.getSize(find.byType(ActivityTimelineCard)).height;
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    expect(find.text('README.md'), findsNothing);
+    expect(find.text('flutter test'), findsOneWidget);
+    expect(
+      tester.getSize(find.byType(ActivityTimelineCard)).height,
+      lessThan(before),
+    );
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+    expect(find.text('README.md'), findsOneWidget);
+    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
+  });
 
-  testWidgets('completed turn folds interleaved tools into one process', (
+  testWidgets('completed process keeps tools and reasoning in message order', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -254,18 +273,14 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('process-history-toggle')), findsNothing);
+    expect(find.byKey(const ValueKey('process-history-surface')), findsNothing);
     expect(
-      find.byKey(const ValueKey('process-history-toggle')),
-      findsOneWidget,
+      find.byKey(const ValueKey('activity-timeline-surface')),
+      findsNothing,
     );
-    expect(find.byType(ActivityTimelineCard), findsNothing);
-    expect(find.text('文件已读取，接着检查测试。'), findsNothing);
-    expect(find.text('检查完成，测试通过。'), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('process-history-toggle')));
-    await tester.pumpAndSettle();
     expect(find.byType(ActivityTimelineCard), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
-    await tester.pumpAndSettle();
+    expect(find.text('检查完成，测试通过。'), findsOneWidget);
     final read = find.byKey(const ValueKey('activity-step-toggle-read'));
     final narration = find.text('文件已读取，接着检查测试。');
     final reasoning = find.byKey(const ValueKey('thinking-history-toggle'));
@@ -284,85 +299,60 @@ void main() {
     );
   });
 
-  testWidgets(
-    'finishing a turn wraps the process and preserves manually opened tools',
-    (tester) async {
-      Widget buildTurn(ActivityState state, bool running) => host(
-        transcript([
-          TranscriptMessage.user('运行检查'),
-          tool(state),
-          if (!running) TranscriptMessage.assistant('检查完成。'),
-        ], running: running),
-        reduceMotion: true,
-      );
-      await tester.pumpWidget(buildTurn(ActivityState.running, true));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('activity-step-toggle-tool')),
-        findsOneWidget,
-      );
-      await tester.pumpWidget(buildTurn(ActivityState.done, false));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('process-history-toggle')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const ValueKey('activity-step-toggle-tool')),
-        findsOneWidget,
-      );
-      await tester.tap(find.byKey(const ValueKey('process-history-toggle')));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('activity-step-toggle-tool')),
-        findsNothing,
-      );
-      await tester.tap(find.byKey(const ValueKey('process-history-toggle')));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('activity-step-toggle-tool')),
-        findsOneWidget,
-      );
-    },
-  );
+  testWidgets('manual tool folding survives completion and later calls', (
+    tester,
+  ) async {
+    Widget buildTurn(bool running, {bool anotherTool = false}) => host(
+      transcript([
+        TranscriptMessage.user('运行检查'),
+        tool(running ? ActivityState.running : ActivityState.done),
+        if (anotherTool)
+          tool(ActivityState.done, id: 'next', detail: 'dart analyze'),
+        if (!running) TranscriptMessage.assistant('检查完成。'),
+      ], running: running),
+      reduceMotion: true,
+    );
+    await tester.pumpWidget(buildTurn(true));
+    await tester.pumpAndSettle();
+    expect(find.text('flutter test'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool')));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(buildTurn(false, anotherTool: true));
+    await tester.pumpAndSettle();
+    expect(find.text('flutter test'), findsNothing);
+    expect(find.text('dart analyze'), findsOneWidget);
+    expect(find.text('检查完成。'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool')));
+    await tester.pumpAndSettle();
+    expect(find.text('flutter test'), findsOneWidget);
+  });
 
-  testWidgets(
-    'an open tool sheet stays live when its turn becomes a completed process',
-    (tester) async {
-      Widget buildTurn(bool running) => host(
-        transcript([
-          TranscriptMessage.user('运行检查'),
-          tool(
-            running ? ActivityState.running : ActivityState.done,
-            detail: running ? 'flutter test' : 'flutter test --no-pub',
-            durationMs: running ? null : 4200,
-          ),
-          if (!running) TranscriptMessage.assistant('检查完成。'),
-        ], running: running),
-        reduceMotion: true,
-      );
-      await tester.pumpWidget(buildTurn(true));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool')));
-      await tester.pumpAndSettle();
-      expect(find.text('运行中'), findsOneWidget);
-      await tester.pumpWidget(buildTurn(false));
-      await tester.pumpAndSettle();
-      expect(find.text('已完成 · 4 秒'), findsOneWidget);
-      expect(find.text('flutter test --no-pub'), findsOneWidget);
-      await tester.tapAt(const Offset(10, 10));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('process-history-toggle')),
-        findsOneWidget,
-      );
-      expect(tester.takeException(), isNull);
-    },
-  );
+  testWidgets('inline command and duration update on completion', (
+    tester,
+  ) async {
+    Widget buildTurn(bool running) => host(
+      transcript([
+        TranscriptMessage.user('运行检查'),
+        tool(
+          running ? ActivityState.running : ActivityState.done,
+          detail: running ? 'flutter test' : 'flutter test --no-pub',
+          durationMs: running ? null : 4200,
+        ),
+        if (!running) TranscriptMessage.assistant('检查完成。'),
+      ], running: running),
+      reduceMotion: true,
+    );
+    await tester.pumpWidget(buildTurn(true));
+    await tester.pumpAndSettle();
+    expect(find.text('运行中'), findsOneWidget);
+    expect(find.text('flutter test'), findsOneWidget);
+    await tester.pumpWidget(buildTurn(false));
+    await tester.pumpAndSettle();
+    expect(find.text('已完成 · 4 秒'), findsOneWidget);
+    expect(find.text('flutter test --no-pub'), findsOneWidget);
+    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('tool completion between calls does not settle the active turn', (
     tester,
@@ -373,19 +363,14 @@ void main() {
     );
     await tester.pumpWidget(buildTurn(ActivityState.running));
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
-    await tester.pumpAndSettle();
     await tester.pumpWidget(buildTurn(ActivityState.done));
     await tester.pump(const Duration(milliseconds: 1300));
     expect(find.byKey(const ValueKey('process-history-toggle')), findsNothing);
-    expect(
-      find.byKey(const ValueKey('activity-step-toggle-tool')),
-      findsOneWidget,
-    );
+    expect(find.text('flutter test'), findsOneWidget);
     expect(find.text('正在使用工具'), findsOneWidget);
   });
 
-  testWidgets('completed process grouping preserves user turn boundaries', (
+  testWidgets('process grouping preserves user turn boundaries', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -402,115 +387,75 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('process-history-toggle')),
-      findsNWidgets(2),
-    );
-    await tester.tap(find.byKey(const ValueKey('process-history-toggle')).last);
-    await tester.pumpAndSettle();
-    final group = tester.widget<ActivityTimelineCard>(
+    final groups = tester.widgetList<ActivityTimelineCard>(
       find.byType(ActivityTimelineCard),
     );
-    expect(group.activities.single.activityId, 'second');
+    expect(groups.map((group) => group.activities.single.activityId), [
+      'first',
+      'second',
+    ]);
     expect(find.text('第一轮完成。'), findsOneWidget);
     expect(find.text('第二轮完成。'), findsOneWidget);
   });
 
-  testWidgets('open tool details update after host completion', (tester) async {
+  testWidgets('fast tool updates coalesce summary titles', (tester) async {
     await tester.pumpWidget(
-      host(ActivityTimelineCard(activities: [tool(ActivityState.running)])),
+      host(
+        ActivityTimelineCard(
+          activities: [tool(ActivityState.running, id: 'read', name: 'Read')],
+        ),
+      ),
     );
-    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
-    await tester.pump(const Duration(milliseconds: 220));
-    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool')));
-    await tester.pump(const Duration(milliseconds: 300));
-    expect(find.text('运行中'), findsOneWidget);
     await tester.pumpWidget(
       host(
         ActivityTimelineCard(
           activities: [
-            tool(
-              ActivityState.done,
-              detail: 'flutter test --no-pub',
-              durationMs: 4200,
-            ),
+            tool(ActivityState.done, id: 'read', name: 'Read'),
+            tool(ActivityState.running, id: 'search', name: 'Grep'),
           ],
         ),
       ),
     );
-    await tester.pump();
-    await tester.pumpAndSettle();
-    expect(find.text('已完成 · 4 秒'), findsOneWidget);
-    expect(find.text('flutter test --no-pub'), findsOneWidget);
-    expect(tester.takeException(), isNull);
-    await tester.tapAt(const Offset(10, 10));
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('activity-step-toggle-tool')),
-      findsOneWidget,
+    await tester.pump(const Duration(milliseconds: 200));
+    expect(find.text('读取文件'), findsOneWidget);
+    expect(find.text('搜索代码'), findsNothing);
+    await tester.pumpWidget(
+      host(
+        ActivityTimelineCard(
+          activities: [
+            tool(ActivityState.done, id: 'read', name: 'Read'),
+            tool(ActivityState.done, id: 'search', name: 'Grep'),
+            tool(ActivityState.running),
+          ],
+        ),
+      ),
     );
+    await tester.pump(const Duration(milliseconds: 1200));
+    expect(find.text('运行命令'), findsOneWidget);
+    expect(find.text('搜索代码'), findsNothing);
   });
 
-  testWidgets(
-    'fast tool updates keep the current title and coalesce superseded titles',
-    (tester) async {
+  testWidgets('tool errors and stops expose state in text and semantics', (
+    tester,
+  ) async {
+    for (final state in [ActivityState.error, ActivityState.stopped]) {
+      final status = state == ActivityState.error ? '1 个失败' : '1 个已停止';
       await tester.pumpWidget(
-        host(
-          ActivityTimelineCard(
-            activities: [tool(ActivityState.running, id: 'read', name: 'Read')],
-          ),
-        ),
+        host(ActivityTimelineCard(activities: [tool(state)])),
       );
-      await tester.pumpWidget(
-        host(
-          ActivityTimelineCard(
-            activities: [
-              tool(ActivityState.done, id: 'read', name: 'Read'),
-              tool(ActivityState.running, id: 'search', name: 'Grep'),
-            ],
-          ),
-        ),
-      );
-      await tester.pump(const Duration(milliseconds: 200));
-      expect(find.text('读取文件'), findsOneWidget);
-      expect(find.text('搜索代码'), findsNothing);
-      await tester.pumpWidget(
-        host(
-          ActivityTimelineCard(
-            activities: [
-              tool(ActivityState.done, id: 'read', name: 'Read'),
-              tool(ActivityState.done, id: 'search', name: 'Grep'),
-              tool(ActivityState.running),
-            ],
-          ),
-        ),
-      );
-      await tester.pump(const Duration(milliseconds: 1200));
-      expect(find.text('运行命令'), findsOneWidget);
-      expect(find.text('搜索代码'), findsNothing);
-    },
-  );
+      expect(find.text(status), findsOneWidget);
+      expect(find.text('flutter test'), findsOneWidget);
+      final semantics = tester
+          .getSemantics(find.byKey(const ValueKey('activity-process-toggle')))
+          .getSemanticsData();
+      expect(semantics.label, '运行命令，1 次操作，$status');
+      expect(semantics.flagsCollection.isButton, isTrue);
+      expect(semantics.flagsCollection.isExpanded, Tristate.isTrue);
+      await tester.pumpWidget(const SizedBox());
+    }
+  });
 
-  testWidgets(
-    'tool errors and stops retain visible state and accessible summaries',
-    (tester) async {
-      for (final state in [ActivityState.error, ActivityState.stopped]) {
-        final status = state == ActivityState.error ? '1 个失败' : '1 个已停止';
-        await tester.pumpWidget(
-          host(ActivityTimelineCard(activities: [tool(state)])),
-        );
-        expect(find.text(status), findsOneWidget);
-        final semantics = tester
-            .getSemantics(find.byKey(const ValueKey('activity-process-toggle')))
-            .getSemanticsData();
-        expect(semantics.label, '运行命令，1 次操作，$status');
-        expect(semantics.flagsCollection.isButton, isTrue);
-        await tester.pumpWidget(const SizedBox());
-      }
-    },
-  );
-
-  testWidgets('reduced motion disables shimmer and disclosure transitions', (
+  testWidgets('reduced motion disables shimmer and inline transitions', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -519,78 +464,54 @@ void main() {
         reduceMotion: true,
       ),
     );
+    expect(find.text('flutter test'), findsOneWidget);
     expect(find.byType(ShaderMask), findsNothing);
-    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool')));
     await tester.pumpAndSettle();
-    expect(find.byType(AnimatedSize), findsNothing);
+    expect(find.text('flutter test'), findsNothing);
     for (final rotation in tester.widgetList<AnimatedRotation>(
       find.byType(AnimatedRotation),
     )) {
       expect(rotation.duration, Duration.zero);
     }
-    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsOneWidget);
-    expect(find.byType(ShaderMask), findsNothing);
+    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets(
-    'detail sheets resize and scroll long content with large text in both palettes',
-    (tester) async {
-      final detail = List.filled(
-        30,
-        'long-command --check connection',
-      ).join('\n');
-      for (final brightness in Brightness.values) {
-        await tester.pumpWidget(
-          host(
-            ActivityTimelineCard(
-              activities: [tool(ActivityState.done, detail: detail)],
-            ),
-            brightness: brightness,
-            scale: 2,
-          ),
-        );
-        await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
-        await tester.pumpAndSettle();
-        await tester.tap(
-          find.byKey(const ValueKey('activity-step-toggle-tool')),
-        );
-        await tester.pumpAndSettle();
-        final sheet = find.byKey(const ValueKey('tool-activity-sheet'));
-        final compactHeight = tester.getSize(sheet).height;
-        await tester.drag(
-          find.byType(CustomScrollView).last,
-          const Offset(0, -280),
-        );
-        await tester.pumpAndSettle();
-        expect(tester.getSize(sheet).height, greaterThan(compactHeight + 100));
-        expect(find.text(detail), findsOneWidget);
-        expect(tester.takeException(), isNull);
-        await tester.tapAt(const Offset(10, 10));
-        await tester.pumpAndSettle();
-        await tester.pumpWidget(const SizedBox());
-      }
-    },
-  );
-
-  testWidgets('detail sheets can close after the source row is removed', (
+  testWidgets('long commands wrap inline with large text in both palettes', (
     tester,
   ) async {
-    await tester.pumpWidget(
-      host(ActivityTimelineCard(activities: [tool(ActivityState.done)])),
-    );
-    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool')));
-    await tester.pumpAndSettle();
-    await tester.pumpWidget(host(const SizedBox()));
-    await tester.pump();
-    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsOneWidget);
-    await tester.tapAt(const Offset(10, 10));
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
+    final detail = List.filled(
+      30,
+      'long-command --check connection',
+    ).join('\n');
+    for (final brightness in Brightness.values) {
+      await tester.pumpWidget(
+        host(
+          SingleChildScrollView(
+            child: ActivityTimelineCard(
+              activities: [tool(ActivityState.done, detail: detail)],
+            ),
+          ),
+          brightness: brightness,
+          scale: 2,
+        ),
+      );
+      expect(find.text(detail), findsOneWidget);
+      final text = tester.widget<WorkspacePathText>(
+        find.byKey(const ValueKey('activity-detail-tool')),
+      );
+      expect(text.selectable, isTrue);
+      expect(text.style!.fontSize, lessThan(AppTypography.assistantBodySize));
+      await tester.drag(
+        find.byType(SingleChildScrollView).first,
+        const Offset(0, -280),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    }
   });
 
   testWidgets('reasoning disclosure preserves its header in a reversed list', (

@@ -38,7 +38,7 @@ import 'workspace_drawer.dart';
 import 'workspace_paths.dart';
 import 'session_interaction.dart';
 import 'thinking_block.dart';
-import 'tool_activity_sheet.dart';
+import 'tool_activity_detail.dart';
 
 export 'thinking_block.dart';
 
@@ -3663,7 +3663,8 @@ class ConsolePresentation {
     bool failed = false,
     SessionEngine engine = SessionEngine.claude,
   }) {
-    if (offline) return ConsolePresentation(ConsolePhase.offline, engine: engine);
+    if (offline)
+      return ConsolePresentation(ConsolePhase.offline, engine: engine);
     if (running && stopping) {
       return ConsolePresentation(ConsolePhase.stopping, engine: engine);
     }
@@ -3676,11 +3677,15 @@ class ConsolePresentation {
         engine: engine,
       );
     }
-    if (running) return ConsolePresentation(ConsolePhase.running, engine: engine);
-    if (uploading) return ConsolePresentation(ConsolePhase.uploading, engine: engine);
-    if (!connected) return ConsolePresentation(ConsolePhase.connecting, engine: engine);
+    if (running)
+      return ConsolePresentation(ConsolePhase.running, engine: engine);
+    if (uploading)
+      return ConsolePresentation(ConsolePhase.uploading, engine: engine);
+    if (!connected)
+      return ConsolePresentation(ConsolePhase.connecting, engine: engine);
     if (failed) return ConsolePresentation(ConsolePhase.failed, engine: engine);
-    if (stopped) return ConsolePresentation(ConsolePhase.stopped, engine: engine);
+    if (stopped)
+      return ConsolePresentation(ConsolePhase.stopped, engine: engine);
     return ConsolePresentation(ConsolePhase.connected, engine: engine);
   }
 
@@ -7697,8 +7702,7 @@ Future<ClaudeModelPreference?> showClaudeModelPicker(
                 ? '电脑默认'
                 : 'Claude 模型',
             leading: SmartIcon(switch (preference) {
-              ClaudeModelPreference.followComputer =>
-                LucideIcons.monitor,
+              ClaudeModelPreference.followComputer => LucideIcons.monitor,
               ClaudeModelPreference.opus => LucideIcons.diamond,
               ClaudeModelPreference.sonnet => LucideIcons.sparkle,
               ClaudeModelPreference.fable => LucideIcons.feather,
@@ -7921,48 +7925,13 @@ class _TranscriptProcessBlock extends StatefulWidget {
 }
 
 class _TranscriptProcessBlockState extends State<_TranscriptProcessBlock> {
-  bool processExpanded = false;
-  bool toolsExpanded = false;
-  ValueNotifier<TranscriptMessage>? openActivity;
+  bool toolsExpanded = true;
 
   @override
   void didUpdateWidget(covariant _TranscriptProcessBlock oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.group.rawIndex != widget.group.rawIndex) {
-      processExpanded = false;
-      toolsExpanded = false;
-    } else if (oldWidget.group.running && !widget.group.running) {
-      processExpanded = toolsExpanded;
-    }
-    final detail = openActivity;
-    if (detail != null) {
-      final updated = widget.group.rows
-          .map((row) => row.message)
-          .where((message) => message.activityId == detail.value.activityId)
-          .firstOrNull;
-      if (updated != null && !identical(updated, detail.value)) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && identical(openActivity, detail)) {
-            detail.value = updated;
-          }
-        });
-      }
-    }
-  }
-
-  Future<void> openDetail(TranscriptMessage activity) async {
-    if (openActivity != null) return;
-    final detail = ValueNotifier(activity);
-    openActivity = detail;
-    try {
-      await showToolActivityDetail(
-        context,
-        activity: detail,
-        title: activityToolTitle(activity),
-      );
-    } finally {
-      if (identical(openActivity, detail)) openActivity = null;
-      detail.dispose();
+      toolsExpanded = true;
     }
   }
 
@@ -8006,55 +7975,23 @@ class _TranscriptProcessBlockState extends State<_TranscriptProcessBlock> {
             running: group.running,
             expanded: toolsExpanded || reveal,
             onExpandedChanged: (value) => setState(() => toolsExpanded = value),
-            onToolTap: openDetail,
+            revealActivityId: reveal
+                ? group.rows
+                      .firstWhere(
+                        (row) => row.rawIndex == widget.revealRawIndex,
+                      )
+                      .message
+                      .activityId
+                : null,
             contentBuilder: (context, buildTool) => buildParts(buildTool),
           );
-    if (group.running) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          content,
-          if (liveThought != null) widget.buildPart(liveThought),
-        ],
-      );
-    }
-    final palette = AppPalette.of(context);
-    final failedCount = tools
-        .where((tool) => tool.activityState == ActivityState.error)
-        .length;
-    final stoppedCount = tools
-        .where((tool) => tool.activityState == ActivityState.stopped)
-        .length;
-    final status = failedCount > 0
-        ? '$failedCount 个失败'
-        : stoppedCount > 0
-        ? '$stoppedCount 个已停止'
-        : null;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      child: ActivityCardSurface(
-        key: const ValueKey('process-history-surface'),
-        child: ActivityDisclosure(
-          leading: SmartIcon(
-            tools.isEmpty ? LucideIcons.brain : LucideIcons.wrench,
-            size: AppIconSizes.inline,
-          ),
-          title: tools.isEmpty
-              ? '思考过程'
-              : '${failedCount > 0 ? '工具执行失败' : stoppedCount > 0 ? '工具执行已停止' : '工具执行完成'} · ${tools.length} 步',
-          expanded: processExpanded || reveal,
-          toggleKey: const ValueKey('process-history-toggle'),
-          statusText: status,
-          tone: failedCount > 0
-              ? palette.danger
-              : stoppedCount > 0
-              ? palette.warning
-              : null,
-          onToggle: () => setState(() => processExpanded = !processExpanded),
-          child: content,
-        ),
-      ),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        content,
+        if (liveThought != null) widget.buildPart(liveThought),
+      ],
     );
   }
 }
@@ -10364,9 +10301,9 @@ Widget buildActivityTitle(TranscriptMessage activity, BuildContext context) {
           style: TextStyle(
             color: isError
                 ? AppPalette.of(context).danger
-                : AppPalette.of(context).ink,
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
+                : AppPalette.of(context).muted,
+            fontSize: AppTypography.activityBodySize,
+            fontWeight: FontWeight.w400,
             height: 1.35,
           ),
         ),
@@ -10573,7 +10510,7 @@ class ActivityTimelineCard extends StatefulWidget {
     this.thinking = false,
     this.expanded,
     this.onExpandedChanged,
-    this.onToolTap,
+    this.revealActivityId,
     this.contentBuilder,
   });
 
@@ -10582,7 +10519,7 @@ class ActivityTimelineCard extends StatefulWidget {
   final bool thinking;
   final bool? expanded;
   final ValueChanged<bool>? onExpandedChanged;
-  final ValueChanged<TranscriptMessage>? onToolTap;
+  final String? revealActivityId;
   final Widget Function(BuildContext, Widget Function(TranscriptMessage))?
   contentBuilder;
 
@@ -10611,11 +10548,10 @@ String activityToolTitle(TranscriptMessage activity) {
 }
 
 class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
-  bool expanded = false;
+  bool expanded = true;
   late String displayedTitle;
   DateTime titleChangedAt = DateTime.now();
   Timer? titleTimer;
-  ValueNotifier<TranscriptMessage>? openActivity;
 
   String groupTitle(List<TranscriptMessage> activities) {
     if (widget.thinking && widget.running != false) return '思考中';
@@ -10649,7 +10585,7 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
         widget.activities.isNotEmpty &&
         oldWidget.activities.first.activityId !=
             widget.activities.first.activityId;
-    if (changedGroup) expanded = false;
+    if (changedGroup) expanded = true;
     titleTimer?.cancel();
     titleTimer = null;
     final nextTitle = groupTitle(widget.activities);
@@ -10680,41 +10616,12 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
         titleChangedAt = DateTime.now();
       }
     }
-    final detail = openActivity;
-    if (detail != null) {
-      final updated = widget.activities
-          .where((activity) => activity.activityId == detail.value.activityId)
-          .firstOrNull;
-      if (updated != null && !identical(updated, detail.value)) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted && identical(openActivity, detail)) {
-            detail.value = updated;
-          }
-        });
-      }
-    }
   }
 
   @override
   void dispose() {
     titleTimer?.cancel();
     super.dispose();
-  }
-
-  Future<void> openDetail(TranscriptMessage activity) async {
-    if (openActivity != null) return;
-    final detail = ValueNotifier(activity);
-    openActivity = detail;
-    try {
-      await showToolActivityDetail(
-        context,
-        activity: detail,
-        title: activityToolTitle(activity),
-      );
-    } finally {
-      if (identical(openActivity, detail)) openActivity = null;
-      detail.dispose();
-    }
   }
 
   @override
@@ -10744,9 +10651,10 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
         : stoppedCount > 0
         ? palette.warning
         : null;
-    Widget buildToolRow(TranscriptMessage activity) => ActivityStatusRow(
-      buttonKey: ValueKey('activity-step-toggle-${activity.activityId}'),
-      title: activity.text,
+    Widget buildToolRow(TranscriptMessage activity) => ToolActivityDetail(
+      key: ValueKey('tool-inline-${activity.activityId}'),
+      activity: activity,
+      title: activityToolTitle(activity),
       titleWidget: buildActivityTitle(activity, context),
       leading: Row(
         mainAxisSize: MainAxisSize.min,
@@ -10761,73 +10669,52 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
           ],
         ],
       ),
+      reveal:
+          activity.activityId == widget.revealActivityId &&
+          widget.revealActivityId != null,
       running: running && activity.activityState == ActivityState.running,
-      statusText: switch (activity.activityState) {
-        ActivityState.error => '调用错误',
-        ActivityState.stopped => '已停止',
-        _ => null,
-      },
-      tone: activity.activityState == ActivityState.error
-          ? palette.danger
-          : activity.activityState == ActivityState.stopped
-          ? palette.warning
-          : null,
-      semanticLabel:
-          '${activityToolTitle(activity)}，'
-          '${toolActivityStateLabel(activity.activityState)}',
-      onTap: () {
-        final onToolTap = widget.onToolTap;
-        if (onToolTap == null) {
-          openDetail(activity);
-        } else {
-          onToolTap(activity);
-        }
-      },
     );
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      child: ActivityCardSurface(
-        key: const ValueKey('activity-timeline-surface'),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            ActivityDisclosure(
-              expanded: isExpanded,
-              title: displayedTitle,
-              leading: const SmartIcon(
-                LucideIcons.wrench,
-                size: AppIconSizes.inline,
-              ),
-              running: running,
-              statusText: status,
-              tone: tone,
-              toggleKey: const ValueKey('activity-process-toggle'),
-              semanticLabel:
-                  '$displayedTitle，${activities.length} 次操作'
-                  '${status == null ? '' : '，$status'}',
-              onToggle: () {
-                final next = !isExpanded;
-                setState(() => expanded = next);
-                widget.onExpandedChanged?.call(next);
-              },
-              child:
-                  widget.contentBuilder?.call(context, buildToolRow) ??
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      for (final activity in activities) buildToolRow(activity),
-                    ],
-                  ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          ActivityDisclosure(
+            expanded: isExpanded,
+            title: displayedTitle,
+            leading: const SmartIcon(
+              LucideIcons.wrench,
+              size: AppIconSizes.inline,
             ),
-            if (running && !isExpanded)
-              for (final activity in activities.skip(
-                max(0, activities.length - 2),
-              ))
-                buildToolRow(activity),
-          ],
-        ),
+            running: running,
+            statusText: status,
+            tone: tone,
+            toggleKey: const ValueKey('activity-process-toggle'),
+            semanticLabel:
+                '$displayedTitle，${activities.length} 次操作'
+                '${status == null ? '' : '，$status'}',
+            onToggle: () {
+              final next = !isExpanded;
+              setState(() => expanded = next);
+              widget.onExpandedChanged?.call(next);
+            },
+            child:
+                widget.contentBuilder?.call(context, buildToolRow) ??
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    for (final activity in activities) buildToolRow(activity),
+                  ],
+                ),
+          ),
+          if (running && !isExpanded)
+            for (final activity in activities.skip(
+              max(0, activities.length - 2),
+            ))
+              buildToolRow(activity),
+        ],
       ),
     );
   }

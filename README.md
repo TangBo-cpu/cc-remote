@@ -4,9 +4,9 @@
 
 扫码配对后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v1.4.1](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.4.1/cc-remote-v1.4.1-android.apk)
+[下载 Android APK · v1.5.0](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.5.0/cc-remote-v1.5.0-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.4.1)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.5.0)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -16,7 +16,7 @@
   <img src="docs/images/cool-glass-chat.jpg" alt="Cool Glass 对话" width="280" />
 </p>
 
-<p align="center"><sub>v1.4.0 历史截图；v1.4.1 使用跟随系统的浅色 / 深色界面</sub></p>
+<p align="center"><sub>v1.4.0 历史截图；v1.5.0 使用跟随系统的浅色 / 深色界面</sub></p>
 
 ---
 
@@ -31,7 +31,7 @@
 | 断线了 | transcript 与草稿保留，自动重连；回来后从权威快照继续 |
 | 字号不合适 | 设置里连续滑杆，默认 100% |
 | 外观随环境切换 | 默认跟随系统，也可固定浅色或深色 |
-| 查看执行过程 | 彩色工具卡片、Skill 标识、可折叠历史与独立思考动画 |
+| 查看执行过程 | 思考与工具详情直接显示在消息中，标题可原地折叠，过程文字比正文小一档 |
 
 **安全边界（产品承诺）：**
 
@@ -51,7 +51,7 @@
 | :---: | :---: | :---: |
 | <img src="docs/images/cool-glass-home.png" width="220" alt="主控制台" /> | <img src="docs/images/cool-glass-workspace.jpg" width="220" alt="工作区" /> | <img src="docs/images/cool-glass-startup.jpg" width="220" alt="启动" /> |
 
-v1.4.1 使用中性背景和浅色 / 深色外观，助手正文直接排在页面上，用户消息保留浅灰气泡。工具执行以卡片显示，思考花朵动画独立于折叠历史。以上图片是 v1.4.0 的历史参考；当前设计规格见 [`DESIGN.md`](DESIGN.md)。
+v1.5.0 使用中性背景和浅色 / 深色外观，助手正文直接排在页面上，用户消息保留浅灰气泡。思考内容与工具调用默认内联展开，查看命令无需打开详情面板；过程文字为 13 号，回复正文为 15 号，均跟随系统字号。以上图片是 v1.4.0 的历史参考；当前设计规格见 [`DESIGN.md`](DESIGN.md)。
 
 ---
 
@@ -102,7 +102,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v1.4.1 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.4.1/cc-remote-v1.4.1-android.apk)（沿用测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v1.5.0 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.5.0/cc-remote-v1.5.0-android.apk)（沿用测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫终端二维码 → 确认电脑名与服务地址 → 进入控制台
 
@@ -129,7 +129,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 - 流式输出（合批推送；无标记走 Text，有 Markdown 标记时流式期间即渲染）
 - Claude Streaming Input 与 Codex App Server 常驻复用，后续轮次不重复启动 CLI
 - 助手 Markdown 中的搜索来源 / 引用链接可点击，仅允许 `http` / `https` 并交给系统浏览器打开
-- 停止任务、花形思考动画与运行计时、彩色工具卡片、Skill 标识与工具详情
+- 停止任务、花形思考动画与运行计时、内联工具调用与命令详情、Skill 标识及原地折叠
 - Composer 思考强度仪表与六档思考强度（自动 + 低、中、高、超高、最大五手动档）
 - 斜杠指令与技能：Claude Code 原生指令；Codex 原生 `/compact`、`/review` 及当前项目已启用的 skills
 - 模型选择：Claude 静态档位、Codex 动态模型目录与独立偏好
@@ -189,7 +189,7 @@ cd mobile
 flutter pub get
 flutter run
 # 或
-flutter build apk --release
+flutter build apk --release --obfuscate --split-debug-info=build/symbols
 ```
 
 ### 常用启动参数
@@ -238,7 +238,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v1.4.1](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.4.1)**
-APK：[`cc-remote-v1.4.1-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.4.1/cc-remote-v1.4.1-android.apk)
+当前公开版：**[v1.5.0](https://github.com/TangBo-cpu/cc-remote/releases/tag/v1.5.0)**
+APK：[`cc-remote-v1.5.0-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v1.5.0/cc-remote-v1.5.0-android.apk)
 
-此版本同步 Android 与 daemon 源码，恢复工具卡片和思考动画，并改进 Claude 原生会话恢复。APK 沿用旧版测试签名，供个人使用；Android 真机安装与界面仍待验收。
+此版本将思考过程和工具调用改为无卡片的内联展示，命令详情默认可见，并缩小过程文字字号。Android 版本为 `1.5.0+8`，APK 沿用旧版测试签名，供个人使用；Android 真机安装与界面仍待验收。

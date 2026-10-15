@@ -9,7 +9,6 @@ import 'signal_console_theme.dart';
 // sweep, and natural disclosure layout. Touch targets retain the app's 48dp.
 class ActivityMotion {
   static const fast = Duration(milliseconds: 200);
-  static const sheet = Duration(milliseconds: 250);
   static const shimmer = Duration(milliseconds: 2000);
   static const settle = Cubic(0.22, 1, 0.36, 1);
 }
@@ -290,7 +289,11 @@ class _ActivityShimmerTextState extends State<ActivityShimmerText>
       widget.text,
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
-      style: TextStyle(color: base, fontSize: 14, height: 1.45),
+      style: TextStyle(
+        color: base,
+        fontSize: AppTypography.activityBodySize,
+        height: 1.45,
+      ),
     );
     if (!animating) return text;
     return RepaintBoundary(
@@ -312,24 +315,4 @@ class _ActivityShimmerTextState extends State<ActivityShimmerText>
       ),
     );
   }
-}
-
-class ActivityCardSurface extends StatelessWidget {
-  const ActivityCardSurface({super.key, required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) => Material(
-    color: AppPalette.of(context).glassControl,
-    shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(AppRadii.control + 2),
-      side: BorderSide(color: AppPalette.of(context).line, width: 0.8),
-    ),
-    clipBehavior: Clip.antiAlias,
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-      child: child,
-    ),
-  );
 }

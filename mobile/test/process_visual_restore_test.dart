@@ -55,30 +55,44 @@ Widget turn({required bool running}) => TranscriptView(
 );
 
 void main() {
-  testWidgets(
-    'running tools retain a visible card, step and colored tool icon',
-    (tester) async {
-      await tester.pumpWidget(
-        host(ActivityTimelineCard(activities: [tool(ActivityState.running)])),
-      );
-      expect(
-        find.byKey(const ValueKey('activity-timeline-surface')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const ValueKey('activity-step-toggle-read')),
-        findsOneWidget,
-      );
-      expect(find.byType(SmartIcon), findsWidgets);
-      await tester.pumpWidget(const SizedBox());
-    },
-  );
+  testWidgets('running tools show their detail without a card or sheet', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      host(ActivityTimelineCard(activities: [tool(ActivityState.running)])),
+    );
+    expect(
+      find.byKey(const ValueKey('activity-timeline-surface')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('activity-step-toggle-read')),
+      findsOneWidget,
+    );
+    expect(find.byType(SmartIcon), findsWidgets);
+    expect(find.text('README.md'), findsOneWidget);
+    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
+    final materials = tester.widgetList<Material>(
+      find.descendant(
+        of: find.byType(ActivityTimelineCard),
+        matching: find.byType(Material),
+      ),
+    );
+    expect(
+      materials.every((material) => material.color == Colors.transparent),
+      isTrue,
+    );
+    expect(materials.every((material) => material.shape == null), isTrue);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets('live thinking remains animated outside collapsed tool history', (
     tester,
   ) async {
     await tester.pumpWidget(host(turn(running: true)));
     await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pump(const Duration(milliseconds: 220));
     final icon = find.byKey(const ValueKey('thinking-icon'));
     expect(icon, findsOneWidget);
     final before = tester.widget<CustomPaint>(icon).painter!;
@@ -89,19 +103,17 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets(
-    'completed history keeps its card and icon without opening details',
-    (tester) async {
-      await tester.pumpWidget(host(turn(running: false), reduceMotion: true));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('process-history-surface')),
-        findsOneWidget,
-      );
-      expect(find.byType(SmartIcon), findsWidgets);
-      expect(find.text('检查完成'), findsOneWidget);
-    },
-  );
+  testWidgets('completed history keeps details inline beside the final reply', (
+    tester,
+  ) async {
+    await tester.pumpWidget(host(turn(running: false), reduceMotion: true));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('process-history-surface')), findsNothing);
+    expect(find.byType(SmartIcon), findsWidgets);
+    expect(find.text('检查完成'), findsOneWidget);
+    expect(find.text('README.md'), findsOneWidget);
+    expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
+  });
 
   testWidgets(
     'reduced motion keeps a static thinking icon and readable elapsed time',

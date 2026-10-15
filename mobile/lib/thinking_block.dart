@@ -34,13 +34,13 @@ class ThinkingHistoryBlock extends StatefulWidget {
 }
 
 class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
-  bool expanded = false;
+  bool expanded = true;
 
   @override
   void didUpdateWidget(covariant ThinkingHistoryBlock oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.message.activityId != widget.message.activityId) {
-      expanded = false;
+      expanded = true;
     }
   }
 
@@ -63,9 +63,13 @@ class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
         : duration.isEmpty
         ? ''
         : '，$duration';
-    final textStyle = TextStyle(color: palette.ink, fontSize: 15, height: 1.6);
+    final textStyle = TextStyle(
+      color: palette.muted,
+      fontSize: AppTypography.activityBodySize,
+      height: 1.6,
+    );
     return ActivityDisclosure(
-      expanded: expanded,
+      expanded: expanded && detail.isNotEmpty,
       toggleKey: const ValueKey('thinking-history-toggle'),
       titleKey: const ValueKey('thinking-title'),
       title: title,
@@ -82,7 +86,7 @@ class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
           ? palette.danger
           : null,
       semanticLabel: '$title$elapsed',
-      onToggle: detail.isNotEmpty || running
+      onToggle: detail.isNotEmpty
           ? () => setState(() => expanded = !expanded)
           : null,
       child: Container(
@@ -92,7 +96,7 @@ class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
         margin: const EdgeInsets.only(bottom: 8),
         decoration: BoxDecoration(
           border: BorderDirectional(
-            start: BorderSide(color: palette.lineStrong, width: 2),
+            start: BorderSide(color: palette.lineStrong),
           ),
         ),
         child: SelectionArea(
@@ -101,11 +105,21 @@ class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
             styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
                 .copyWith(
                   p: textStyle,
+                  h1: textStyle.copyWith(fontWeight: FontWeight.w600),
+                  h2: textStyle.copyWith(fontWeight: FontWeight.w600),
+                  h3: textStyle.copyWith(fontWeight: FontWeight.w600),
+                  h4: textStyle.copyWith(fontWeight: FontWeight.w600),
+                  h5: textStyle.copyWith(fontWeight: FontWeight.w600),
+                  h6: textStyle.copyWith(fontWeight: FontWeight.w600),
+                  listBullet: textStyle,
+                  tableBody: textStyle,
+                  tableHead: textStyle.copyWith(fontWeight: FontWeight.w600),
+                  a: textStyle.copyWith(color: palette.link),
                   blockquote: textStyle.copyWith(color: palette.muted),
                   code: textStyle.copyWith(
                     fontFamily: AppTypography.codeFontFamily,
                     fontFamilyFallback: AppTypography.codeFontFamilyFallback,
-                    fontSize: 14,
+                    fontSize: AppTypography.activityBodySize,
                   ),
                   codeblockDecoration: BoxDecoration(
                     color: palette.control,
@@ -230,7 +244,8 @@ class _ThinkingBloomPainter extends CustomPainter {
   @override
   bool operator ==(Object other) =>
       other is _ThinkingBloomPainter &&
-      other.frame == frame && other.color == color;
+      other.frame == frame &&
+      other.color == color;
 
   @override
   int get hashCode => Object.hash(frame, color);
