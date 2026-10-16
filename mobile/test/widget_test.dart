@@ -4161,14 +4161,14 @@ void main() {
       ),
     );
 
-    expect(find.byType(MarkdownBody), findsOneWidget);
+    expect(find.bySubtype<MarkdownBody>(), findsOneWidget);
     final header = tester.widget(find.byType(ConnectionHeader));
     messages.add(TranscriptMessage.assistant('**streaming**'));
     transcriptRevision.value++;
     await tester.pump();
 
     expect(find.text('**streaming**'), findsOneWidget);
-    expect(find.byType(MarkdownBody), findsOneWidget);
+    expect(find.bySubtype<MarkdownBody>(), findsOneWidget);
     expect(tester.widget(find.byType(ConnectionHeader)), same(header));
   });
 
@@ -4201,8 +4201,8 @@ void main() {
     final assistant = find.byKey(const ValueKey('assistant-message'));
     expect(assistant, findsNWidgets(2));
     // Plain text skips MarkdownBody; markup still uses it.
-    expect(find.byType(MarkdownBody), findsOneWidget);
-    final markdown = tester.widget<MarkdownBody>(find.byType(MarkdownBody));
+    expect(find.bySubtype<MarkdownBody>(), findsOneWidget);
+    final markdown = tester.widget<MarkdownBody>(find.bySubtype<MarkdownBody>());
     expect(markdown.styleSheet!.tableColumnWidth, isA<IntrinsicColumnWidth>());
     expect(
       markdown.styleSheet!.tableCellsPadding,
@@ -4212,7 +4212,7 @@ void main() {
     expect(markdown.styleSheet!.p!.fontSize, AppTypography.assistantBodySize);
     expect(
       markdown.styleSheet!.code!.fontSize,
-      AppTypography.assistantBodySize,
+      lessThan(AppTypography.assistantBodySize),
     );
     expect(
       markdown.styleSheet!.blockquote!.fontSize,
@@ -4231,18 +4231,15 @@ void main() {
       AppTypography.assistantBodySize,
     );
     expect(markdown.styleSheet!.h1!.fontFamily, isNot('NotoSerifSC'));
-    expect(markdown.styleSheet!.blockSpacing, 8);
+    expect(markdown.styleSheet!.blockSpacing, 12);
     expect(markdown.styleSheet!.listIndent, 24);
-    expect(
-      markdown.styleSheet!.h1Padding,
-      const EdgeInsets.only(top: 12, bottom: 4),
-    );
+    expect(markdown.styleSheet!.h1Padding, EdgeInsets.zero);
     expect(markdown.builders.containsKey('pre'), isTrue);
     final bubble = tester.widget<DecoratedBox>(assistant.first);
     final decoration = bubble.decoration as BoxDecoration;
-    expect(decoration.color, AppColors.assistantBubble);
-    expect(decoration.borderRadius, BorderRadius.circular(AppRadii.bubble));
-    expect(decoration.border, Border.all(color: AppColors.bubbleOutline));
+    expect(decoration.color, Colors.transparent);
+    expect(decoration.borderRadius, BorderRadius.circular(AppRadii.compact));
+    expect(decoration.border, isNull);
     expect(
       decoration.boxShadow == null || decoration.boxShadow!.isEmpty,
       isTrue,
@@ -4253,7 +4250,7 @@ void main() {
     );
     final userDecoration = user.decoration as BoxDecoration;
     expect(userDecoration.color, AppColors.userBubble);
-    expect(userDecoration.border, Border.all(color: AppColors.bubbleOutline));
+    expect(userDecoration.border, isNull);
     expect(userDecoration.borderRadius, BorderRadius.circular(AppRadii.bubble));
     expect(AppColors.assistantBubble.a, 1.0);
     expect(AppColors.userBubble.a, 1.0);
@@ -4400,7 +4397,7 @@ void main() {
       ),
     );
 
-    final markdown = tester.widget<MarkdownBody>(find.byType(MarkdownBody));
+    final markdown = tester.widget<MarkdownBody>(find.bySubtype<MarkdownBody>());
     expect(markdown.onTapLink, isNotNull);
     expect(find.text('搜索来源'), findsOneWidget);
 
@@ -4942,7 +4939,7 @@ void main() {
   ) async {
     await pumpAssistantMessage(tester, text: '- 先跑测试\n- 再看 `src/daemon.ts`');
     await tester.pumpAndSettle();
-    expect(find.byType(MarkdownBody), findsOneWidget);
+    expect(find.bySubtype<MarkdownBody>(), findsOneWidget);
     expect(find.byType(AssistantSelectionArea), findsOneWidget);
     expect(find.textContaining('先跑测试'), findsOneWidget);
   });

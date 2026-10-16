@@ -76,11 +76,20 @@ void main() {
         expect(_contrast(colors.muted, background), greaterThanOrEqualTo(4.5));
         expect(_contrast(colors.accent, background), greaterThanOrEqualTo(4.5));
         expect(_contrast(colors.danger, background), greaterThanOrEqualTo(4.5));
+        expect(_contrast(colors.link, background), greaterThanOrEqualTo(4.5));
         expect(
           _contrast(colors.warning, background),
           greaterThanOrEqualTo(4.5),
         );
       }
+      expect(
+        _contrast(colors.link, colors.inlineCodeBackground),
+        greaterThanOrEqualTo(4.5),
+      );
+      expect(
+        _contrast(colors.ink, colors.inlineCodeBackground),
+        greaterThanOrEqualTo(4.5),
+      );
       expect(_contrast(colors.onCta, colors.cta), greaterThanOrEqualTo(4.5));
       expect(_contrast(colors.onStop, colors.stop), greaterThanOrEqualTo(4.5));
     }
@@ -154,8 +163,9 @@ void main() {
       final colors = mode == ThemeMode.dark
           ? AppPalette.dark
           : AppPalette.light;
-      expect(decoration.color, colors.surface);
-      expect(decoration.gradient, isNull);
+      expect(decoration.color, isNull);
+      expect(decoration.gradient, isNotNull);
+      expect(decoration.border!.top.color, colors.glassHighlight);
     }
     await tester.tap(find.byTooltip('关闭'));
     await tester.pumpAndSettle();
@@ -163,7 +173,7 @@ void main() {
     final after = tester.widget<ChatScreen>(find.byType(ChatScreen));
     expect(after.activeSessionId, sessionId);
     expect(after.promptController.text, '保留这条草稿');
-    expect(find.byType(BackdropFilter), findsNothing);
+    expect(find.byKey(const ValueKey('settings-surface')), findsNothing);
     final overlay = tester
         .widgetList<AnnotatedRegion<SystemUiOverlayStyle>>(
           find.byType(AnnotatedRegion<SystemUiOverlayStyle>),
@@ -206,10 +216,10 @@ void main() {
         .toList();
 
     expect(pathLinkColors(), isNotEmpty);
-    expect(pathLinkColors(), everyElement(AppPalette.light.accent));
+    expect(pathLinkColors(), everyElement(AppPalette.light.link));
     expect(
       tester
-          .widget<MarkdownBody>(find.byType(MarkdownBody))
+          .widget<MarkdownBody>(find.bySubtype<MarkdownBody>())
           .styleSheet!
           .p!
           .color,
@@ -218,13 +228,13 @@ void main() {
     mode.value = ThemeMode.dark;
     await tester.pumpAndSettle();
     final sheet = tester
-        .widget<MarkdownBody>(find.byType(MarkdownBody))
+        .widget<MarkdownBody>(find.bySubtype<MarkdownBody>())
         .styleSheet!;
     expect(sheet.p!.color, AppPalette.dark.ink);
     expect(sheet.h1!.color, AppPalette.dark.ink);
     expect(sheet.tableBody!.color, AppPalette.dark.ink);
     expect(pathLinkColors(), isNotEmpty);
-    expect(pathLinkColors(), everyElement(AppPalette.dark.accent));
+    expect(pathLinkColors(), everyElement(AppPalette.dark.link));
     expect(tester.takeException(), isNull);
   });
 }

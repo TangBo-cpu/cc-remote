@@ -206,7 +206,7 @@ https://fenced.example.com/bare
         expect(find.text('链接来源 · 2'), findsOneWidget);
         expect(find.text('第一份资料'), findsOneWidget);
         expect(find.byKey(const ValueKey('markdown-source-2')), findsNothing);
-        expect(find.byType(MarkdownBody), findsOneWidget);
+        expect(find.bySubtype<MarkdownBody>(), findsOneWidget);
         expect(tester.takeException(), isNull);
         await tester.ensureVisible(
           find.byKey(const ValueKey('markdown-source-0')),

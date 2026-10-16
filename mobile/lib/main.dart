@@ -35,6 +35,7 @@ import 'model_preference.dart';
 import 'noto_icon.dart';
 import 'notification_service.dart';
 import 'reading_font_size.dart';
+import 'message_markdown.dart';
 import 'signal_console_theme.dart';
 import 'workspace_drawer.dart';
 import 'workspace_paths.dart';
@@ -9112,14 +9113,15 @@ const TextStyle _kAssistantPlainStyle = TextStyle(
   fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
   height: AppTypography.assistantBodyHeight,
   fontSize: AppTypography.assistantBodySize,
-  letterSpacing: 0.1,
+  letterSpacing: 0,
 );
 
 const TextStyle _kAssistantCodeStyle = TextStyle(
-  fontFamily: AppTypography.codeFontFamily,
+  fontFamily: AppTypography.assistantCodeFontFamily,
   fontFamilyFallback: AppTypography.codeFontFamilyFallback,
-  fontSize: 13.5,
+  fontSize: 14,
   height: 1.45,
+  letterSpacing: 0,
 );
 
 /// Shared once — rebuilding MarkdownStyleSheet.fromTheme per bubble is costly
@@ -9135,7 +9137,7 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
     decoration: TextDecoration.underline,
     decorationThickness: 1,
   ),
-  code: _kAssistantCodeStyle,
+  code: _kAssistantCodeStyle.copyWith(height: AppTypography.assistantBodyHeight),
   h1: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
@@ -9144,38 +9146,42 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
     height: 1.3,
     color: AppColors.ink,
   ),
-  h1Padding: const EdgeInsets.only(top: 18, bottom: 6),
+  h1Padding: EdgeInsets.zero,
   h2: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
     fontSize: 18,
-    fontWeight: FontWeight.w700,
-    height: 1.35,
+    fontWeight: FontWeight.w600,
+    height: 1.4,
     color: AppColors.ink,
   ),
-  h2Padding: const EdgeInsets.only(top: 16, bottom: 6),
+  h2Padding: EdgeInsets.zero,
   h3: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
     fontSize: 16,
-    fontWeight: FontWeight.w700,
-    height: 1.4,
+    fontWeight: FontWeight.w600,
+    height: 1.5,
     color: AppColors.ink,
   ),
-  h3Padding: const EdgeInsets.only(top: 14, bottom: 4),
+  h3Padding: EdgeInsets.zero,
   h4: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
-    fontSize: 15,
-    fontWeight: FontWeight.w700,
-    height: 1.4,
+    fontSize: 16,
+    fontWeight: FontWeight.w600,
+    height: 1.5,
     color: AppColors.ink,
   ),
-  h4Padding: const EdgeInsets.only(top: 12, bottom: 4),
-  h5: _kAssistantPlainStyle.copyWith(fontWeight: FontWeight.w700, height: 1.45),
-  h5Padding: const EdgeInsets.only(top: 10, bottom: 4),
-  h6: _kAssistantPlainStyle.copyWith(fontWeight: FontWeight.w700, height: 1.45),
-  h6Padding: const EdgeInsets.only(top: 10, bottom: 4),
+  h4Padding: EdgeInsets.zero,
+  h5: _kAssistantPlainStyle.copyWith(fontWeight: FontWeight.w600, height: 1.5),
+  h5Padding: EdgeInsets.zero,
+  h6: _kAssistantPlainStyle.copyWith(
+    fontSize: 14,
+    fontWeight: FontWeight.w600,
+    height: 1.45,
+  ),
+  h6Padding: EdgeInsets.zero,
   em: const TextStyle(fontStyle: FontStyle.italic),
   strong: const TextStyle(fontWeight: FontWeight.w700),
   del: const TextStyle(decoration: TextDecoration.lineThrough),
@@ -9183,9 +9189,9 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
   img: _kAssistantPlainStyle,
   checkbox: _kAssistantPlainStyle,
   blockSpacing: 12,
-  listIndent: 22,
+  listIndent: 24,
   listBullet: _kAssistantPlainStyle,
-  listBulletPadding: const EdgeInsets.only(right: 8),
+  listBulletPadding: const EdgeInsets.only(right: 6),
   tableHead: _kAssistantPlainStyle.copyWith(fontWeight: FontWeight.w600),
   tableBody: _kAssistantPlainStyle,
   // Intrinsic widths keep every column readable (no char-per-line squeezing);
@@ -9213,9 +9219,9 @@ MarkdownStyleSheet assistantMarkdownStyleSheet(BuildContext context) {
     return base.copyWith(
       p: body,
       a: base.a!.copyWith(color: colors.link),
-      code: _kAssistantCodeStyle.copyWith(
+      code: base.code!.copyWith(
         color: colors.ink,
-        backgroundColor: colors.control,
+        backgroundColor: colors.inlineCodeBackground,
       ),
       h1: base.h1!.copyWith(color: colors.ink),
       h2: base.h2!.copyWith(color: colors.ink),
@@ -9338,10 +9344,9 @@ class _WorkspacePathMarkdownBuilder extends MarkdownElementBuilder {
     )) {
       return null;
     }
-    final style =
-        preferredStyle ??
-        parentStyle ??
+    final baseStyle = parentStyle ??
         (element.tag == 'code' ? _kAssistantCodeStyle : _kAssistantPlainStyle);
+    final style = baseStyle.merge(preferredStyle);
     return Text.rich(
       workspacePathInlineSpan(
         text,
@@ -9619,6 +9624,11 @@ const TextStyle _kUserBubbleStyle = TextStyle(
   fontWeight: FontWeight.w400,
 );
 
+final _assistantOrderedListMarker = RegExp(
+  r'^[ \t]*\d{1,9}[.)][ \t]+',
+  multiLine: true,
+);
+
 bool assistantTextLooksPlain(String text) {
   // Fast path: skip Markdown parser for plain replies (majority of short turns).
   return !text.contains('*') &&
@@ -9628,7 +9638,7 @@ bool assistantTextLooksPlain(String text) {
       !text.contains('|') &&
       !text.contains('>') &&
       !text.contains('- ') &&
-      !text.contains('1.') &&
+      !_assistantOrderedListMarker.hasMatch(text) &&
       !text.contains('http');
 }
 
@@ -9936,7 +9946,7 @@ class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
     }
     final preGate = _MarkdownPreGate();
     final pathBuilder = _WorkspacePathMarkdownBuilder(preGate);
-    final markdown = MarkdownBody(
+    final markdown = MessageMarkdownBody(
       data: widget.data,
       selectable: false, // Parent AssistantSelectionArea owns selection.
       softLineBreak: true,

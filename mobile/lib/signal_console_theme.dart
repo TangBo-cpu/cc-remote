@@ -38,7 +38,7 @@ class AppPalette {
   Color get navigatorAccent =>
       _isLight ? const Color(0xFF3877A7) : const Color(0xFF87B7DB);
   Color get link =>
-      _isLight ? const Color(0xFF505050) : const Color(0xFFD0D0D0);
+      _isLight ? const Color(0xFF2E6A9B) : const Color(0xFF87B7DB);
   Color get success =>
       _isLight ? const Color(0xFF4C7D63) : const Color(0xFF91B19E);
   Color get danger =>
@@ -54,6 +54,8 @@ class AppPalette {
   Color get assistantBubble => surface;
   Color get userBubble =>
       _isLight ? const Color(0xFFEDEDED) : const Color(0xFF2A2A2A);
+  Color get inlineCodeBackground =>
+      _isLight ? const Color(0xFFF3F3F3) : const Color(0xFF242424);
   Color get bubbleOutline =>
       _isLight ? const Color(0x14000000) : const Color(0x14FFFFFF);
   Color get composerControlFill => control;
@@ -117,7 +119,7 @@ class AppColors {
   static const inactiveLight = Color(0xFFD0D0D0);
   static const accent = Color(0xFF303030);
   static const accentStrong = accent;
-  static const link = Color(0xFF505050);
+  static const link = Color(0xFF2E6A9B);
   static const success = Color(0xFF4C7D63);
   static const danger = Color(0xFFB42318);
   static const line = Color(0xFFE5E5E5);
@@ -168,6 +170,7 @@ class AppTypography {
   /// Assistant text follows the same platform-native family as the UI.
   static const String? assistantFontFamily = fontFamily;
   static const List<String>? assistantFontFamilyFallback = fontFamilyFallback;
+  static const assistantCodeFontFamily = 'GeistMono';
   static const codeFontFamily = 'monospace';
   static const codeFontFamilyFallback = <String>[
     'JetBrains Mono',
@@ -177,8 +180,8 @@ class AppTypography {
   ];
 
   /// Base assistant body before reading-font scale factor.
-  static const assistantBodySize = 15.0;
-  static const assistantBodyHeight = 1.6;
+  static const assistantBodySize = 16.0;
+  static const assistantBodyHeight = 26 / assistantBodySize;
   static const userBodySize = 15.0;
   static const userBodyHeight = 1.6;
   static const activityBodySize = 13.0;
