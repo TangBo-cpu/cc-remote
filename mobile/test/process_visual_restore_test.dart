@@ -103,7 +103,7 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
-  testWidgets('completed history keeps details inline beside the final reply', (
+  testWidgets('completed history defaults to folded beside the final reply', (
     tester,
   ) async {
     await tester.pumpWidget(host(turn(running: false), reduceMotion: true));
@@ -111,6 +111,9 @@ void main() {
     expect(find.byKey(const ValueKey('process-history-surface')), findsNothing);
     expect(find.byType(SmartIcon), findsWidgets);
     expect(find.text('检查完成'), findsOneWidget);
+    expect(find.text('README.md'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pumpAndSettle();
     expect(find.text('README.md'), findsOneWidget);
     expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
   });

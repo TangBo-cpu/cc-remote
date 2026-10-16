@@ -36,12 +36,14 @@ import 'noto_icon.dart';
 import 'notification_service.dart';
 import 'reading_font_size.dart';
 import 'message_markdown.dart';
+import 'message_code.dart';
 import 'signal_console_theme.dart';
 import 'workspace_drawer.dart';
 import 'workspace_paths.dart';
 import 'session_interaction.dart';
 import 'thinking_block.dart';
 import 'tool_activity_detail.dart';
+import 'transcript_motion.dart';
 
 export 'thinking_block.dart';
 
@@ -324,6 +326,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final TextEditingController promptController = TextEditingController();
   final AttachmentPicker attachmentPicker = AttachmentPicker();
   final List<TranscriptMessage> messages = [];
+  final TranscriptMotion transcriptMotion = TranscriptMotion();
   final ValueNotifier<int> transcriptRevision = ValueNotifier(0);
   final ValueNotifier<bool> directoryBusy = ValueNotifier(false);
   final List<AttachmentDraft> pendingAttachments = [];
@@ -370,6 +373,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   bool peekLoading = false;
   bool peekFailed = false;
   int liveMessageCountAtPeek = 0;
+
+  bool get canAnimateLiveFeedback =>
+      viewingSessionId == null &&
+      (WidgetsBinding.instance.lifecycleState == null ||
+          WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed);
 
   bool get directorySwitchBlocked =>
       running ||
@@ -427,6 +435,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) transcriptMotion.discardEntrances();
     notificationController.lifecycleState = state;
 
     if (state != AppLifecycleState.resumed) {
@@ -808,6 +817,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     if (remoteTranscriptRevision > 0) return;
     setState(() {
       activeSessionId = snapshot.sessionId;
+      transcriptMotion.reset();
       messages
         ..clear()
         ..addAll(snapshot.messages);
@@ -1273,6 +1283,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         clearStreamTextBatch(apply: false);
         setState(() {
           remoteTranscriptRevision = snapshot.revision;
+          transcriptMotion.reset(preserveCompletedRun: true);
           running = snapshot.running;
           stopping = snapshot.running && snapshot.stopping;
           activeRunId = snapshot.running ? snapshot.runId ?? activeRunId : null;
@@ -1333,6 +1344,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             pendingPermissions[index] = request;
           } else {
             pendingPermissions.add(request);
+            if (canAnimateLiveFeedback) {
+              transcriptMotion.recordPermission(request.requestId);
+            }
             // A permission decision is the product's highest-stakes moment;
             // give it the same physical nudge the gauge detents already use.
             HapticFeedback.selectionClick();
@@ -1400,11 +1414,20 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         persistTranscriptSnapshotLater();
       case 'done':
         final failed = currentRunFailed;
+        final completedRun =
+            decoded['runId'] ??
+            messages
+                .where((message) => message.role == MessageRole.user)
+                .lastOrNull;
+        final successful = !failed && decoded['exitCode'] == 0;
         flushStreamTextBatch();
         setState(() {
           running = false;
           stopping = false;
           currentRunFailed = false;
+          if (successful && completedRun != null && canAnimateLiveFeedback) {
+            transcriptMotion.completeRun(completedRun);
+          }
           activeRunId = null;
           runStartedAt = null;
           removeDisconnectedRunNotice();
@@ -1612,7 +1635,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       final lastIndex = messages.length - 1;
       final merged = messages[lastIndex].text + text;
       if (merged.trim().isEmpty) return;
-      messages[lastIndex] = TranscriptMessage.assistant(merged);
+      final previous = messages[lastIndex];
+      final next = TranscriptMessage.assistant(merged);
+      transcriptMotion.replaceMessage(previous, next);
+      if (isBlankAssistantMessage(previous) && canAnimateLiveFeedback) {
+        transcriptMotion.recordMessage(next);
+      }
+      messages[lastIndex] = next;
     } else {
       final start =
           messages.lastIndexWhere(
@@ -1625,7 +1654,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         start: start,
         kind: ActivityKind.thinking,
       );
-      messages.add(TranscriptMessage.assistant(text));
+      final message = TranscriptMessage.assistant(text);
+      messages.add(message);
+      if (canAnimateLiveFeedback) transcriptMotion.recordMessage(message);
     }
     transcriptRevision.value++;
     if (persist) persistTranscriptSnapshotLater();
@@ -1673,6 +1704,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         messages
           ..add(TranscriptMessage.user(text))
           ..add(TranscriptMessage.assistant('演示模式：真实对话需要连接 daemon WebSocket。'));
+        if (canAnimateLiveFeedback) {
+          transcriptMotion.recordMessage(messages[messages.length - 2]);
+          transcriptMotion.recordMessage(messages.last);
+        }
       });
       persistTranscriptSnapshotLater();
       unawaited(refreshWorkspaceChangeEcho());
@@ -1775,6 +1810,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       activePermissionMode = permissionMode;
       activeCodexSandboxMode = codexSandboxMode;
       beginPrompt(messages, text, attachments: uploaded);
+      if (canAnimateLiveFeedback) {
+        transcriptMotion.recordMessage(
+          messages.lastWhere((message) => message.role == MessageRole.user),
+        );
+      }
     });
     persistTranscriptSnapshotLater();
   }
@@ -2237,6 +2277,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     activeProjectId = catalog.activeProjectId;
     activeSessionId = catalog.activeSessionId;
     if (changedSession) {
+      transcriptMotion.reset();
       // Match WS catalog handling so HTTP rename/archive/delete cannot leave
       // the previous session's transcript under the new activeSessionId.
       uploadingAttachments = false;
@@ -2906,6 +2947,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         contextWindow: contextWindow,
         remainingContext: remainingContext,
         messages: messages,
+        transcriptMotion: transcriptMotion,
+        completionEvent: transcriptMotion.completionEvent,
         transcriptRevisionListenable: transcriptRevision,
         transcriptJumpRequest: transcriptJumpRequest,
         readingFontScaleListenable: widget.readingFontScaleListenable,
@@ -4128,6 +4171,8 @@ class ChatScreen extends StatelessWidget {
     required this.contextWindow,
     required this.remainingContext,
     required this.messages,
+    this.transcriptMotion,
+    this.completionEvent,
     this.transcriptRevisionListenable,
     this.transcriptJumpRequest,
     this.readingFontScaleListenable,
@@ -4186,6 +4231,8 @@ class ChatScreen extends StatelessWidget {
   final int? contextWindow;
   final int? remainingContext;
   final List<TranscriptMessage> messages;
+  final TranscriptMotion? transcriptMotion;
+  final Object? completionEvent;
   final ValueListenable<int>? transcriptRevisionListenable;
   final ValueListenable<double>? readingFontScaleListenable;
 
@@ -4274,6 +4321,7 @@ class ChatScreen extends StatelessWidget {
     Widget buildTranscriptView(double topPadding) => TranscriptView(
       topPadding: topPadding,
       messages: peeking ? peek!.messages : messages,
+      motion: peeking ? null : transcriptMotion,
       jumpRequest: transcriptJumpRequest,
       session: session,
       activeSessionId: peeking ? peek!.sessionId : activeSessionId,
@@ -4358,6 +4406,7 @@ class ChatScreen extends StatelessWidget {
                           child: RecoveryStatePanel(
                             key: ValueKey(activeSessionId),
                             presentation: presentation,
+                            completionEvent: completionEvent,
                             hostLabel: session?.deviceName,
                             failureDetail: evidence.failureDetail,
                             failureKey: (
@@ -4949,6 +4998,7 @@ class RecoveryStatePanel extends StatefulWidget {
     this.hostLabel,
     this.failureDetail,
     this.failureKey,
+    this.completionEvent,
     this.reconnectSnapshot = const RemoteConnectionSnapshot.idle(),
     this.hasTranscript = false,
     this.hasDraft = false,
@@ -4962,6 +5012,7 @@ class RecoveryStatePanel extends StatefulWidget {
   final String? hostLabel;
   final String? failureDetail;
   final Object? failureKey;
+  final Object? completionEvent;
   final RemoteConnectionSnapshot reconnectSnapshot;
   final bool hasTranscript;
   final bool hasDraft;
@@ -5009,19 +5060,12 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
       failureDismissed = false;
     }
     final completed =
-        widget.presentation.phase == ConsolePhase.connected &&
-        switch (oldWidget.presentation.phase) {
-          ConsolePhase.running ||
-          ConsolePhase.awaitingPermission ||
-          ConsolePhase.stopping ||
-          ConsolePhase.stopTimedOut => true,
-          _ => false,
-        };
+        widget.completionEvent != null &&
+        widget.completionEvent != oldWidget.completionEvent &&
+        widget.presentation.phase == ConsolePhase.connected;
     if (completed) {
       showCompletion = true;
-      // The turn's end moment: the thinking bloom vanishes and text starts
-      // streaming, which reads as "still going". A light tick marks the
-      // finish for a user who is looking away from the screen.
+      // Only an explicit successful terminal event confirms completion.
       HapticFeedback.lightImpact();
       completionTimer?.cancel();
       completionTimer = Timer(AppMotion.signal, () {
@@ -5267,6 +5311,12 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
                                                       color: toneColor,
                                                     ),
                                               )
+                                      : showCompletion
+                                      ? SignalCompletionIcon(
+                                          key: ValueKey(widget.completionEvent),
+                                          color: toneColor,
+                                          size: AppIconSizes.control,
+                                        )
                                       : Icon(
                                           content.icon,
                                           size: AppIconSizes.control,
@@ -7920,6 +7970,7 @@ class TranscriptView extends StatefulWidget {
     super.key,
     required this.messages,
     this.jumpRequest,
+    this.motion,
     this.session,
     this.activeSessionId,
     this.running = false,
@@ -7940,6 +7991,7 @@ class TranscriptView extends StatefulWidget {
 
   final List<TranscriptMessage> messages;
   final TranscriptJumpRequest? jumpRequest;
+  final TranscriptMotion? motion;
   final SavedSession? session;
   final String? activeSessionId;
   final bool running;
@@ -8108,6 +8160,7 @@ class _TranscriptViewState extends State<TranscriptView> {
   @override
   void initState() {
     super.initState();
+    widget.motion?.discardEntrances();
     scrollController.addListener(updateBottomFollowing);
     observeTranscript(reset: true);
     scheduleJump();
@@ -8117,6 +8170,7 @@ class _TranscriptViewState extends State<TranscriptView> {
   void didUpdateWidget(covariant TranscriptView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.activeSessionId != widget.activeSessionId) {
+      widget.motion?.discardEntrances();
       highlightTimer?.cancel();
       highlightedRawIndex = null;
       rowKeys.clear();
@@ -8181,6 +8235,9 @@ class _TranscriptViewState extends State<TranscriptView> {
     }
     observedVisibleMessageCount = visibleCount;
     observedTailSignature = tailSignature;
+    if (!followingBottom || widget.jumpRequest != null) {
+      widget.motion?.discardEntrances();
+    }
   }
 
   Future<void> scrollToLatest() async {
@@ -8246,6 +8303,24 @@ class _TranscriptViewState extends State<TranscriptView> {
       rows.add(_VisibleTranscriptRow(index, message));
     }
     return rows;
+  }
+
+  Widget messageEntrance(
+    TranscriptMessage message,
+    int rawIndex,
+    Widget child,
+  ) {
+    final fresh = widget.motion?.takeMessage(message) ?? false;
+    return SignalEntrance(
+      key: ValueKey('message-entrance-$rawIndex'),
+      animate:
+          fresh &&
+          followingBottom &&
+          widget.jumpRequest == null &&
+          widget.connected,
+      distance: 6,
+      child: child,
+    );
   }
 
   void scheduleJump() {
@@ -8618,7 +8693,10 @@ class _TranscriptViewState extends State<TranscriptView> {
                     runStartedAt: widget.runStartedAt,
                     searchHighlighted: highlighted,
                     isStreaming: item.rawIndex == streamingAssistantIndex,
+                    followsProcess:
+                        index > 0 && items[index - 1] is _ProcessGroupRow,
                   );
+                  row = messageEntrance(item.message, rawIndex, row);
                   if (highlighted) {
                     row = Semantics(
                       key: ValueKey('transcript-search-hit-$rawIndex'),
@@ -8643,6 +8721,11 @@ class _TranscriptViewState extends State<TranscriptView> {
                         runStartedAt: widget.runStartedAt,
                         searchHighlighted: highlighted,
                         isStreaming: part.rawIndex == streamingAssistantIndex,
+                      );
+                      child = messageEntrance(
+                        part.message,
+                        part.rawIndex,
+                        child,
                       );
                       if (highlighted) {
                         child = Semantics(
@@ -8678,6 +8761,18 @@ class _TranscriptViewState extends State<TranscriptView> {
                     onAllow: () => widget.onPermissionAllow(request),
                     onDeny: () => widget.onPermissionDeny(request),
                   );
+                  final fresh =
+                      widget.motion?.takePermission(request.requestId) ?? false;
+                  row = SignalEntrance(
+                    key: ValueKey('permission-entrance-${request.requestId}'),
+                    animate:
+                        fresh &&
+                        followingBottom &&
+                        widget.jumpRequest == null &&
+                        widget.connected,
+                    distance: 4,
+                    child: row,
+                  );
                 }
                 if (item is _ProcessGroupRow) {
                   row = PageStorage(
@@ -8696,12 +8791,16 @@ class _TranscriptViewState extends State<TranscriptView> {
                   return value;
                 }
 
-                final gap = index == items.length - 1
+                final nextItem = index + 1 < items.length
+                    ? items[index + 1]
+                    : null;
+                final attachedReply =
+                    item is _ProcessGroupRow &&
+                    nextItem is _VisibleTranscriptRow &&
+                    nextItem.message.role == MessageRole.assistant;
+                final gap = nextItem == null || attachedReply
                     ? 0.0
-                    : transcriptGapBetween(
-                        gapItem(item),
-                        gapItem(items[index + 1]),
-                      );
+                    : transcriptGapBetween(gapItem(item), gapItem(nextItem));
                 // Spacing without ListView.separated (one less child per gap).
                 final paddedRow = Padding(
                   padding: EdgeInsets.only(bottom: gap),
@@ -9120,7 +9219,7 @@ const TextStyle _kAssistantCodeStyle = TextStyle(
   fontFamily: AppTypography.assistantCodeFontFamily,
   fontFamilyFallback: AppTypography.codeFontFamilyFallback,
   fontSize: 14,
-  height: 1.45,
+  height: 20 / 14,
   letterSpacing: 0,
 );
 
@@ -9131,13 +9230,14 @@ const TextStyle _kAssistantCodeStyle = TextStyle(
 final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
   p: _kAssistantPlainStyle,
   pPadding: EdgeInsets.zero,
-  a: const TextStyle(
-    color: AppColors.link,
-    fontWeight: FontWeight.w500,
-    decoration: TextDecoration.underline,
-    decorationThickness: 1,
+  a: TextStyle(
+    color: AppPalette.light.messageLink,
+    fontWeight: FontWeight.w400,
+    decoration: TextDecoration.none,
   ),
-  code: _kAssistantCodeStyle.copyWith(height: AppTypography.assistantBodyHeight),
+  code: _kAssistantCodeStyle.copyWith(
+    height: AppTypography.assistantBodyHeight,
+  ),
   h1: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
@@ -9146,16 +9246,16 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
     height: 1.3,
     color: AppColors.ink,
   ),
-  h1Padding: EdgeInsets.zero,
+  h1Padding: const EdgeInsets.only(bottom: 10),
   h2: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
     fontSize: 18,
     fontWeight: FontWeight.w600,
-    height: 1.4,
+    height: 28 / 18,
     color: AppColors.ink,
   ),
-  h2Padding: EdgeInsets.zero,
+  h2Padding: const EdgeInsets.only(bottom: 8),
   h3: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
@@ -9164,7 +9264,7 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
     height: 1.5,
     color: AppColors.ink,
   ),
-  h3Padding: EdgeInsets.zero,
+  h3Padding: const EdgeInsets.only(bottom: 8),
   h4: const TextStyle(
     fontFamily: AppTypography.assistantFontFamily,
     fontFamilyFallback: AppTypography.assistantFontFamilyFallback,
@@ -9173,15 +9273,15 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
     height: 1.5,
     color: AppColors.ink,
   ),
-  h4Padding: EdgeInsets.zero,
+  h4Padding: const EdgeInsets.only(bottom: 6),
   h5: _kAssistantPlainStyle.copyWith(fontWeight: FontWeight.w600, height: 1.5),
-  h5Padding: EdgeInsets.zero,
+  h5Padding: const EdgeInsets.only(bottom: 6),
   h6: _kAssistantPlainStyle.copyWith(
     fontSize: 14,
     fontWeight: FontWeight.w600,
-    height: 1.45,
+    height: 20 / 14,
   ),
-  h6Padding: EdgeInsets.zero,
+  h6Padding: const EdgeInsets.only(bottom: 6),
   em: const TextStyle(fontStyle: FontStyle.italic),
   strong: const TextStyle(fontWeight: FontWeight.w700),
   del: const TextStyle(decoration: TextDecoration.lineThrough),
@@ -9190,20 +9290,30 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
   checkbox: _kAssistantPlainStyle,
   blockSpacing: 12,
   listIndent: 24,
-  listBullet: _kAssistantPlainStyle,
-  listBulletPadding: const EdgeInsets.only(right: 6),
-  tableHead: _kAssistantPlainStyle.copyWith(fontWeight: FontWeight.w600),
-  tableBody: _kAssistantPlainStyle,
+  listBullet: _kAssistantPlainStyle.copyWith(fontWeight: FontWeight.w500),
+  listBulletPadding: const EdgeInsets.only(right: 10),
+  tableHead: _kAssistantPlainStyle.copyWith(
+    fontSize: 14,
+    height: 20 / 14,
+    fontWeight: FontWeight.w600,
+  ),
+  tableBody: _kAssistantPlainStyle.copyWith(fontSize: 14, height: 20 / 14),
   // Intrinsic widths keep every column readable (no char-per-line squeezing);
   // flutter_markdown wraps wide tables in a horizontal scroll automatically.
   // Tables are rare and row-bounded, so intrinsic measurement cost is fine
   // here even though Flex would be cheaper.
   tableColumnWidth: const IntrinsicColumnWidth(),
-  tableCellsPadding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-  blockquotePadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-  blockquoteDecoration: const BoxDecoration(
-    border: Border(left: BorderSide(color: AppColors.lineStrong, width: 1)),
+  tableHeadAlign: TextAlign.left,
+  tablePadding: EdgeInsets.zero,
+  tableCellsPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+  blockquotePadding: const EdgeInsets.fromLTRB(15, 2, 2, 2),
+  blockquoteDecoration: BoxDecoration(
+    border: Border(
+      left: BorderSide(color: AppPalette.light.messageBorder, width: 3),
+    ),
   ),
+  codeblockPadding: EdgeInsets.zero,
+  codeblockDecoration: const BoxDecoration(color: Colors.transparent),
   horizontalRuleDecoration: const BoxDecoration(
     border: Border(top: BorderSide(color: AppColors.line)),
   ),
@@ -9215,42 +9325,47 @@ MarkdownStyleSheet assistantMarkdownStyleSheet(BuildContext context) {
   final colors = AppPalette.of(context);
   return _assistantMarkdownThemes.putIfAbsent(colors.brightness, () {
     final base = kAssistantMarkdownStyleSheet;
-    final body = _kAssistantPlainStyle.copyWith(color: colors.ink);
+    final body = _kAssistantPlainStyle.copyWith(color: colors.messageInk);
     return base.copyWith(
       p: body,
-      a: base.a!.copyWith(color: colors.link),
+      a: base.a!.copyWith(color: colors.messageLink),
       code: base.code!.copyWith(
-        color: colors.ink,
+        color: colors.inlineCodeForeground,
         backgroundColor: colors.inlineCodeBackground,
       ),
-      h1: base.h1!.copyWith(color: colors.ink),
-      h2: base.h2!.copyWith(color: colors.ink),
-      h3: base.h3!.copyWith(color: colors.ink),
-      h4: base.h4!.copyWith(color: colors.ink),
-      h5: base.h5!.copyWith(color: colors.ink),
-      h6: base.h6!.copyWith(color: colors.ink),
-      blockquote: body.copyWith(color: colors.muted),
+      h1: base.h1!.copyWith(color: colors.messageInk),
+      h2: base.h2!.copyWith(color: colors.messageInk),
+      h3: base.h3!.copyWith(color: colors.messageInk),
+      h4: base.h4!.copyWith(color: colors.messageInk),
+      h5: base.h5!.copyWith(color: colors.messageInk),
+      h6: base.h6!.copyWith(color: colors.messageInk),
+      blockquote: body.copyWith(color: colors.messageMuted),
       img: body,
       checkbox: body,
-      listBullet: body,
-      tableHead: body.copyWith(fontWeight: FontWeight.w600),
-      tableBody: body,
+      listBullet: base.listBullet!.copyWith(color: colors.messageInk),
+      tableHead: base.tableHead!.copyWith(color: colors.messageInk),
+      tableBody: base.tableBody!.copyWith(color: colors.messageInk),
+      tableBorder: TableBorder.all(
+        color: colors.messageBorder,
+        borderRadius: const BorderRadius.all(Radius.circular(12)),
+      ),
+      tableHeadCellsDecoration: BoxDecoration(color: colors.messageSecondary),
+      tableCellsDecoration: const BoxDecoration(),
       blockquoteDecoration: BoxDecoration(
-        border: Border(left: BorderSide(color: colors.lineStrong, width: 2)),
+        border: Border(left: BorderSide(color: colors.messageBorder, width: 3)),
       ),
       horizontalRuleDecoration: BoxDecoration(
-        border: Border(top: BorderSide(color: colors.line)),
+        border: Border(top: BorderSide(color: colors.messageBorder)),
       ),
     );
   });
 }
 
-/// Replaces the default `pre` rendering with a card that carries a language
-/// label and a copy button (RikkaHub-style code block toolbar).
 class _MarkdownPreGate {
   int depth = 0;
 }
 
+/// Renders fenced code with syntax colors, copy and full-screen controls.
 class _CodeBlockBuilder extends MarkdownElementBuilder {
   _CodeBlockBuilder(this.preGate);
 
@@ -9344,7 +9459,8 @@ class _WorkspacePathMarkdownBuilder extends MarkdownElementBuilder {
     )) {
       return null;
     }
-    final baseStyle = parentStyle ??
+    final baseStyle =
+        parentStyle ??
         (element.tag == 'code' ? _kAssistantCodeStyle : _kAssistantPlainStyle);
     final style = baseStyle.merge(preferredStyle);
     return Text.rich(
@@ -9407,12 +9523,13 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
   }
 
   Widget buildCodeText() {
-    return Text(
-      widget.code,
-      key: widget.fullScreen ? const ValueKey('code-reader-text') : null,
+    return MessageCodeText(
+      code: widget.code,
+      language: widget.language,
+      textKey: widget.fullScreen ? const ValueKey('code-reader-text') : null,
       softWrap: widget.fullScreen && wrapLines,
       style: _kAssistantCodeStyle.copyWith(
-        color: AppPalette.of(context).ink,
+        color: AppPalette.of(context).messageInk,
         fontSize: widget.fullScreen ? fontSize : null,
       ),
     );
@@ -9474,7 +9591,7 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
             key: const ValueKey('code-reader-copy'),
             tooltip: copied ? '已复制' : '复制代码',
             onPressed: copyCode,
-            icon: SmartIcon(copied ? LucideIcons.check : LucideIcons.copy),
+            icon: SignalCopyIcon(copied: copied),
           ),
         ],
       ),
@@ -9517,7 +9634,17 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
   }
 
   Future<void> copyCode() async {
-    await Clipboard.setData(ClipboardData(text: widget.code));
+    try {
+      await Clipboard.setData(ClipboardData(text: widget.code));
+    } on PlatformException {
+      if (!mounted) return;
+      copiedResetTimer?.cancel();
+      setState(() => copied = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('复制失败，请重试')));
+      return;
+    }
     if (!mounted) return;
     setState(() => copied = true);
     copiedResetTimer?.cancel();
@@ -9533,17 +9660,15 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
       key: const ValueKey('code-block-card'),
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: AppPalette.of(context).control,
+        color: AppPalette.of(context).codeBlockBackground,
         borderRadius: BorderRadius.circular(AppRadii.control),
-        border: Border.all(color: AppPalette.of(context).line, width: 0.8),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            color: AppPalette.of(context).surface,
-            padding: const EdgeInsets.fromLTRB(12, 5, 6, 5),
+          Padding(
+            padding: const EdgeInsetsDirectional.only(start: 14, end: 4),
             child: SelectionContainer.disabled(
               child: Row(
                 children: [
@@ -9552,13 +9677,9 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
                       widget.language ?? '代码',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: AppPalette.of(context).muted,
-                        fontFamily: AppTypography.codeFontFamily,
-                        fontFamilyFallback:
-                            AppTypography.codeFontFamilyFallback,
+                      style: _kAssistantCodeStyle.copyWith(
+                        fontSize: 12,
+                        color: AppPalette.of(context).messageMuted,
                       ),
                     ),
                   ),
@@ -9573,9 +9694,8 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
                             '已复制',
                             key: ValueKey('code-copied-label'),
                             style: TextStyle(
-                              fontSize: 11,
+                              fontSize: 12,
                               color: AppPalette.of(context).success,
-                              fontWeight: FontWeight.w600,
                             ),
                           )
                         : const SizedBox.shrink(),
@@ -9584,21 +9704,21 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
                     key: const ValueKey('code-expand-button'),
                     tooltip: '全屏阅读代码',
                     onPressed: openFullScreen,
-                    iconSize: 18,
-                    color: AppPalette.of(context).muted,
+                    iconSize: AppIconSizes.inline,
+                    color: AppPalette.of(context).messageMuted,
                     icon: const SmartIcon(LucideIcons.maximize2),
                   ),
                   IconButton(
                     key: const ValueKey('code-copy-button'),
-                    tooltip: '复制代码',
-                    visualDensity: VisualDensity.compact,
-                    iconSize: 15,
+                    tooltip: copied ? '已复制' : '复制代码',
+                    iconSize: AppIconSizes.inline,
                     color: copied
                         ? AppPalette.of(context).success
-                        : AppPalette.of(context).muted,
+                        : AppPalette.of(context).messageMuted,
                     onPressed: copyCode,
-                    icon: SmartIcon(
-                      copied ? LucideIcons.check : LucideIcons.copy,
+                    icon: SignalCopyIcon(
+                      copied: copied,
+                      size: AppIconSizes.inline,
                     ),
                   ),
                 ],
@@ -9607,7 +9727,7 @@ class _CodeBlockCardState extends State<_CodeBlockCard> {
           ),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
             child: buildCodeText(),
           ),
         ],
@@ -9629,17 +9749,43 @@ final _assistantOrderedListMarker = RegExp(
   multiLine: true,
 );
 
+final _assistantRuleOrSetextMarker = RegExp(
+  r'^[ \t]*(?:-+|=+)[ \t]*$',
+  multiLine: true,
+);
+
 bool assistantTextLooksPlain(String text) {
   // Fast path: skip Markdown parser for plain replies (majority of short turns).
   return !text.contains('*') &&
+      !text.contains('_') &&
+      !text.contains('~') &&
       !text.contains('`') &&
       !text.contains('#') &&
       !text.contains('[') &&
       !text.contains('|') &&
       !text.contains('>') &&
       !text.contains('- ') &&
+      !text.contains('+ ') &&
+      !_assistantRuleOrSetextMarker.hasMatch(text) &&
       !_assistantOrderedListMarker.hasMatch(text) &&
       !text.contains('http');
+}
+
+bool _assistantTextLooksPlainOutsidePaths(String text, {String? workspaceDir}) {
+  if (assistantTextLooksPlain(text)) return true;
+  final paths = findWorkspacePaths(text, workspaceDir: workspaceDir);
+  if (paths.isEmpty) return false;
+
+  // Ignore filename punctuation when deciding whether prose needs Markdown.
+  final prose = StringBuffer();
+  var cursor = 0;
+  for (final path in paths) {
+    prose.write(text.substring(cursor, path.start));
+    prose.write('file');
+    cursor = path.end;
+  }
+  prose.write(text.substring(cursor));
+  return assistantTextLooksPlain(prose.toString());
 }
 
 Uri? searchSourceUri(String? href) {
@@ -9802,6 +9948,7 @@ class MessageBlock extends StatelessWidget {
     this.runStartedAt,
     this.searchHighlighted = false,
     this.isStreaming = false,
+    this.followsProcess = false,
   });
 
   final TranscriptMessage message;
@@ -9810,6 +9957,7 @@ class MessageBlock extends StatelessWidget {
   final DateTime? runStartedAt;
   final bool searchHighlighted;
   final bool isStreaming;
+  final bool followsProcess;
 
   @override
   Widget build(BuildContext context) {
@@ -9830,21 +9978,17 @@ class MessageBlock extends StatelessWidget {
       if (text.trim().isEmpty) {
         return const SizedBox.shrink();
       }
-      // Defer parsing a growing Markdown reply until its turn is complete.
-      final Widget assistantBody;
-      if (isStreaming) {
-        assistantBody = Text(text, style: _kAssistantPlainStyle);
-      } else if (assistantTextLooksPlain(text)) {
-        assistantBody = WorkspacePathText(text, style: _kAssistantPlainStyle);
-      } else {
-        assistantBody = _CachedMarkdownBody(data: text);
-      }
+      final assistantBody = _CachedMarkdownBody(
+        data: text,
+        isStreaming: isStreaming,
+      );
       return Semantics(
         container: true,
         label: '助手回复',
         child: AssistantBubbleFrame(
           bubbleKey: const ValueKey('assistant-message'),
           searchHighlighted: searchHighlighted,
+          topPadding: followsProcess ? 0 : null,
           child: AssistantSelectionArea(text: text, child: assistantBody),
         ),
       );
@@ -9897,14 +10041,13 @@ class MessageBlock extends StatelessWidget {
   }
 }
 
-// Transcript rows rebuild on every stream flush and WebSocket event. Keeping
-// the MarkdownBody instance identical across builds while the text is unchanged
-// lets Flutter skip the whole markdown subtree; flutter_markdown still reparses
-// through its own didUpdateWidget when data actually changes.
+// Keep the renderer mounted across stream updates and completion. Reuse its
+// widget subtree when WebSocket events leave the message text unchanged.
 class _CachedMarkdownBody extends StatefulWidget {
-  const _CachedMarkdownBody({required this.data});
+  const _CachedMarkdownBody({required this.data, this.isStreaming = false});
 
   final String data;
+  final bool isStreaming;
 
   @override
   State<_CachedMarkdownBody> createState() => _CachedMarkdownBodyState();
@@ -9920,7 +10063,10 @@ class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
   @override
   void didUpdateWidget(covariant _CachedMarkdownBody oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.data != oldWidget.data) cached = null;
+    if (widget.data != oldWidget.data ||
+        widget.isStreaming != oldWidget.isStreaming) {
+      cached = null;
+    }
   }
 
   @override
@@ -9940,13 +10086,25 @@ class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
       cached = null;
     }
     if (cached != null) return cached!;
-    if (sourcesData != widget.data) {
+    if (_assistantTextLooksPlainOutsidePaths(
+      widget.data,
+      workspaceDir: portal?.workspaceDir,
+    )) {
+      return cached = WorkspacePathText(
+        widget.data,
+        style: _kAssistantPlainStyle.copyWith(
+          color: AppPalette.of(context).messageInk,
+        ),
+      );
+    }
+    if (!widget.isStreaming && sourcesData != widget.data) {
       sources = extractMarkdownSourceLinks(widget.data);
       sourcesData = widget.data;
     }
     final preGate = _MarkdownPreGate();
     final pathBuilder = _WorkspacePathMarkdownBuilder(preGate);
     final markdown = MessageMarkdownBody(
+      key: const ValueKey('assistant-markdown-body'),
       data: widget.data,
       selectable: false, // Parent AssistantSelectionArea owns selection.
       softLineBreak: true,
@@ -9960,14 +10118,15 @@ class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
         'del': pathBuilder,
       },
     );
-    if (sources.isEmpty) return cached = markdown;
     return cached = Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
       children: [
         markdown,
-        const SizedBox(height: 12),
-        _MarkdownSourcesBar(sources: sources),
+        if (!widget.isStreaming && sources.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          _MarkdownSourcesBar(sources: sources),
+        ],
       ],
     );
   }
@@ -10222,12 +10381,14 @@ class AssistantBubbleFrame extends StatelessWidget {
     this.bubbleKey,
     this.compact = false,
     this.searchHighlighted = false,
+    this.topPadding,
   });
 
   final Widget child;
   final Key? bubbleKey;
   final bool compact;
   final bool searchHighlighted;
+  final double? topPadding;
 
   @override
   Widget build(BuildContext context) {
@@ -10246,7 +10407,10 @@ class AssistantBubbleFrame extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppRadii.compact),
         ),
         child: Padding(
-          padding: EdgeInsets.symmetric(vertical: compact ? 6 : 10),
+          padding: EdgeInsets.only(
+            top: topPadding ?? (compact ? 6 : 10),
+            bottom: compact ? 6 : 10,
+          ),
           child: SizedBox(width: double.infinity, child: child),
         ),
       ),
@@ -10463,7 +10627,7 @@ class ActivityBlock extends StatelessWidget {
     if (message.activityKind == ActivityKind.thinking) {
       return Padding(
         key: const ValueKey('thinking-bubble'),
-        padding: const EdgeInsets.fromLTRB(8, 2, 8, 2),
+        padding: const EdgeInsets.symmetric(vertical: 2),
         child: ThinkingHistoryBlock(
           message: message,
           initialElapsedSeconds: elapsedSecondsSince(runStartedAt),
@@ -10660,10 +10824,31 @@ String activityToolTitle(TranscriptMessage activity) {
 }
 
 class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
-  bool expanded = true;
+  late bool expanded;
   late String displayedTitle;
   DateTime titleChangedAt = DateTime.now();
   Timer? titleTimer;
+
+  bool isRunning(ActivityTimelineCard card) =>
+      card.running ??
+      card.activities.any(
+        (activity) => activity.activityState == ActivityState.running,
+      );
+
+  Object get expansionStorageId => (
+    'activity-timeline-expanded',
+    widget.activities.firstOrNull?.activityId,
+    isRunning(widget),
+  );
+
+  void restoreExpansion() {
+    expanded =
+        PageStorage.maybeOf(
+              context,
+            )?.readState(context, identifier: expansionStorageId)
+            as bool? ??
+        isRunning(widget);
+  }
 
   String groupTitle(List<TranscriptMessage> activities) {
     if (widget.thinking && widget.running != false) return '思考中';
@@ -10687,12 +10872,7 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
   void initState() {
     super.initState();
     displayedTitle = groupTitle(widget.activities);
-    expanded =
-        PageStorage.maybeOf(
-              context,
-            )?.readState(context, identifier: 'activity-timeline-expanded')
-            as bool? ??
-        true;
+    restoreExpansion();
   }
 
   @override
@@ -10703,7 +10883,9 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
         widget.activities.isNotEmpty &&
         oldWidget.activities.first.activityId !=
             widget.activities.first.activityId;
-    if (changedGroup) expanded = true;
+    if (changedGroup || isRunning(oldWidget) != isRunning(widget)) {
+      restoreExpansion();
+    }
     titleTimer?.cancel();
     titleTimer = null;
     final nextTitle = groupTitle(widget.activities);
@@ -10793,7 +10975,7 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
       running: running && activity.activityState == ActivityState.running,
     );
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      padding: const EdgeInsets.symmetric(vertical: 2),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -10815,11 +10997,9 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
             onToggle: () {
               final next = !isExpanded;
               setState(() => expanded = next);
-              PageStorage.maybeOf(context)?.writeState(
+              PageStorage.maybeOf(
                 context,
-                next,
-                identifier: 'activity-timeline-expanded',
-              );
+              )?.writeState(context, next, identifier: expansionStorageId);
               widget.onExpandedChanged?.call(next);
             },
             child:

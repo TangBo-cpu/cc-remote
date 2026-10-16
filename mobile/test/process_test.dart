@@ -193,6 +193,8 @@ void main() {
           scale: 2,
         ),
       );
+      await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+      await tester.pumpAndSettle();
       expect(
         find.byKey(const ValueKey('thinking-history-content')),
         findsOneWidget,
@@ -234,6 +236,9 @@ void main() {
         ),
       ),
     );
+    expect(find.text('README.md'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pumpAndSettle();
     expect(find.text('README.md'), findsOneWidget);
     expect(find.text('flutter test'), findsOneWidget);
     expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
@@ -284,6 +289,9 @@ void main() {
     );
     expect(find.byType(ActivityTimelineCard), findsOneWidget);
     expect(find.text('检查完成，测试通过。'), findsOneWidget);
+    expect(find.byKey(const ValueKey('thinking-history-toggle')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pumpAndSettle();
     final read = find.byKey(const ValueKey('activity-step-toggle-read'));
     final narration = find.text('文件已读取，接着检查测试。');
     final reasoning = find.byKey(const ValueKey('thinking-history-toggle'));
@@ -323,6 +331,9 @@ void main() {
     await tester.pumpWidget(buildTurn(false, anotherTool: true));
     await tester.pumpAndSettle();
     expect(find.text('flutter test'), findsNothing);
+    expect(find.text('dart analyze'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pumpAndSettle();
     expect(find.text('dart analyze'), findsOneWidget);
     expect(find.text('检查完成。'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool')));
@@ -356,6 +367,22 @@ void main() {
       await tester.pumpAndSettle();
 
       final process = find.byType(ActivityTimelineCard).first;
+      await tester.tap(
+        find.descendant(
+          of: process,
+          matching: find.byKey(const ValueKey('activity-process-toggle')),
+        ),
+      );
+      await tester.pumpAndSettle();
+      if (target == 'reasoning') {
+        await tester.tap(
+          find.descendant(
+            of: process,
+            matching: find.byKey(const ValueKey('thinking-history-toggle')),
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
       final originalElement = tester.element(process);
       final toggle = find.descendant(
         of: process,
@@ -411,7 +438,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool')));
     await tester.pumpAndSettle();
@@ -454,6 +481,12 @@ void main() {
       await tester.pumpAndSettle();
       await tester.pumpWidget(buildTurn(false));
       await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('thinking-history-toggle')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+      await tester.pumpAndSettle();
       expect(find.text('已深度思考'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('thinking-history-content')),
@@ -478,6 +511,8 @@ void main() {
     );
     await tester.pumpWidget(buildSession('first'));
     await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('activity-step-toggle-tool')));
@@ -487,9 +522,13 @@ void main() {
 
     await tester.pumpWidget(buildSession('second'));
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('thinking-history-toggle')), findsNothing);
+    expect(find.byKey(const ValueKey('activity-detail-tool')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('thinking-history-content')),
-      findsOneWidget,
+      findsNothing,
     );
     expect(find.byKey(const ValueKey('activity-detail-tool')), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -515,6 +554,9 @@ void main() {
     expect(find.text('运行中'), findsOneWidget);
     expect(find.text('flutter test'), findsOneWidget);
     await tester.pumpWidget(buildTurn(false));
+    await tester.pumpAndSettle();
+    expect(find.text('flutter test --no-pub'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
     await tester.pumpAndSettle();
     expect(find.text('已完成 · 4 秒'), findsOneWidget);
     expect(find.text('flutter test --no-pub'), findsOneWidget);
@@ -612,13 +654,16 @@ void main() {
         host(ActivityTimelineCard(activities: [tool(state)])),
       );
       expect(find.text(status), findsOneWidget);
-      expect(find.text('flutter test'), findsOneWidget);
+      expect(find.text('flutter test'), findsNothing);
       final semantics = tester
           .getSemantics(find.byKey(const ValueKey('activity-process-toggle')))
           .getSemanticsData();
       expect(semantics.label, '运行命令，1 次操作，$status');
       expect(semantics.flagsCollection.isButton, isTrue);
-      expect(semantics.flagsCollection.isExpanded, Tristate.isTrue);
+      expect(semantics.flagsCollection.isExpanded, Tristate.isFalse);
+      await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+      await tester.pumpAndSettle();
+      expect(find.text('flutter test'), findsOneWidget);
       await tester.pumpWidget(const SizedBox());
     }
   });
@@ -665,6 +710,8 @@ void main() {
           scale: 2,
         ),
       );
+      await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+      await tester.pumpAndSettle();
       expect(find.text(detail), findsOneWidget);
       final text = tester.widget<WorkspacePathText>(
         find.byKey(const ValueKey('activity-detail-tool')),

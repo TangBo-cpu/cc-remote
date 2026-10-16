@@ -156,7 +156,7 @@ class ActivityStatusRow extends StatelessWidget {
           child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: AppSizes.touchTarget),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              padding: const EdgeInsets.symmetric(vertical: 4),
               child: LayoutBuilder(
                 builder: (context, constraints) => Row(
                   children: [

@@ -2483,6 +2483,9 @@ void main() {
     );
 
     await tester.pumpAndSettle();
+    expect(find.text('src/daemon.ts'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('src/daemon.ts').last);
     expect(opened, 'src/daemon.ts');
   });
@@ -4680,20 +4683,20 @@ void main() {
     expect(find.text('已深度思考'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('thinking-history-content')),
+      findsNothing,
+    );
+    expect(find.text('先检查状态。再整理结果。', findRichText: true), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('thinking-history-content')),
       findsOneWidget,
     );
-    expect(find.text('先检查状态。再整理结果。', findRichText: true), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('thinking-history-content')),
       findsNothing,
-    );
-    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('thinking-history-content')),
-      findsOneWidget,
     );
   });
 
@@ -4822,6 +4825,9 @@ void main() {
 
     expect(find.byType(ActivityTimelineCard), findsOneWidget);
     expect(find.text('使用技能 · agent-reach'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-step-toggle-skill-1')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pumpAndSettle();
     expect(find.text('已调用技能'), findsOneWidget);
     expect(find.text('agent-reach'), findsNWidgets(2));
     expect(
@@ -5262,6 +5268,7 @@ void main() {
   ) async {
     var presentation = const ConsolePresentation(ConsolePhase.connecting);
     var reconnectSnapshot = const RemoteConnectionSnapshot.idle();
+    Object? completionEvent;
     late StateSetter rebuild;
 
     await tester.pumpWidget(
@@ -5273,6 +5280,7 @@ void main() {
               rebuild = setState;
               return RecoveryStatePanel(
                 presentation: presentation,
+                completionEvent: completionEvent,
                 reconnectSnapshot: reconnectSnapshot,
                 onReconnect: () {},
                 onStop: () {},
@@ -5306,9 +5314,10 @@ void main() {
       reconnectSnapshot = const RemoteConnectionSnapshot.idle();
     });
     await tester.pump(AppMotion.standard);
-    rebuild(
-      () => presentation = const ConsolePresentation(ConsolePhase.connected),
-    );
+    rebuild(() {
+      presentation = const ConsolePresentation(ConsolePhase.connected);
+      completionEvent = Object();
+    });
     await tester.pump();
     expect(
       find.byKey(const ValueKey('recovery-state-completed')),
@@ -5424,14 +5433,14 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    const path = r'D:\Jayson\EMBEDDED\项目笔记\学习路线.md';
+    const path = r'D:\Workspace\project\项目笔记\学习路线.md';
     const following = '按你库里的习惯把 YAML、callout 和清单格式写一页可勾选的路线。';
     await tester.pumpWidget(
       MaterialApp(
         theme: buildSignalConsoleTheme(),
         home: Scaffold(
           body: WorkspacePortal(
-            workspaceDir: r'D:\Jayson\EMBEDDED',
+            workspaceDir: r'D:\Workspace\project',
             onOpenPath: (_) {},
             child: MessageBlock(
               message: TranscriptMessage.assistant(

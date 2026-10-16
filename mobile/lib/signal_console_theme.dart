@@ -54,8 +54,19 @@ class AppPalette {
   Color get assistantBubble => surface;
   Color get userBubble =>
       _isLight ? const Color(0xFFEDEDED) : const Color(0xFF2A2A2A);
-  Color get inlineCodeBackground =>
-      _isLight ? const Color(0xFFF3F3F3) : const Color(0xFF242424);
+  Color get messageInk =>
+      _isLight ? const Color(0xFF171717) : const Color(0xFFEDEDED);
+  Color get messageMuted =>
+      _isLight ? const Color(0xFF4D4D4D) : const Color(0xFFA0A0A0);
+  Color get messageLink =>
+      _isLight ? const Color(0xFF005FF2) : const Color(0xFF47A8FF);
+  Color get messageBorder =>
+      _isLight ? const Color(0x15000000) : const Color(0x17FFFFFF);
+  Color get messageSecondary =>
+      _isLight ? const Color(0x0D000000) : const Color(0x12FFFFFF);
+  Color get inlineCodeBackground => messageSecondary;
+  Color get inlineCodeForeground =>
+      _isLight ? const Color(0xFF107D32) : const Color(0xFF00CA50);
   Color get bubbleOutline =>
       _isLight ? const Color(0x14000000) : const Color(0x14FFFFFF);
   Color get composerControlFill => control;
@@ -102,6 +113,29 @@ class AppPalette {
   Color get porcelainMuted => control;
   Color get code => ink;
   Color get codeMuted => inactive;
+  Color get codeBlockBackground =>
+      _isLight ? const Color(0xFFF2F2F2) : const Color(0xFF1A1A1A);
+  Color get codeKeyword =>
+      _isLight ? const Color(0xFFA626A4) : const Color(0xFFC792EA);
+  Color get codeString =>
+      _isLight ? const Color(0xFF337533) : const Color(0xFFC3E88D);
+  Color get codeNumber =>
+      _isLight ? const Color(0xFF8D5E00) : const Color(0xFFF78C6C);
+  Color get codeFunction =>
+      _isLight ? const Color(0xFF2A5FD7) : const Color(0xFF82AAFF);
+  Color get codeType =>
+      _isLight ? const Color(0xFF915C00) : const Color(0xFFFFCB6B);
+  Color get codeProperty =>
+      _isLight ? const Color(0xFFC0332B) : const Color(0xFFF07178);
+  Color get codeConstant =>
+      _isLight ? codeNumber : const Color(0xFFFF9CAC);
+  Color get codeAttribute => _isLight ? codeNumber : codeKeyword;
+  Color? get codeVariable => _isLight ? codeProperty : null;
+  Color get codeEmbedded =>
+      _isLight ? const Color(0xFFCA1243) : const Color(0xFF89DDFF);
+  Color? get codeOperator =>
+      _isLight ? null : const Color(0xFF89DDFF);
+  Color get codeComment => messageMuted;
   Color get bgTop => paper;
   Color get bgMid => paper;
   Color get bgBottom => paper;
@@ -809,6 +843,7 @@ class SignalAnimatedSurface extends StatelessWidget {
 class AppMotion {
   static const press = Duration(milliseconds: 90);
   static const fast = Duration(milliseconds: 160);
+  static const micro = Duration(milliseconds: 150);
   static const standard = Duration(milliseconds: 220);
   static const feedback = Duration(milliseconds: 320);
   static const signal = Duration(milliseconds: 1800);
@@ -1479,4 +1514,148 @@ class TaskRailFrame extends StatelessWidget {
       ],
     );
   }
+}
+
+// Only the event that creates this state may start an entrance.
+class SignalEntrance extends StatefulWidget {
+  const SignalEntrance({
+    super.key,
+    required this.animate,
+    required this.distance,
+    required this.child,
+  });
+
+  final bool animate;
+  final double distance;
+  final Widget child;
+
+  @override
+  State<SignalEntrance> createState() => _SignalEntranceState();
+}
+
+class _SignalEntranceState extends State<SignalEntrance>
+    with SingleTickerProviderStateMixin {
+  late final controller = AnimationController(
+    vsync: this,
+    duration: AppMotion.fast,
+    value: widget.animate ? 0 : 1,
+  );
+  late final progress = CurvedAnimation(
+    parent: controller,
+    curve: AppMotion.enter,
+  );
+  bool started = false;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context) || !TickerMode.of(context)) {
+      controller.value = 1;
+      started = true;
+    } else if (!started) {
+      started = true;
+      if (widget.animate) controller.forward();
+    }
+  }
+
+  @override
+  void dispose() {
+    progress.dispose();
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: progress,
+    child: widget.child,
+    builder: (context, child) => Transform.translate(
+      offset: Offset(0, widget.distance * (1 - progress.value)),
+      child: FadeTransition(opacity: progress, child: child),
+    ),
+  );
+}
+
+class SignalCopyIcon extends StatelessWidget {
+  const SignalCopyIcon({super.key, required this.copied, this.size});
+
+  final bool copied;
+  final double? size;
+
+  @override
+  Widget build(BuildContext context) {
+    final dimension = size ?? IconTheme.of(context).size ?? 24;
+    return SizedBox.square(
+      dimension: dimension,
+      child: AnimatedSwitcher(
+        duration: MediaQuery.disableAnimationsOf(context)
+            ? Duration.zero
+            : AppMotion.micro,
+        switchInCurve: AppMotion.enter,
+        switchOutCurve: AppMotion.enter,
+        child: Icon(
+          copied ? LucideIcons.check : LucideIcons.copy,
+          key: ValueKey(copied),
+          size: dimension,
+        ),
+      ),
+    );
+  }
+}
+
+class SignalCompletionIcon extends StatelessWidget {
+  const SignalCompletionIcon({
+    super.key,
+    required this.color,
+    required this.size,
+  });
+
+  final Color color;
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    final static =
+        MediaQuery.disableAnimationsOf(context) || !TickerMode.of(context);
+    return ExcludeSemantics(
+      child: TweenAnimationBuilder<double>(
+        tween: Tween(begin: static ? 1 : 0, end: 1),
+        duration: static ? Duration.zero : AppMotion.standard,
+        curve: AppMotion.enter,
+        builder: (context, progress, _) => CustomPaint(
+          size: Size.square(size),
+          painter: _CompletionPainter(color, progress),
+        ),
+      ),
+    );
+  }
+}
+
+class _CompletionPainter extends CustomPainter {
+  const _CompletionPainter(this.color, this.progress);
+
+  final Color color;
+  final double progress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.scale(size.width / 24, size.height / 24);
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawCircle(const Offset(12, 12), 10, paint);
+    final check = Path()
+      ..moveTo(7.5, 12)
+      ..lineTo(10.5, 15)
+      ..lineTo(16.5, 9);
+    final metric = check.computeMetrics().first;
+    canvas.drawPath(metric.extractPath(0, metric.length * progress), paint);
+  }
+
+  @override
+  bool shouldRepaint(_CompletionPainter oldDelegate) =>
+      color != oldDelegate.color || progress != oldDelegate.progress;
 }

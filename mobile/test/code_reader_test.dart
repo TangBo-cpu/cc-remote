@@ -72,7 +72,7 @@ void main() {
         final text = tester.widget<Text>(
           find.byKey(const ValueKey('code-reader-text')),
         );
-        expect(text.data, code);
+        expect(text.textSpan!.toPlainText(), code);
         expect(text.softWrap, isFalse);
         final horizontal = tester
             .widget<SingleChildScrollView>(
@@ -136,7 +136,7 @@ void main() {
         expect(
           tester
               .widget<Text>(find.byKey(const ValueKey('code-reader-text')))
-              .data,
+              .textSpan!.toPlainText(),
           code,
         );
         await tester.tap(find.byKey(const ValueKey('code-reader-back')));
@@ -173,7 +173,7 @@ void main() {
       expect(
         tester
             .widget<Text>(find.byKey(const ValueKey('code-reader-text')))
-            .data,
+            .textSpan!.toPlainText(),
         '  second();',
       );
       expect(find.text('代码'), findsOneWidget);
@@ -186,7 +186,7 @@ void main() {
       expect(
         tester
             .widget<Text>(find.byKey(const ValueKey('code-reader-text')))
-            .data,
+            .textSpan!.toPlainText(),
         'first();',
       );
       expect(

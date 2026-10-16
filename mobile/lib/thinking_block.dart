@@ -34,25 +34,33 @@ class ThinkingHistoryBlock extends StatefulWidget {
 }
 
 class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
-  bool expanded = true;
+  late bool expanded;
+
+  bool get running => widget.message.activityState == ActivityState.running;
+  Object get expansionStorageId =>
+      ('thinking-expanded', widget.message.activityId, running);
+
+  void restoreExpansion() {
+    expanded =
+        PageStorage.maybeOf(
+              context,
+            )?.readState(context, identifier: expansionStorageId)
+            as bool? ??
+        running;
+  }
 
   @override
   void initState() {
     super.initState();
-    expanded =
-        PageStorage.maybeOf(context)?.readState(
-              context,
-              identifier: ('thinking-expanded', widget.message.activityId),
-            )
-            as bool? ??
-        true;
+    restoreExpansion();
   }
 
   @override
   void didUpdateWidget(covariant ThinkingHistoryBlock oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.message.activityId != widget.message.activityId) {
-      expanded = true;
+    if (oldWidget.message.activityId != widget.message.activityId ||
+        (oldWidget.message.activityState == ActivityState.running) != running) {
+      restoreExpansion();
     }
   }
 
@@ -101,11 +109,9 @@ class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
       onToggle: detail.isNotEmpty
           ? () {
               setState(() => expanded = !expanded);
-              PageStorage.maybeOf(context)?.writeState(
+              PageStorage.maybeOf(
                 context,
-                expanded,
-                identifier: ('thinking-expanded', message.activityId),
-              );
+              )?.writeState(context, expanded, identifier: expansionStorageId);
             }
           : null,
       child: Container(

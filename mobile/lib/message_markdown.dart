@@ -3,7 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
-/// Adjusts list layout after Markdown parsing, retaining its inline spans.
+/// Adjusts block and list spacing without rebuilding parsed inline spans.
 class MessageMarkdownBody extends MarkdownBody {
   const MessageMarkdownBody({
     super.key,
@@ -17,22 +17,28 @@ class MessageMarkdownBody extends MarkdownBody {
 
   @override
   Widget build(BuildContext context, List<Widget>? children) {
-    final layout = _MessageListLayout(
+    final layout = _MessageMarkdownLayout(
       context,
       blockSpacing: styleSheet?.blockSpacing ?? 12,
+      bodyFontSize: styleSheet?.p?.fontSize ?? 16,
     );
     return super.build(
       context,
-      children?.map(layout.apply).toList(growable: false),
+      children == null ? null : layout.applyChildren(children),
     );
   }
 }
 
-class _MessageListLayout {
-  _MessageListLayout(this.context, {required this.blockSpacing});
+class _MessageMarkdownLayout {
+  _MessageMarkdownLayout(
+    this.context, {
+    required this.blockSpacing,
+    required this.bodyFontSize,
+  });
 
   final BuildContext context;
   final double blockSpacing;
+  final double bodyFontSize;
 
   // flutter_markdown_plus renders each list as alternating rows and spacers.
   bool _isListRow(Widget widget) {
@@ -68,6 +74,9 @@ class _MessageListLayout {
     final inset = padding.padding
         .resolve(Directionality.of(context))
         .horizontal;
+    final minWidth =
+        (MediaQuery.textScalerOf(context).scale(bodyFontSize) * 1.5)
+            .ceilToDouble();
     if (marker is Text) {
       final label = marker.data ?? '';
       final painter = TextPainter(
@@ -81,9 +90,38 @@ class _MessageListLayout {
       )..layout();
       final width = painter.width.ceilToDouble();
       painter.dispose();
-      return math.max(label == '•' ? 18.0 : 24.0, width) + inset;
+      return math.max(minWidth, width) + inset;
     }
-    return math.max(18.0, (marker as Icon).size ?? 16) + inset;
+    return math.max(minWidth, (marker as Icon).size ?? 16) + inset;
+  }
+
+  double _spacingAfter(Widget widget) {
+    if (widget is Column && widget.children.isNotEmpty) {
+      return _spacingAfter(widget.children.last);
+    }
+    if (widget is Padding && widget.child is Wrap) {
+      final bottom = widget.padding.resolve(Directionality.of(context)).bottom;
+      if (bottom > 0) return bottom;
+    }
+    return blockSpacing;
+  }
+
+  List<Widget> applyChildren(
+    List<Widget> children, {
+    bool isList = false,
+    double? markerWidth,
+  }) {
+    final result = <Widget>[];
+    Widget? previous;
+    for (final child in children) {
+      if (_isBlockSpacer(child) && previous != null) {
+        result.add(SizedBox(height: isList ? 6 : _spacingAfter(previous)));
+      } else {
+        result.add(apply(child, markerWidth: markerWidth));
+        previous = child;
+      }
+    }
+    return result;
   }
 
   Widget apply(Widget widget, {double? markerWidth}) {
@@ -92,7 +130,7 @@ class _MessageListLayout {
       final width = isList
           ? widget.children.whereType<Row>().map(_markerWidth).reduce(math.max)
           : null;
-      return Column(
+      final column = Column(
         key: widget.key,
         mainAxisAlignment: widget.mainAxisAlignment,
         mainAxisSize: widget.mainAxisSize,
@@ -101,14 +139,18 @@ class _MessageListLayout {
         verticalDirection: widget.verticalDirection,
         textBaseline: widget.textBaseline,
         spacing: widget.spacing,
-        children: [
-          for (final child in widget.children)
-            if (isList && _isBlockSpacer(child))
-              const SizedBox(height: 6)
-            else
-              apply(child, markerWidth: width),
-        ],
+        children: applyChildren(
+          widget.children,
+          isList: isList,
+          markerWidth: width,
+        ),
       );
+      return isList
+          ? Padding(
+              padding: const EdgeInsetsDirectional.only(start: 8),
+              child: column,
+            )
+          : column;
     }
     if (_isListRow(widget)) {
       final row = widget as Row;
@@ -140,9 +182,14 @@ class _MessageListLayout {
       );
     }
     if (widget is Padding && widget.child != null) {
+      final insets = widget.padding.resolve(Directionality.of(context));
+      // Move text-block margins into sibling spacers, trimming the final block.
+      final padding = widget.child is Wrap && insets.bottom > 0
+          ? insets.copyWith(bottom: 0)
+          : widget.padding;
       return Padding(
         key: widget.key,
-        padding: widget.padding,
+        padding: padding,
         child: apply(widget.child!),
       );
     }
