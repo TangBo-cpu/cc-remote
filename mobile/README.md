@@ -30,9 +30,9 @@ flutter run
 
 ## Android 安装
 
-当前公开版本是 [`v2.0.1`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.1)：
+当前公开版本是 [`v2.0.2`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.2)：
 
-- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.1/cc-remote-v2.0.1-android.apk)
+- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.2/cc-remote-v2.0.2-android.apk)
 
 下载后在 Android 手机上允许当前来源安装未知应用，并打开 APK 完成安装。当前 APK 使用测试签名，适合个人测试，不应作为应用商店正式包分发。
 
@@ -78,9 +78,9 @@ adb -s <device-id> shell monkey -p com.example.cc_remote -c android.intent.categ
 
 WebSocket 鉴权后，App 接收项目 catalog、当前 transcript、权限能力、指令、模型和上下文。发送任务时携带唯一 `promptId`、当前 `sessionId`、文本、附件 ID、权限模式、模型覆盖项和 Claude Code `effort`；daemon 接管后返回 `prompt_accepted`。
 
-输入 `/` 时按会话动态获取指令：Claude 会话展示 Claude Code 指令；Codex 会话按需获取原生指令（`/compact` 压缩上下文、`/review` 代码审查）以及当前项目已启用的 skills，支持搜索、补全和失败重试。运行中会显示思考计时和安全化工具活动；调用 `Skill` 时会显示具体 Skill 名称。完成后保留内联过程与最终回复，可手动收起。连接异常时 WebSocket 按退避间隔自动重连；每次连接首次完成鉴权后，尚未收到确认的 Prompt 会使用同一 `promptId` 重发，普通 `status` 广播不会再次触发重发。daemon 在当前收据缓存内去重；这不保证跨 daemon 重启只执行一次。重连后再以 daemon 的 transcript snapshot 和运行状态恢复内容、活动任务与 Stop 中间态。
+输入 `/` 时按会话动态获取指令：Claude 会话展示 Claude Code 指令；Codex 会话按需获取原生指令（`/compact` 压缩上下文、`/review` 代码审查）以及当前项目已启用的 skills，支持搜索、补全和失败重试。运行中会显示思考计时和安全化工具活动；调用 `Skill` 时会显示具体 Skill 名称。完成后保留最终回复，过程历史默认收起，可手动展开。连接异常时 WebSocket 按退避间隔自动重连；每次连接首次完成鉴权后，尚未收到确认的 Prompt 会使用同一 `promptId` 重发，普通 `status` 广播不会再次触发重发。daemon 在当前收据缓存内去重；这不保证跨 daemon 重启只执行一次。重连后再以 daemon 的 transcript snapshot 和运行状态恢复内容、活动任务与 Stop 中间态。
 
-思考与工具调用直接排在消息流中，默认显示已有内容和命令详情，点击标题可原地折叠。过程文字使用 13 号，回复正文使用 16 号、行高 26，均跟随系统字号。列表项间隔为 6，段落间隔为 12；编号列按实际数字宽度调整。行内代码使用内置 Geist Mono 字体，字号为 14，中文正文继续使用系统字体。折叠选择在消息滚出屏幕、滚回和流式思考完成后保留。命令可选择复制，文件路径可打开工作区；运行状态、耗时、思考动画和减少动态效果支持继续保留。
+思考与工具调用直接排在消息流中。运行中的思考与调用链默认展开，任务完成后默认折叠；重新进入会话时，已完成历史保持默认折叠。点击标题可原地展开详情，当前会话内的手动展开与折叠选择在消息滚出屏幕、滚回和普通状态刷新后保留。运行与完成分别保存展开状态，运行时的展开选择不会让已完成历史自动打开。过程文字使用 13 号，回复正文使用 16 号、行高 26，均跟随系统字号。列表项间隔为 6，段落间隔为 12；编号列按实际数字宽度调整。行内代码使用内置 Geist Mono 字体，字号为 14，中文正文继续使用系统字体。命令可选择复制，文件路径可打开工作区；运行状态、耗时、思考动画和减少动态效果支持继续保留。
 
 在「项目与会话」点击「打开电脑目录」，可选择最近项目、逐级浏览电脑磁盘与主目录，或输入完整路径。选择 Claude Code / Codex 后点击「在此新建对话」，daemon 会注册或复用该目录对应的项目并创建一条新会话。普通文件夹也可使用。已有对话保留原目录与历史，输入框草稿保留，已上传附件仍归属原会话。
 
@@ -117,7 +117,7 @@ App 在后台或锁屏时可以发送任务完成、失败、停止和等待权�
 
 ## 验证与发布状态
 
-v2.0.1 安装包版本为 `2.0.1+10`，电脑端 package 版本为 `2.0.1`。发布包使用 release 模式和旧版签名，覆盖更新保留配对数据；日常调试构建产物为 `app-debug.apk`。
+v2.0.2 安装包版本为 `2.0.2+11`，电脑端 package 版本为 `2.0.2`。发布包使用 release 模式和旧版签名，覆盖更新保留配对数据；日常调试构建产物为 `app-debug.apk`。
 
 连接恢复回归位于 `test/connection_stability_test.dart`、`test/websocket_client_test.dart` 和 `test/websocket_transport_test.dart`，覆盖启动离线、前后台恢复、HTTP 与 WebSocket 状态竞争、鉴权就绪及真实回环连接。可在 `mobile` 目录运行：
 
@@ -126,6 +126,6 @@ flutter test --no-pub
 flutter analyze --no-pub --no-fatal-infos
 ```
 
-v2.0.1 更新消息排版，并修复从任意序号开始的列表被误判为纯文本的问题。已有 v2.0.0 daemon 可继续使用，排版更新无需重启电脑端。
+v2.0.2 更新消息渲染、代码高亮和交互反馈。已完成过程默认折叠，过程标题与正文左对齐并紧贴正文上方；新消息、审批、任务成功和复制提供轻量动效，恢复历史与切换会话不重播。已有 v2.0.0 daemon 可继续使用，本次更新无需重启电脑端。
 
-消息排版、主题、路径点击、来源链接和阅读缩放等相关回归共 47 项通过，覆盖 320 / 390 宽度、浅色 / 深色和最高 200% 字号。静态分析无错误或警告，保留原有 5 条花括号风格提示。尚未完成真机安装和界面验收；完整 Flutter 测试未在本次重新运行。
+消息动效、过程布局、折叠恢复、代码阅读与会话恢复等定向回归共 82 项通过，覆盖手机宽度、浅色 / 深色和最高 200% 字号。静态分析无错误或警告，保留原有 5 条花括号风格提示。尚未完成本版 release APK 的真机安装和界面验收；完整 Flutter 测试未在本次重新运行。

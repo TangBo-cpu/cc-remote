@@ -4,9 +4,9 @@
 
 扫码配对后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v2.0.1](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.1/cc-remote-v2.0.1-android.apk)
+[下载 Android APK · v2.0.2](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.2/cc-remote-v2.0.2-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.1)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.2)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -52,7 +52,7 @@
 | :---: | :---: | :---: |
 | <img src="docs/images/cool-glass-home.png" width="220" alt="主控制台" /> | <img src="docs/images/cool-glass-workspace.jpg" width="220" alt="工作区" /> | <img src="docs/images/cool-glass-startup.jpg" width="220" alt="启动" /> |
 
-v2.0.1 使用中性背景和浅色 / 深色外观，助手正文直接排在页面上，用户消息保留浅灰气泡。思考内容与工具调用默认内联展开，查看命令无需打开详情面板；过程文字为 13 号，回复正文为 16 号，均跟随系统字号。以上图片是 v1.4.0 的历史参考；当前设计规格见 [`DESIGN.md`](DESIGN.md)。
+v2.0.2 使用中性背景和浅色 / 深色外观，助手正文直接排在页面上，用户消息保留浅灰气泡。运行中的过程默认展开，完成后默认收起；过程标题与正文左对齐，点击标题可原地展开详情。过程文字为 13 号，回复正文为 16 号，均跟随系统字号。以上图片是 v1.4.0 的历史参考；当前设计规格见 [`DESIGN.md`](DESIGN.md)。
 
 ---
 
@@ -103,7 +103,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v2.0.1 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.1/cc-remote-v2.0.1-android.apk)（沿用测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v2.0.2 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.2/cc-remote-v2.0.2-android.apk)（沿用测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫终端二维码 → 确认电脑名与服务地址 → 进入控制台
 
@@ -245,7 +245,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v2.0.1](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.1)**
-APK：[`cc-remote-v2.0.1-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.1/cc-remote-v2.0.1-android.apk)
+当前公开版：**[v2.0.2](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.2)**
+APK：[`cc-remote-v2.0.2-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.2/cc-remote-v2.0.2-android.apk)
 
-v2.0.1 优化消息排版：助手正文使用 16 号字和 26 行高，列表项间距缩小，编号列随数字宽度调整；行内代码使用内置 Geist Mono 字体，并调整标题留白和链接配色。修复从任意序号开始的列表被当作纯文本的问题。Android 版本为 `2.0.1+10`，电脑端 package 版本为 `2.0.1`。APK 沿用旧版测试签名，供个人使用；已有 v2.0.0 daemon 可继续使用，Android 真机安装与界面仍待验收。
+v2.0.2 更新消息显示与反馈：过程标题与正文左对齐、收紧留白，已完成过程默认收起；代码块增加语法高亮，流式回复保持 Markdown 渲染。新消息、权限请求、任务成功和复制提供轻量动效，历史恢复与会话切换不重播。Android 版本为 `2.0.2+11`，电脑端 package 版本为 `2.0.2`。APK 沿用旧版测试签名，供个人使用；已有 v2.0.0 daemon 可继续使用，本版 release APK 的真机安装与界面仍待验收。
