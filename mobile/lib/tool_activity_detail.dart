@@ -65,6 +65,22 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
     final palette = AppPalette.of(context);
     final detail = message.activityDetail?.trim() ?? '';
     final duration = thinkingDurationLabel(message.activityDurationMs);
+    final fileAction = switch (message.activityTool) {
+      'Read' => '读取',
+      'Write' => '写入',
+      'Edit' => '修改',
+      'FileChange' => '变更',
+      _ => null,
+    };
+    final filePath =
+        fileAction != null && detail.isNotEmpty && !detail.contains('\n')
+        ? normalizeWorkspacePath(
+                detail,
+                workspaceDir: WorkspacePortal.of(context)?.workspaceDir,
+              ) ??
+              detail.replaceAll(r'\', '/')
+        : null;
+    final fileName = filePath?.split('/').last;
     final status = toolActivityStateLabel(message.activityState);
     final tone = switch (message.activityState) {
       ActivityState.error => palette.danger,
@@ -73,15 +89,59 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
     };
     return ActivityDisclosure(
       toggleKey: ValueKey('activity-step-toggle-${message.activityId}'),
-      title: widget.title,
-      titleWidget: widget.titleWidget,
+      title: fileName ?? widget.title,
+      titleWidget: fileName == null
+          ? widget.titleWidget
+          : Tooltip(
+              message: filePath!,
+              child: Row(
+                children: [
+                  Flexible(
+                    child: Text(
+                      fileName,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: message.activityState == ActivityState.error
+                            ? palette.danger
+                            : palette.ink,
+                        fontSize: AppTypography.activityBodySize,
+                        fontWeight: FontWeight.w600,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: AppSpacing.xs),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: palette.control,
+                      borderRadius: BorderRadius.circular(AppRadii.compact),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 2,
+                      ),
+                      child: Text(
+                        fileAction!,
+                        style: TextStyle(
+                          color: palette.muted,
+                          fontSize: 12,
+                          height: 1.4,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
       leading: widget.leading,
       running: widget.running,
       expanded: (expanded || widget.reveal) && detail.isNotEmpty,
       statusText: '$status${duration.isEmpty ? '' : ' · $duration'}',
       tone: tone,
       semanticLabel:
-          '${widget.title}，$status'
+          '${filePath == null ? widget.title : '$fileAction $filePath'}，$status'
           '${duration.isEmpty ? '' : '，$duration'}',
       onToggle: detail.isEmpty
           ? null
@@ -96,17 +156,21 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
       child: Padding(
         padding: const EdgeInsetsDirectional.fromSTEB(26, 0, 8, 8),
         child: WorkspacePathText(
-          detail,
+          filePath ?? detail,
           key: ValueKey('activity-detail-${message.activityId}'),
           selectable: true,
           style: TextStyle(
             color: palette.muted,
             fontSize: AppTypography.activityBodySize,
             height: 1.6,
-            fontFamily: message.activityTool == 'Bash'
+            fontFamily:
+                filePath != null ||
+                    const {'Bash', 'Shell'}.contains(message.activityTool)
                 ? AppTypography.codeFontFamily
                 : null,
-            fontFamilyFallback: message.activityTool == 'Bash'
+            fontFamilyFallback:
+                filePath != null ||
+                    const {'Bash', 'Shell'}.contains(message.activityTool)
                 ? AppTypography.codeFontFamilyFallback
                 : null,
           ),

@@ -204,10 +204,9 @@ class AppTypography {
   /// Assistant text follows the same platform-native family as the UI.
   static const String? assistantFontFamily = fontFamily;
   static const List<String>? assistantFontFamilyFallback = fontFamilyFallback;
-  static const assistantCodeFontFamily = 'GeistMono';
-  static const codeFontFamily = 'monospace';
+  static const codeFontFamily = 'JetBrainsMono';
+  static const assistantCodeFontFamily = codeFontFamily;
   static const codeFontFamilyFallback = <String>[
-    'JetBrains Mono',
     'SFMono-Regular',
     'Consolas',
     'monospace',

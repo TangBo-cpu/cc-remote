@@ -4,9 +4,9 @@
 
 扫码配对后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v2.0.3](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.3/cc-remote-v2.0.3-android.apk)
+[下载 Android APK · v2.0.4](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.4/cc-remote-v2.0.4-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.3)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.4)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -103,9 +103,11 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v2.0.3 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.3/cc-remote-v2.0.3-android.apk)（沿用测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v2.0.4 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.4/cc-remote-v2.0.4-android.apk)（沿用测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫终端二维码 → 确认电脑名与服务地址 → 进入控制台
+
+Android App 版本为 v2.0.4，构建号为 13。
 
 ### 4. 开始对话
 
@@ -113,7 +115,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 在聊天页顶部打开「项目与会话」→「打开电脑目录」，可浏览电脑磁盘、主目录和最近项目，或输入完整绝对路径。选择 Claude Code / Codex 后点击「在此新建对话」。普通文件夹也可使用，旧对话保留原目录与历史，输入框草稿保留。任务或附件操作尚未结束时仍可浏览目录，创建和切换需等待操作结束。
 
-从旧版本升级时，请同时更新手机 App 和电脑端源码，并重启 daemon。手机覆盖安装保留配对和设置，不要卸载旧版；已有会话无需迁移。
+已有 v2.0.0 daemon 可继续使用，本次更新无需重启电脑端。从更早版本升级时，请同时更新手机 App 和电脑端源码，并重启 daemon。手机覆盖安装保留配对和设置，不要卸载旧版；已有会话无需迁移。
 
 ---
 
@@ -245,7 +247,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v2.0.3](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.3)**
-APK：[`cc-remote-v2.0.3-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.3/cc-remote-v2.0.3-android.apk)
+当前公开版：**[v2.0.4](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.4)**
+APK：[`cc-remote-v2.0.4-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.4/cc-remote-v2.0.4-android.apk)
 
-v2.0.3 为各会话独立保存草稿、光标选区和阅读位置，切换会话或重启后恢复。修复偏好加载期间重复发送、切换会话和编辑草稿引发的发送竞态，以及退出搜索预览后的残留跳转；合并重复与过期的本地保存，减少存储写入。Android 版本为 `2.0.3+12`，电脑端 package 版本为 `2.0.3`。APK 沿用旧版测试签名，供个人使用；已有 v2.0.0 daemon 可继续使用，本版 release APK 的真机安装与界面仍待验收。
+v2.0.4 优化文件操作记录、工作区 diff 与顶部状态提示。文件变更卡片与正文等宽，工具记录突出文件名与操作标签；diff 支持修改前后双列行号、整块横向滚动、自动换行和字号选择。代码字体统一为内置 JetBrains Mono。Android 版本为 `2.0.4+13`，电脑端 package 版本为 `2.0.4`。APK 沿用旧版测试签名，供个人使用；已有 v2.0.0 daemon 可继续使用，本版 release APK 的真机安装与界面仍待验收。

@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 
 import 'noto_icon.dart';
 import 'signal_console_theme.dart';
+import 'workspace_diff_view.dart';
 import 'workspace_paths.dart';
 
 Future<void> showWorkspaceDrawer(
@@ -621,7 +622,7 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
       );
     } else {
       child = current.isDiff
-          ? _DiffView(
+          ? WorkspaceDiffView(
               key: const ValueKey('workspace-document-diff'),
               diff: current.content,
             )
@@ -1000,80 +1001,6 @@ class _FileView extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-class _DiffView extends StatelessWidget {
-  const _DiffView({super.key, required this.diff});
-
-  final String diff;
-
-  @override
-  Widget build(BuildContext context) {
-    final palette = AppPalette.of(context);
-    final lines = diff.split('\n');
-    return SelectionArea(
-      child: ListView.builder(
-        key: const ValueKey('workspace-diff'),
-        padding: const EdgeInsets.only(top: 8, bottom: 32),
-        itemCount: lines.length,
-        itemBuilder: (context, index) {
-          final line = lines[index];
-          final added = line.startsWith('+') && !line.startsWith('+++');
-          final removed = line.startsWith('-') && !line.startsWith('---');
-          final hunk = line.startsWith('@@');
-          return Container(
-            color: added
-                ? palette.control
-                : removed
-                ? palette.danger.withValues(alpha: 0.07)
-                : hunk
-                ? palette.accent.withValues(alpha: 0.06)
-                : Colors.transparent,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                SizedBox(
-                  width: 3,
-                  height: 23,
-                  child: ColoredBox(
-                    color: added
-                        ? palette.inactive
-                        : removed
-                        ? palette.danger
-                        : hunk
-                        ? palette.accent
-                        : Colors.transparent,
-                  ),
-                ),
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 11,
-                      vertical: 2.5,
-                    ),
-                    child: SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Text(
-                        line.isEmpty ? ' ' : line,
-                        style: TextStyle(
-                          color: hunk ? palette.accent : palette.ink,
-                          fontFamily: AppTypography.codeFontFamily,
-                          fontFamilyFallback:
-                              AppTypography.codeFontFamilyFallback,
-                          fontSize: 12,
-                          height: 1.45,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          );
-        },
-      ),
     );
   }
 }

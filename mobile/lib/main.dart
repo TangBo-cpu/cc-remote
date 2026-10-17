@@ -4398,6 +4398,32 @@ class ChatScreen extends StatelessWidget {
         contextWindow: contextWindow,
         remainingContext: remainingContext,
         presentation: presentation,
+        notification: peeking
+            ? null
+            : RecoveryStatePanel(
+                key: ValueKey(activeSessionId),
+                presentation: presentation,
+                completionEvent: completionEvent,
+                hostLabel: session?.deviceName,
+                failureDetail: evidence.failureDetail,
+                failureKey: (
+                  activeSessionId,
+                  messages.lastIndexWhere(
+                    (message) => message.role == MessageRole.user,
+                  ),
+                ),
+                reconnectSnapshot: reconnectSnapshot,
+                hasTranscript: messages.isNotEmpty,
+                hasDraft:
+                    promptController.text.trim().isNotEmpty ||
+                    pendingAttachments.isNotEmpty,
+                onReconnect: onReconnect,
+                onStop: onStop,
+                onOpenWorkspace: onOpenWorkspace,
+                onEditPreviousPrompt: canRestorePreviousPrompt
+                    ? () => onFillPrompt(previousPrompt)
+                    : null,
+              ),
         onReconnect: onReconnect,
         onOpenSettings: onOpenSettings,
         onNewConversation: onNewConversation,
@@ -4490,35 +4516,6 @@ class ChatScreen extends StatelessWidget {
                           hostLabel: session?.deviceName,
                         ),
                       ],
-                      if (!peeking)
-                        Visibility(
-                          visible: !keyboardVisible,
-                          maintainState: true,
-                          child: RecoveryStatePanel(
-                            key: ValueKey(activeSessionId),
-                            presentation: presentation,
-                            completionEvent: completionEvent,
-                            hostLabel: session?.deviceName,
-                            failureDetail: evidence.failureDetail,
-                            failureKey: (
-                              activeSessionId,
-                              messages.lastIndexWhere(
-                                (message) => message.role == MessageRole.user,
-                              ),
-                            ),
-                            reconnectSnapshot: reconnectSnapshot,
-                            hasTranscript: messages.isNotEmpty,
-                            hasDraft:
-                                promptController.text.trim().isNotEmpty ||
-                                pendingAttachments.isNotEmpty,
-                            onReconnect: onReconnect,
-                            onStop: onStop,
-                            onOpenWorkspace: onOpenWorkspace,
-                            onEditPreviousPrompt: canRestorePreviousPrompt
-                                ? () => onFillPrompt(previousPrompt)
-                                : null,
-                          ),
-                        ),
                     ],
                   ),
                 ),
@@ -4728,6 +4725,7 @@ class ConnectionHeader extends StatelessWidget {
     required this.contextWindow,
     required this.remainingContext,
     this.presentation,
+    this.notification,
     required this.onReconnect,
     required this.onOpenSettings,
     required this.onNewConversation,
@@ -4745,6 +4743,7 @@ class ConnectionHeader extends StatelessWidget {
   final int? contextWindow;
   final int? remainingContext;
   final ConsolePresentation? presentation;
+  final Widget? notification;
   final VoidCallback onReconnect;
   final VoidCallback onOpenSettings;
   final VoidCallback onNewConversation;
@@ -4769,75 +4768,78 @@ class ConnectionHeader extends StatelessWidget {
         console.phase == ConsolePhase.uploading ||
         console.phase == ConsolePhase.awaitingPermission;
 
-    return SizedBox(
+    return ConstrainedBox(
       key: const ValueKey('session-header'),
-      height: AppSizes.sessionHeader,
-      child: Stack(
-        alignment: Alignment.center,
+      constraints: const BoxConstraints(minHeight: AppSizes.sessionHeader),
+      child: Row(
         children: [
-          Row(
-            children: [
-              SignalPressEffect(
-                builder: (context, pressed, child) => SignalAnimatedSurface(
-                  key: const ValueKey('session-menu-surface'),
-                  duration: appPressAnimationDuration(context, pressed),
-                  blurSigma: 8,
-                  decoration: AppLiquidGlass.thin(
-                    context: context,
-                    shape: BoxShape.circle,
-                    pressed: pressed,
-                    backdrop: true,
-                  ),
-                  child: child,
-                ),
-                child: _HeaderIconButton(
-                  tooltip: '项目与会话',
-                  icon: LucideIcons.menu,
-                  onPressed: onOpenSessions,
-                ),
+          SignalPressEffect(
+            builder: (context, pressed, child) => SignalAnimatedSurface(
+              key: const ValueKey('session-menu-surface'),
+              duration: appPressAnimationDuration(context, pressed),
+              blurSigma: 8,
+              decoration: AppLiquidGlass.thin(
+                context: context,
+                shape: BoxShape.circle,
+                pressed: pressed,
+                backdrop: true,
               ),
-              const Spacer(),
-              SignalPressEffect(
-                builder: (context, pressed, child) => SignalAnimatedSurface(
-                  key: const ValueKey('session-actions-surface'),
-                  duration: appPressAnimationDuration(context, pressed),
-                  blurSigma: 8,
-                  decoration: AppLiquidGlass.thin(
-                    context: context,
-                    borderRadius: BorderRadius.circular(AppRadii.pill),
-                    pressed: pressed,
-                    backdrop: true,
-                  ),
-                  child: child,
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    _HeaderIconButton(
-                      key: const ValueKey('session-new-button'),
-                      tooltip: '新对话',
-                      icon: LucideIcons.plus,
-                      filled: true,
-                      onPressed: console.canCompose ? onNewConversation : null,
-                    ),
-                    _SessionMoreButton(
-                      offline: console.showsReconnect,
-                      modelName: modelName,
-                      onReconnect: onReconnect,
-                      onOpenWorkspace: onOpenWorkspace,
-                      onOpenSettings: onOpenSettings,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          if (showActivePill)
-            _HeaderActivityPill(
-              key: const ValueKey('session-activity-pill'),
-              presentation: console,
-              onTap: onOpenWorkspace,
+              child: child,
             ),
+            child: _HeaderIconButton(
+              tooltip: '项目与会话',
+              icon: LucideIcons.menu,
+              onPressed: onOpenSessions,
+            ),
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          Expanded(
+            child: Center(
+              child:
+                  notification ??
+                  (showActivePill
+                      ? _HeaderActivityPill(
+                          key: const ValueKey('session-activity-pill'),
+                          presentation: console,
+                          onTap: onOpenWorkspace,
+                        )
+                      : const SizedBox.shrink()),
+            ),
+          ),
+          const SizedBox(width: AppSpacing.xs),
+          SignalPressEffect(
+            builder: (context, pressed, child) => SignalAnimatedSurface(
+              key: const ValueKey('session-actions-surface'),
+              duration: appPressAnimationDuration(context, pressed),
+              blurSigma: 8,
+              decoration: AppLiquidGlass.thin(
+                context: context,
+                borderRadius: BorderRadius.circular(AppRadii.pill),
+                pressed: pressed,
+                backdrop: true,
+              ),
+              child: child,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _HeaderIconButton(
+                  key: const ValueKey('session-new-button'),
+                  tooltip: '新对话',
+                  icon: LucideIcons.plus,
+                  filled: true,
+                  onPressed: console.canCompose ? onNewConversation : null,
+                ),
+                _SessionMoreButton(
+                  offline: console.showsReconnect,
+                  modelName: modelName,
+                  onReconnect: onReconnect,
+                  onOpenWorkspace: onOpenWorkspace,
+                  onOpenSettings: onOpenSettings,
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -5130,21 +5132,50 @@ class RecoveryStatePanel extends StatefulWidget {
 
 class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
   Timer? completionTimer;
+  Timer? stoppedTimer;
+  ModalRoute<void>? detailsRoute;
   Timer? reconnectCountdownTimer;
   DateTime? reconnectCountdownTarget;
   int? reconnectSecondsRemaining;
   bool showCompletion = false;
+  bool showStopped = false;
   bool failureDismissed = false;
+  bool detailsOpen = false;
+  bool detailsInvalidated = false;
 
   @override
   void initState() {
     super.initState();
+    if (widget.presentation.phase == ConsolePhase.stopped) {
+      startStoppedNotice();
+    }
     syncReconnectCountdown();
   }
 
   @override
   void didUpdateWidget(covariant RecoveryStatePanel oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.presentation.phase != oldWidget.presentation.phase ||
+        widget.failureKey != oldWidget.failureKey ||
+        widget.failureDetail != oldWidget.failureDetail ||
+        (widget.onEditPreviousPrompt == null) !=
+            (oldWidget.onEditPreviousPrompt == null) ||
+        widget.reconnectSnapshot.phase != oldWidget.reconnectSnapshot.phase ||
+        widget.reconnectSnapshot.attempt !=
+            oldWidget.reconnectSnapshot.attempt ||
+        widget.reconnectSnapshot.nextRetryAt !=
+            oldWidget.reconnectSnapshot.nextRetryAt ||
+        widget.reconnectSnapshot.lastError !=
+            oldWidget.reconnectSnapshot.lastError) {
+      dismissDetails();
+    }
+    if (widget.presentation.phase != oldWidget.presentation.phase) {
+      stoppedTimer?.cancel();
+      showStopped = false;
+      if (widget.presentation.phase == ConsolePhase.stopped) {
+        startStoppedNotice();
+      }
+    }
     if (widget.presentation.phase != oldWidget.presentation.phase ||
         widget.failureKey != oldWidget.failureKey ||
         widget.failureDetail != oldWidget.failureDetail) {
@@ -5174,8 +5205,134 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
   @override
   void dispose() {
     completionTimer?.cancel();
+    stoppedTimer?.cancel();
+    dismissDetails();
     reconnectCountdownTimer?.cancel();
     super.dispose();
+  }
+
+  void startStoppedNotice() {
+    showStopped = true;
+    stoppedTimer?.cancel();
+    stoppedTimer = Timer(AppMotion.signal, () {
+      if (!mounted) return;
+      setState(() => showStopped = false);
+    });
+  }
+
+  void dismissDetails() {
+    if (detailsOpen) detailsInvalidated = true;
+    final route = detailsRoute;
+    if (route == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (route.isActive) route.navigator?.removeRoute(route);
+    });
+  }
+
+  Future<void> showStatusDetails(_RecoveryPanelContent content) async {
+    if (detailsOpen) return;
+    detailsOpen = true;
+    detailsInvalidated = false;
+    FocusManager.instance.primaryFocus?.unfocus();
+    final phase = widget.presentation.phase;
+    final failureKey = widget.failureKey;
+    final failureDetail = widget.failureDetail;
+    try {
+      await showAppOptionPicker<void>(
+        context,
+        requestFocus: false,
+        builder: (sheetContext) {
+          detailsRoute = ModalRoute.of(sheetContext);
+          if (!mounted || detailsInvalidated) {
+            dismissDetails();
+            return const SizedBox.shrink();
+          }
+          void act(VoidCallback action) {
+            if (!mounted ||
+                widget.presentation.phase != phase ||
+                widget.failureKey != failureKey ||
+                widget.failureDetail != failureDetail) {
+              return;
+            }
+            Navigator.pop(sheetContext);
+            action();
+          }
+
+          final palette = AppPalette.of(sheetContext);
+          return Column(
+            key: const ValueKey('recovery-status-details'),
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      content.title,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  _HeaderIconButton(
+                    tooltip: '关闭状态详情',
+                    icon: LucideIcons.x,
+                    onPressed: () => Navigator.pop(sheetContext),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              SelectableText(
+                content.detail,
+                style: TextStyle(color: palette.ink, fontSize: 14, height: 1.5),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                content.evidence,
+                style: TextStyle(
+                  color: palette.muted,
+                  fontSize: 12,
+                  height: 1.4,
+                ),
+              ),
+              if (content.action != null && content.actionLabel != null) ...[
+                const SizedBox(height: AppSpacing.md),
+                FilledButton.icon(
+                  onPressed: () => act(content.action!),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: content.danger
+                        ? palette.danger
+                        : palette.control,
+                    foregroundColor: content.danger
+                        ? palette.onStop
+                        : palette.ink,
+                    minimumSize: const Size.fromHeight(AppSizes.touchTarget),
+                    padding: const EdgeInsets.all(AppSpacing.sm),
+                  ),
+                  icon: Icon(content.actionIcon, size: AppIconSizes.control),
+                  label: Text(content.actionLabel!),
+                ),
+              ],
+              if (phase == ConsolePhase.failed) ...[
+                const SizedBox(height: AppSpacing.xs),
+                TextButton(
+                  onPressed: () =>
+                      act(() => setState(() => failureDismissed = true)),
+                  style: TextButton.styleFrom(
+                    minimumSize: const Size.fromHeight(AppSizes.touchTarget),
+                  ),
+                  child: const Text('收起失败提示'),
+                ),
+              ],
+            ],
+          );
+        },
+      );
+    } finally {
+      detailsRoute = null;
+      detailsOpen = false;
+    }
   }
 
   void syncReconnectCountdown() {
@@ -5290,16 +5447,13 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
               action: widget.onStop,
               danger: true,
             ),
-            ConsolePhase.stopped => _RecoveryPanelContent(
-              title: '任务已停止',
-              detail:
-                  '电脑端已确认停止。你可以检查变更，或继续给 ${widget.presentation.engine.displayName} 新指令。',
-              evidence: '对话记录和工作区状态已保留',
-              icon: LucideIcons.circlePause,
-              actionLabel: '查看工作区',
-              actionIcon: LucideIcons.folderOpen,
-              action: widget.onOpenWorkspace,
-            ),
+            ConsolePhase.stopped when showStopped =>
+              const _RecoveryPanelContent(
+                title: '任务已停止',
+                detail: '电脑端已确认停止。',
+                evidence: '对话记录和工作区状态已保留',
+                icon: LucideIcons.circlePause,
+              ),
             ConsolePhase.failed => _RecoveryPanelContent(
               title: '任务执行失败',
               detail: widget.failureDetail?.trim().isNotEmpty == true
@@ -5327,187 +5481,122 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
             ConsoleTone.danger => AppPalette.of(context).danger,
             ConsoleTone.neutral => AppPalette.of(context).muted,
           };
-    final semanticsDetail =
-        widget.presentation.phase == ConsolePhase.offline && reconnecting
-        ? '正在自动重连 $hostName。'
-        : content?.detail;
+    if (content == null) {
+      return switch (widget.presentation.phase) {
+        ConsolePhase.running ||
+        ConsolePhase.uploading ||
+        ConsolePhase.awaitingPermission => _HeaderActivityPill(
+          key: const ValueKey('session-activity-pill'),
+          presentation: widget.presentation,
+          onTap: widget.onOpenWorkspace,
+        ),
+        _ => const SizedBox.shrink(),
+      };
+    }
     final phaseKey = showCompletion
         ? 'completed'
         : widget.presentation.phase.name;
-    final transitionKey = widget.presentation.phase == ConsolePhase.offline
-        ? '$phaseKey-${widget.reconnectSnapshot.phase.name}'
-        : phaseKey;
-    final duration = reduceMotion ? Duration.zero : AppMotion.standard;
-    return AnimatedSize(
-      duration: duration,
-      curve: AppMotion.enter,
-      alignment: Alignment.topCenter,
-      child: content != null
-          ? Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Semantics(
-                liveRegion: true,
-                container: true,
-                label:
-                    '${content.title}，$semanticsDetail，${content.evidence}'
-                    '${content.actionLabel == null ? '' : '，${content.actionLabel}'}',
-                child: Material(
-                  key: const ValueKey('recovery-state-panel'),
-                  color: AppPalette.of(context).surface,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(AppRadii.surface),
-                    side: BorderSide(color: AppPalette.of(context).line),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: AnimatedSwitcher(
-                    duration: reduceMotion ? Duration.zero : AppMotion.fast,
-                    reverseDuration: reduceMotion
-                        ? Duration.zero
-                        : AppMotion.fast,
-                    switchInCurve: AppMotion.enter,
-                    switchOutCurve: AppMotion.exit,
-                    child: KeyedSubtree(
-                      key: ValueKey('recovery-content-$transitionKey'),
-                      child: Padding(
-                        key: ValueKey('recovery-state-$phaseKey'),
-                        padding: const EdgeInsets.all(AppSpacing.md),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Container(
-                                  width: AppSizes.iconControl,
-                                  height: AppSizes.iconControl,
-                                  decoration: BoxDecoration(
-                                    color: AppPalette.of(context).control,
-                                    borderRadius: BorderRadius.circular(
-                                      AppRadii.control,
-                                    ),
-                                  ),
-                                  alignment: Alignment.center,
-                                  child: content.loading
-                                      ? reduceMotion
-                                            ? Icon(
-                                                LucideIcons.loader,
-                                                size: AppIconSizes.control,
-                                                color: toneColor,
-                                              )
-                                            : SizedBox.square(
-                                                dimension: AppIconSizes.control,
-                                                child:
-                                                    CircularProgressIndicator(
-                                                      strokeWidth: 2,
-                                                      color: toneColor,
-                                                    ),
-                                              )
-                                      : showCompletion
-                                      ? SignalCompletionIcon(
-                                          key: ValueKey(widget.completionEvent),
-                                          color: toneColor,
-                                          size: AppIconSizes.control,
-                                        )
-                                      : Icon(
-                                          content.icon,
-                                          size: AppIconSizes.control,
-                                          color: toneColor,
-                                        ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        content.title,
-                                        style: const TextStyle(
-                                          fontSize: 16,
-                                          height: 1.3,
-                                          fontWeight: FontWeight.w700,
-                                          letterSpacing: -0.2,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        content.detail,
-                                        maxLines: 3,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          color: AppPalette.of(context).muted,
-                                          fontSize: 13,
-                                          height: 1.45,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                if (widget.presentation.phase ==
-                                    ConsolePhase.failed)
-                                  _HeaderIconButton(
-                                    tooltip: '收起失败提示',
-                                    icon: LucideIcons.x,
-                                    onPressed: () =>
-                                        setState(() => failureDismissed = true),
-                                  ),
-                              ],
-                            ),
-                            const SizedBox(height: 10),
-                            Text(
-                              content.evidence,
-                              style: TextStyle(
-                                color: AppPalette.of(context).muted,
-                                fontSize: 12,
-                                height: 1.4,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            if (content.action != null &&
-                                content.actionLabel != null) ...[
-                              const SizedBox(height: 12),
-                              SizedBox(
-                                height: AppSizes.touchTarget,
-                                child: SignalPressEffect(
-                                  scaleOnPress: false,
-                                  child: FilledButton.icon(
-                                    onPressed: content.action,
-                                    style: FilledButton.styleFrom(
-                                      backgroundColor: content.danger
-                                          ? AppPalette.of(context).danger
-                                          : AppPalette.of(context).control,
-                                      foregroundColor: content.danger
-                                          ? AppPalette.of(context).onStop
-                                          : AppPalette.of(context).ink,
-                                      overlayColor: content.danger
-                                          ? AppPalette.of(
-                                              context,
-                                            ).onStop.withValues(alpha: 0.13)
-                                          : AppPalette.of(
-                                              context,
-                                            ).ink.withValues(alpha: 0.08),
-                                      minimumSize: const Size.fromHeight(
-                                        AppSizes.touchTarget,
-                                      ),
-                                    ),
-                                    icon: Icon(
-                                      content.actionIcon,
-                                      size: AppIconSizes.control,
-                                    ),
-                                    label: Text(content.actionLabel!),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ],
+    final summary = switch (widget.presentation.phase) {
+      ConsolePhase.offline when reconnecting && reconnectAttempt < 6 =>
+        switch (reconnectSecondsRemaining) {
+          final int seconds when seconds > 0 => '重连 · $seconds 秒后',
+          _ => '正在自动重连',
+        },
+      ConsolePhase.stopping => '等待停止确认',
+      ConsolePhase.stopTimedOut => '停止未确认',
+      _ => content.title,
+    };
+    final hasDetails =
+        content.action != null ||
+        widget.presentation.phase == ConsolePhase.failed;
+    final VoidCallback? openDetails = hasDetails
+        ? () => unawaited(showStatusDetails(content))
+        : null;
+    final semanticsLabel =
+        widget.presentation.phase == ConsolePhase.stopTimedOut
+        ? '停止尚未确认，任务可能仍在运行'
+        : content.title;
+
+    return Semantics(
+      liveRegion: true,
+      container: true,
+      excludeSemantics: true,
+      button: hasDetails,
+      label: semanticsLabel,
+      hint: hasDetails ? '查看详情和处理操作' : null,
+      onTap: openDetails,
+      child: Tooltip(
+        message: hasDetails ? '$semanticsLabel，查看详情' : semanticsLabel,
+        child: Material(
+          key: const ValueKey('recovery-state-panel'),
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(AppRadii.control),
+          child: InkWell(
+            onTap: openDetails,
+            borderRadius: BorderRadius.circular(AppRadii.control),
+            child: ConstrainedBox(
+              key: ValueKey('recovery-state-$phaseKey'),
+              constraints: const BoxConstraints(
+                minWidth: AppSizes.touchTarget,
+                minHeight: AppSizes.touchTarget,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.xs,
+                  vertical: AppSpacing.xs,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (content.loading && !reduceMotion)
+                      SizedBox.square(
+                        dimension: AppIconSizes.inline,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: toneColor,
+                        ),
+                      )
+                    else if (showCompletion)
+                      SignalCompletionIcon(
+                        key: ValueKey(widget.completionEvent),
+                        color: toneColor,
+                        size: AppIconSizes.inline,
+                      )
+                    else
+                      Icon(
+                        content.icon,
+                        size: AppIconSizes.inline,
+                        color: toneColor,
+                      ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        summary,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: toneColor,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          height: 1.3,
                         ),
                       ),
                     ),
-                  ),
+                    if (hasDetails) ...[
+                      const SizedBox(width: AppSpacing.xxs),
+                      Icon(
+                        LucideIcons.chevronDown,
+                        size: AppIconSizes.badge,
+                        color: toneColor,
+                      ),
+                    ],
+                  ],
                 ),
               ),
-            )
-          : const SizedBox.shrink(),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -7867,7 +7956,8 @@ class _SettingsDetailLine extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: AppPalette.of(context).ink,
-              fontFamily: 'monospace',
+              fontFamily: AppTypography.codeFontFamily,
+              fontFamilyFallback: AppTypography.codeFontFamilyFallback,
               fontSize: 12,
               height: 1.4,
             ),
@@ -10824,7 +10914,7 @@ IconData activityToolIconData(String? toolName, {bool isSkill = false}) {
   return switch (toolName) {
     'Skill' => LucideIcons.sparkles,
     'Bash' => LucideIcons.terminal,
-    'Read' || 'Write' || 'Edit' => LucideIcons.fileCode,
+    'Read' || 'Write' || 'Edit' || 'FileChange' => LucideIcons.fileCode,
     'WebSearch' || 'WebFetch' => LucideIcons.globe,
     'Grep' || 'Glob' => LucideIcons.search,
     'Task' => LucideIcons.blocks,
@@ -11170,6 +11260,7 @@ String activityToolTitle(TranscriptMessage activity) {
     'Read' => '读取文件',
     'Write' => '写入文件',
     'Edit' => '编辑文件',
+    'FileChange' => '文件变更',
     'Grep' => '搜索代码',
     'Glob' => '查找文件',
     'Bash' => '运行命令',
@@ -13412,6 +13503,7 @@ String activityLabel(ActivityKind kind, String? toolName, ActivityState state) {
     'Read' => '读取文件',
     'Edit' => '修改文件',
     'Write' => '写入文件',
+    'FileChange' => '变更文件',
     'Bash' => '运行命令',
     'Grep' => '搜索内容',
     'Glob' => '查找文件',

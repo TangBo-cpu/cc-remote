@@ -491,9 +491,8 @@ class WorkspaceChangeEchoChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final radius = BorderRadius.circular(AppRadii.surface);
-    return Align(
-      alignment: Alignment.centerLeft,
-      widthFactor: 1,
+    return SizedBox(
+      width: double.infinity,
       child: Semantics(
         button: true,
         label: '${echo.label}，${echo.caption}',
@@ -513,9 +512,8 @@ class WorkspaceChangeEchoChip extends StatelessWidget {
               onTap: onTap,
               borderRadius: radius,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 10, 14, 10),
+                padding: const EdgeInsets.all(AppSpacing.sm),
                 child: Row(
-                  mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(
                       LucideIcons.gitCompare,
@@ -523,30 +521,40 @@ class WorkspaceChangeEchoChip extends StatelessWidget {
                       color: AppPalette.of(context).accentStrong,
                     ),
                     const SizedBox(width: 8),
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          echo.label,
-                          style: TextStyle(
-                            color: AppPalette.of(context).ink,
-                            fontSize: 13,
-                            height: 1.25,
-                            fontWeight: FontWeight.w700,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            echo.label,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: AppPalette.of(context).ink,
+                              fontSize: 13,
+                              height: 1.25,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          echo.caption,
-                          style: TextStyle(
-                            color: AppPalette.of(context).muted,
-                            fontSize: 11,
-                            height: 1.25,
-                            fontWeight: FontWeight.w500,
+                          const SizedBox(height: 2),
+                          Text(
+                            echo.caption,
+                            style: TextStyle(
+                              color: AppPalette.of(context).muted,
+                              fontSize: 11,
+                              height: 1.25,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: AppSpacing.sm),
+                    Icon(
+                      LucideIcons.chevronRight,
+                      size: AppIconSizes.inline,
+                      color: AppPalette.of(context).muted,
                     ),
                   ],
                 ),
