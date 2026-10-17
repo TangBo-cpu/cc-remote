@@ -4,9 +4,9 @@
 
 扫码配对后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v2.0.2](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.2/cc-remote-v2.0.2-android.apk)
+[下载 Android APK · v2.0.3](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.3/cc-remote-v2.0.3-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.2)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.3)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -103,7 +103,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v2.0.2 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.2/cc-remote-v2.0.2-android.apk)（沿用测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v2.0.3 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.3/cc-remote-v2.0.3-android.apk)（沿用测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫终端二维码 → 确认电脑名与服务地址 → 进入控制台
 
@@ -245,7 +245,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v2.0.2](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.2)**
-APK：[`cc-remote-v2.0.2-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.2/cc-remote-v2.0.2-android.apk)
+当前公开版：**[v2.0.3](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.3)**
+APK：[`cc-remote-v2.0.3-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.3/cc-remote-v2.0.3-android.apk)
 
-v2.0.2 更新消息显示与反馈：过程标题与正文左对齐、收紧留白，已完成过程默认收起；代码块增加语法高亮，流式回复保持 Markdown 渲染。新消息、权限请求、任务成功和复制提供轻量动效，历史恢复与会话切换不重播。Android 版本为 `2.0.2+11`，电脑端 package 版本为 `2.0.2`。APK 沿用旧版测试签名，供个人使用；已有 v2.0.0 daemon 可继续使用，本版 release APK 的真机安装与界面仍待验收。
+v2.0.3 为各会话独立保存草稿、光标选区和阅读位置，切换会话或重启后恢复。修复偏好加载期间重复发送、切换会话和编辑草稿引发的发送竞态，以及退出搜索预览后的残留跳转；合并重复与过期的本地保存，减少存储写入。Android 版本为 `2.0.3+12`，电脑端 package 版本为 `2.0.3`。APK 沿用旧版测试签名，供个人使用；已有 v2.0.0 daemon 可继续使用，本版 release APK 的真机安装与界面仍待验收。

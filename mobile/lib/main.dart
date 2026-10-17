@@ -41,6 +41,7 @@ import 'signal_console_theme.dart';
 import 'workspace_drawer.dart';
 import 'workspace_paths.dart';
 import 'session_interaction.dart';
+import 'session_memory.dart';
 import 'thinking_block.dart';
 import 'tool_activity_detail.dart';
 import 'transcript_motion.dart';
@@ -312,6 +313,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   ClaudeModelPreference selectedModel = ClaudeModelPreference.followComputer;
   String? selectedCodexModel;
   final codexModelPreferenceStore = CodexModelPreferenceStore();
+  bool preparingPrompt = false;
   ClaudeEffortPreference selectedEffort = ClaudeEffortPreference.automatic;
   CodexSandboxMode selectedCodexSandboxMode = CodexSandboxMode.dangerFullAccess;
   CodexSandboxMode activeCodexSandboxMode = CodexSandboxMode.dangerFullAccess;
@@ -322,6 +324,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       widget.wsClient ?? RemoteWebSocketClient();
   final TokenStore tokenStore = TokenStore();
   final TranscriptStore transcriptStore = TranscriptStore();
+  final SessionMemoryStore sessionMemoryStore = SessionMemoryStore();
+  late final Future<void> sessionMemoryInitialization;
+  bool restoringPromptDraft = false;
   late final RemoteApiClient apiClient = widget.apiClient ?? RemoteApiClient();
   final TextEditingController promptController = TextEditingController();
   final AttachmentPicker attachmentPicker = AttachmentPicker();
@@ -412,6 +417,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     );
     WidgetsBinding.instance.addObserver(this);
     promptController.addListener(handlePromptChanged);
+    sessionMemoryInitialization = sessionMemoryStore.load();
     unawaited(initializePermissions());
     modelPreferenceInitialization = initializeModelPreference();
     unawaited(modelPreferenceInitialization);
@@ -423,6 +429,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    savePromptDraft();
+    unawaited(sessionMemoryStore.flush());
     streamTextFlushTimer?.cancel();
     streamPersistTimer?.cancel();
     closeWs();
@@ -444,6 +452,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           state == AppLifecycleState.paused ||
           state == AppLifecycleState.detached) {
         appBackgroundedAt ??= DateTime.now();
+        savePromptDraft();
+        unawaited(sessionMemoryStore.flush());
       }
       return;
     }
@@ -620,7 +630,47 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     commandsFailed = false;
   }
 
+  void savePromptDraft() {
+    final sessionId = activeSessionId;
+    if (sessionId == null || restoringPromptDraft || route != ShellRoute.chat) {
+      return;
+    }
+    final memory = sessionMemoryStore.forSession(sessionId);
+    final value = promptController.value.copyWith(composing: TextRange.empty);
+    if (memory.draft == value) return;
+    final cleared = memory.draft.text.isNotEmpty && value.text.isEmpty;
+    memory.draft = value;
+    if (cleared) {
+      unawaited(sessionMemoryStore.flush());
+    } else {
+      sessionMemoryStore.scheduleSave();
+    }
+  }
+
+  void changeActiveSession(String? sessionId) {
+    if (activeSessionId == sessionId) return;
+    final unassignedDraft = activeSessionId == null
+        ? promptController.value.copyWith(composing: TextRange.empty)
+        : null;
+    savePromptDraft();
+    activeSessionId = sessionId;
+    if (sessionId != null && unassignedDraft?.text.isNotEmpty == true) {
+      sessionMemoryStore.forSession(sessionId).draft = unassignedDraft!;
+    }
+    restoringPromptDraft = true;
+    try {
+      promptController.value = sessionId == null
+          ? TextEditingValue.empty
+          : sessionMemoryStore.forSession(sessionId).draft;
+    } finally {
+      restoringPromptDraft = false;
+    }
+    unawaited(sessionMemoryStore.flush());
+  }
+
   void handlePromptChanged() {
+    if (restoringPromptDraft) return;
+    savePromptDraft();
     if (commandQuery(promptController.text) != null &&
         commandsSessionId != activeSessionId) {
       unawaited(refreshCommandCatalog());
@@ -814,9 +864,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     if (snapshot == null || !mounted) return;
     // Bootstrap no longer waits for this read, so a host snapshot can land
     // first; that state is authoritative and must not be overwritten.
-    if (remoteTranscriptRevision > 0) return;
+    if (remoteTranscriptRevision > 0 ||
+        (activeSessionId != null && activeSessionId != snapshot.sessionId)) {
+      return;
+    }
     setState(() {
-      activeSessionId = snapshot.sessionId;
+      changeActiveSession(snapshot.sessionId);
       transcriptMotion.reset();
       messages
         ..clear()
@@ -834,8 +887,15 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     await persistTranscriptSnapshot();
   }
 
-  Future<void> clearTranscriptStore() {
-    return queueTranscriptWrite(transcriptStore.clear);
+  Future<void> clearTranscriptStore() async {
+    restoringPromptDraft = true;
+    try {
+      promptController.clear();
+    } finally {
+      restoringPromptDraft = false;
+    }
+    await sessionMemoryStore.clear();
+    await queueTranscriptWrite(transcriptStore.clear);
   }
 
   void removeInterruptedRunNotice() {
@@ -997,6 +1057,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   Future<void> bootstrap() async {
+    await sessionMemoryInitialization;
+    if (!mounted) return;
     if (widget.demoMode) {
       if (mounted && route == ShellRoute.boot) {
         setState(() => route = ShellRoute.pair);
@@ -1165,7 +1227,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           ),
         ]);
       activeProjectId = 'demo-cc-remote';
-      activeSessionId = 'demo-session-polish';
+      changeActiveSession('demo-session-polish');
     });
   }
 
@@ -1529,7 +1591,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         projects.clear();
         remoteSessions.clear();
         activeProjectId = null;
-        activeSessionId = null;
+        changeActiveSession(null);
         activeRunId = null;
         runStartedAt = null;
         remoteTranscriptRevision = 0;
@@ -1663,14 +1725,31 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   Future<void> sendPrompt() async {
+    if (preparingPrompt || uploadingAttachments) return;
+    final draftText = promptController.text;
+    final draftAttachments = List<AttachmentDraft>.of(pendingAttachments);
+    final draftSessionId = activeSessionId;
+    final draftConnection = session;
     final text = promptController.text.trim();
     if (text.isEmpty && pendingAttachments.isEmpty) {
       return;
     }
-    await Future.wait([
-      modelPreferenceInitialization,
-      effortPreferenceInitialization,
-    ]);
+    preparingPrompt = true;
+    try {
+      await Future.wait([
+        modelPreferenceInitialization,
+        effortPreferenceInitialization,
+      ]);
+    } finally {
+      preparingPrompt = false;
+    }
+    if (activeSessionId != draftSessionId ||
+        session?.origin != draftConnection?.origin ||
+        session?.token != draftConnection?.token ||
+        promptController.text != draftText ||
+        !listEquals(pendingAttachments, draftAttachments)) {
+      return;
+    }
     if (!mounted || uploadingAttachments) return;
     if (viewingSessionId != null) return;
     if (running) {
@@ -2078,7 +2157,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       setState(() {
         resetSessionOnlyEffort();
         if (body is Map<String, dynamic> && body['sessionId'] is String) {
-          activeSessionId = body['sessionId'] as String;
+          changeActiveSession(body['sessionId'] as String);
         }
         remoteTranscriptRevision = 0;
         activeRunId = null;
@@ -2143,7 +2222,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       projects.clear();
       remoteSessions.clear();
       activeProjectId = null;
-      activeSessionId = null;
+      changeActiveSession(null);
       activeRunId = null;
       runStartedAt = null;
       remoteTranscriptRevision = 0;
@@ -2275,7 +2354,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       nextWorkspaceDir: catalog.activeProject?.path,
     );
     activeProjectId = catalog.activeProjectId;
-    activeSessionId = catalog.activeSessionId;
+    changeActiveSession(catalog.activeSessionId);
     if (changedSession) {
       transcriptMotion.reset();
       // Match WS catalog handling so HTTP rename/archive/delete cannot leave
@@ -2460,6 +2539,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   void clearSessionPeek() {
     peekGeneration += 1;
+    if (viewingSessionId != null &&
+        transcriptJumpRequest?.sessionId == viewingSessionId) {
+      transcriptJumpRequest = null;
+    }
     viewingSessionId = null;
     peekTitle = null;
     peekMessages = [];
@@ -2664,7 +2747,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         if (selectedEffort == ClaudeEffortPreference.max) {
           resetSessionOnlyEffort();
         }
-        activeSessionId = selected.id;
+        changeActiveSession(selected.id);
         activeProjectId = selected.projectId;
         queuedPrompt = null;
         pendingAttachments.clear();
@@ -2827,6 +2910,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           setState(() => applyCatalog(catalog));
         }
       }
+      sessionMemoryStore.forget(sessionId);
     } on UnauthorizedSession {
       await recoverUnauthorizedSession();
     } catch (_) {
@@ -2932,6 +3016,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       ShellRoute.chat => ChatScreen(
         session: session,
         activeSessionId: activeSessionId,
+        sessionMemoryStore: sessionMemoryStore,
         running: running,
         stopping: stopping,
         runStartedAt: runStartedAt,
@@ -4156,6 +4241,7 @@ class ChatScreen extends StatelessWidget {
     super.key,
     required this.session,
     this.activeSessionId,
+    this.sessionMemoryStore,
     required this.running,
     this.stopping = false,
     this.runStartedAt,
@@ -4216,6 +4302,7 @@ class ChatScreen extends StatelessWidget {
 
   final SavedSession? session;
   final String? activeSessionId;
+  final SessionMemoryStore? sessionMemoryStore;
   final bool running;
   final bool stopping;
   final DateTime? runStartedAt;
@@ -4325,6 +4412,8 @@ class ChatScreen extends StatelessWidget {
       jumpRequest: transcriptJumpRequest,
       session: session,
       activeSessionId: peeking ? peek!.sessionId : activeSessionId,
+      sessionMemoryStore: sessionMemoryStore,
+      loading: peeking && peek!.loading,
       running: peeking ? false : running,
       runStartedAt: peeking ? null : runStartedAt,
       pendingPermissions: peeking
@@ -4345,11 +4434,13 @@ class ChatScreen extends StatelessWidget {
       child: WorkspacePortal(
         workspaceDir: peeking ? null : session?.workspaceDir,
         onOpenPath: peeking ? null : onOpenWorkspacePath,
-        child: transcriptRevisionListenable == null || peeking
+        child: transcriptRevisionListenable == null
             ? buildTranscriptView(topPadding)
             : ValueListenableBuilder<int>(
                 valueListenable: transcriptRevisionListenable!,
-                builder: (context, _, _) => buildTranscriptView(topPadding),
+                child: peeking ? buildTranscriptView(topPadding) : null,
+                builder: (context, _, child) =>
+                    peeking ? child! : buildTranscriptView(topPadding),
               ),
       ),
     );
@@ -7973,6 +8064,8 @@ class TranscriptView extends StatefulWidget {
     this.motion,
     this.session,
     this.activeSessionId,
+    this.sessionMemoryStore,
+    this.loading = false,
     this.running = false,
     this.runStartedAt,
     required this.pendingPermissions,
@@ -7994,6 +8087,8 @@ class TranscriptView extends StatefulWidget {
   final TranscriptMotion? motion;
   final SavedSession? session;
   final String? activeSessionId;
+  final SessionMemoryStore? sessionMemoryStore;
+  final bool loading;
   final bool running;
   final DateTime? runStartedAt;
   final List<RemotePermissionRequest> pendingPermissions;
@@ -8138,13 +8233,28 @@ class _TranscriptProcessBlock extends StatelessWidget {
   }
 }
 
-class _TranscriptViewState extends State<TranscriptView> {
+class _TranscriptViewState extends State<TranscriptView>
+    with WidgetsBindingObserver {
   static const highlightDuration = Duration(milliseconds: 1600);
   static const maxJumpAttempts = 48;
 
-  final ScrollController scrollController = ScrollController();
+  final ScrollController scrollController = ScrollController(
+    keepScrollOffset: false,
+  );
   final Map<int, PageStorageBucket> activityStorage = {};
   final Map<int, GlobalKey> rowKeys = {};
+  final Map<int, GlobalKey> readingRowKeys = {};
+  Map<int, TranscriptMessage> renderedMessages = {};
+  SessionMemoryStore? readingMemoryStore;
+  SessionMemory? readingMemory;
+  String? readingSessionId;
+  double readingTopPadding = 0;
+  bool readingContentLoading = false;
+  TranscriptReadingPosition? pendingReadingRestore;
+  Timer? readingCaptureTimer;
+  bool readingRestoreScheduled = false;
+  bool readingRestoreInFlight = false;
+  int readingGeneration = 0;
   Timer? highlightTimer;
   int? highlightedRawIndex;
   int? handledJumpGeneration;
@@ -8160,6 +8270,8 @@ class _TranscriptViewState extends State<TranscriptView> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    resetReadingMemory();
     widget.motion?.discardEntrances();
     scrollController.addListener(updateBottomFollowing);
     observeTranscript(reset: true);
@@ -8169,14 +8281,24 @@ class _TranscriptViewState extends State<TranscriptView> {
   @override
   void didUpdateWidget(covariant TranscriptView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.activeSessionId != widget.activeSessionId) {
+    if (oldWidget.activeSessionId != widget.activeSessionId ||
+        oldWidget.sessionMemoryStore != widget.sessionMemoryStore) {
+      captureReadingPosition();
+      unawaited(readingMemoryStore?.flush());
+      readingCaptureTimer?.cancel();
+      readingCaptureTimer = null;
+      resetReadingMemory();
       widget.motion?.discardEntrances();
       highlightTimer?.cancel();
       highlightedRawIndex = null;
       rowKeys.clear();
+      readingRowKeys.clear();
+      renderedMessages.clear();
       activityStorage.clear();
       didInitialBottomJump = false;
-      followingBottom = true;
+      bottomJumpScheduled = false;
+      readingRestoreScheduled = false;
+      readingRestoreInFlight = false;
       unreadOutputCount = 0;
       observeTranscript(reset: true);
     } else {
@@ -8188,6 +8310,10 @@ class _TranscriptViewState extends State<TranscriptView> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    captureReadingPosition();
+    unawaited(readingMemoryStore?.flush());
+    readingCaptureTimer?.cancel();
     highlightTimer?.cancel();
     scrollController.removeListener(updateBottomFollowing);
     scrollController.dispose();
@@ -8195,13 +8321,190 @@ class _TranscriptViewState extends State<TranscriptView> {
   }
 
   void updateBottomFollowing() {
-    if (!scrollController.hasClients || bottomJumpScheduled) return;
+    if (!scrollController.hasClients ||
+        bottomJumpScheduled ||
+        pendingReadingRestore != null ||
+        readingRestoreInFlight ||
+        widget.jumpRequest != null) {
+      return;
+    }
+    readingCaptureTimer ??= Timer(const Duration(milliseconds: 250), () {
+      readingCaptureTimer = null;
+      captureReadingPosition();
+    });
     final nextFollowing = scrollController.position.extentAfter <= 72;
     if (followingBottom == nextFollowing) return;
     followingBottom = nextFollowing;
     if (nextFollowing && unreadOutputCount > 0) {
       setState(() => unreadOutputCount = 0);
     }
+  }
+
+  void resetReadingMemory() {
+    readingGeneration++;
+    readingSessionId = widget.activeSessionId;
+    readingMemoryStore = widget.sessionMemoryStore;
+    readingMemory = readingSessionId == null
+        ? null
+        : readingMemoryStore?.forSession(readingSessionId!);
+    final saved = readingMemory?.readingPosition;
+    followingBottom = saved?.followingBottom ?? true;
+    pendingReadingRestore = followingBottom ? null : saved;
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) return;
+    captureReadingPosition();
+    unawaited(readingMemoryStore?.flush());
+  }
+
+  void captureReadingPosition() {
+    final memory = readingMemory;
+    final sessionId = readingSessionId;
+    if (memory == null ||
+        sessionId == null ||
+        readingMemoryStore?.contains(sessionId, memory) != true ||
+        readingContentLoading ||
+        !didInitialBottomJump ||
+        pendingReadingRestore != null ||
+        readingRestoreInFlight ||
+        jumpInFlightGeneration != null ||
+        !scrollController.hasClients) {
+      return;
+    }
+    final position = scrollController.position;
+    int? anchorIndex;
+    double? anchorTop;
+    if (!followingBottom) {
+      final readingTop = position.pixels + readingTopPadding;
+      final readingBottom = position.pixels + position.viewportDimension;
+      for (final entry in readingRowKeys.entries) {
+        final rowContext = entry.value.currentContext;
+        final object = rowContext?.findRenderObject();
+        if (object is! RenderBox || !object.hasSize || !object.attached) {
+          continue;
+        }
+        final top = RenderAbstractViewport.of(
+          object,
+        ).getOffsetToReveal(object, 0).offset;
+        if (top + object.size.height <= readingTop || top >= readingBottom) {
+          continue;
+        }
+        if (anchorTop == null || top < anchorTop) {
+          anchorIndex = entry.key;
+          anchorTop = top;
+        }
+      }
+    }
+    if (!followingBottom &&
+        anchorIndex == null &&
+        memory.readingPosition != null) {
+      return;
+    }
+    final message = renderedMessages[anchorIndex];
+    final text = message?.text;
+    memory.readingPosition = TranscriptReadingPosition(
+      followingBottom: followingBottom,
+      scrollOffset: position.pixels,
+      rawIndex: anchorIndex,
+      role: message?.role.name,
+      textPrefix: text?.substring(0, min(96, text.length)),
+      anchorOffset: anchorTop == null
+          ? 0
+          : anchorTop - position.pixels - readingTopPadding,
+    );
+    readingMemoryStore?.scheduleSave();
+  }
+
+  void cancelReadingRestore() {
+    pendingReadingRestore = null;
+    readingRestoreInFlight = false;
+    didInitialBottomJump = true;
+  }
+
+  void scheduleReadingRestore() {
+    if (widget.jumpRequest != null) {
+      pendingReadingRestore = null;
+      return;
+    }
+    if (pendingReadingRestore == null ||
+        widget.loading ||
+        widget.messages.isEmpty ||
+        readingRestoreScheduled ||
+        readingRestoreInFlight) {
+      return;
+    }
+    readingRestoreScheduled = true;
+    final generation = readingGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != readingGeneration) return;
+      readingRestoreScheduled = false;
+      unawaited(restoreReadingPosition());
+    });
+  }
+
+  Future<void> restoreReadingPosition() async {
+    final saved = pendingReadingRestore;
+    if (saved == null || !scrollController.hasClients) return;
+    final generation = readingGeneration;
+    bool isCurrent() =>
+        mounted &&
+        generation == readingGeneration &&
+        identical(pendingReadingRestore, saved) &&
+        widget.jumpRequest == null;
+    readingRestoreInFlight = true;
+    followingBottom = false;
+    didInitialBottomJump = true;
+    final position = scrollController.position;
+    scrollController.jumpTo(
+      saved.scrollOffset
+          .clamp(position.minScrollExtent, position.maxScrollExtent)
+          .toDouble(),
+    );
+    await WidgetsBinding.instance.endOfFrame;
+    if (!isCurrent()) return;
+    final rows = visibleRows();
+    if (saved.rawIndex != null && rows.isNotEmpty) {
+      bool matches(_VisibleTranscriptRow row) =>
+          row.message.role.name == saved.role &&
+          row.message.text.startsWith(saved.textPrefix ?? '');
+      final matchesByDistance = rows.where(matches).toList()
+        ..sort(
+          (a, b) => (a.rawIndex - saved.rawIndex!).abs().compareTo(
+            (b.rawIndex - saved.rawIndex!).abs(),
+          ),
+        );
+      var target = matchesByDistance.isNotEmpty
+          ? matchesByDistance.first
+          : rows.reduce(
+              (a, b) =>
+                  (a.rawIndex - saved.rawIndex!).abs() <=
+                      (b.rawIndex - saved.rawIndex!).abs()
+                  ? a
+                  : b,
+            );
+      for (final item in _groupTranscriptRows(rows, running: widget.running)) {
+        if (item is _ProcessGroupRow &&
+            item.rows.any((row) => row.rawIndex == target.rawIndex)) {
+          target = item.rows.first;
+          break;
+        }
+      }
+      await scrollToRow(
+        null,
+        rows,
+        rows.indexOf(target),
+        target.rawIndex,
+        readingPosition: saved,
+        isCurrent: isCurrent,
+      );
+    }
+    if (!isCurrent()) return;
+    pendingReadingRestore = null;
+    readingRestoreInFlight = false;
+    followingBottom = false;
+    captureReadingPosition();
   }
 
   void observeTranscript({bool reset = false}) {
@@ -8241,6 +8544,8 @@ class _TranscriptViewState extends State<TranscriptView> {
   }
 
   Future<void> scrollToLatest() async {
+    cancelReadingRestore();
+    final generation = readingGeneration;
     if (unreadOutputCount > 0) {
       setState(() => unreadOutputCount = 0);
     }
@@ -8262,23 +8567,35 @@ class _TranscriptViewState extends State<TranscriptView> {
     } finally {
       bottomJumpScheduled = false;
     }
-    if (!mounted || !scrollController.hasClients) return;
+    if (!mounted ||
+        generation != readingGeneration ||
+        !scrollController.hasClients) {
+      return;
+    }
     followingBottom = true;
     scheduleBottomJump(force: true);
   }
 
   void scheduleBottomJump({required bool force}) {
     if (widget.messages.isEmpty ||
+        widget.loading ||
+        pendingReadingRestore != null ||
+        readingRestoreInFlight ||
         widget.jumpRequest != null ||
         bottomJumpScheduled ||
         (!force && !followingBottom)) {
       return;
     }
     bottomJumpScheduled = true;
+    final generation = readingGeneration;
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != readingGeneration) return;
       bottomJumpScheduled = false;
       if (!mounted ||
           widget.messages.isEmpty ||
+          widget.loading ||
+          pendingReadingRestore != null ||
+          readingRestoreInFlight ||
           widget.jumpRequest != null ||
           !scrollController.hasClients ||
           (!force && !followingBottom)) {
@@ -8287,6 +8604,7 @@ class _TranscriptViewState extends State<TranscriptView> {
       scrollController.jumpTo(scrollController.position.maxScrollExtent);
       didInitialBottomJump = true;
       followingBottom = true;
+      captureReadingPosition();
     });
   }
 
@@ -8332,6 +8650,8 @@ class _TranscriptViewState extends State<TranscriptView> {
         jumpScheduled) {
       return;
     }
+    pendingReadingRestore = null;
+    readingRestoreInFlight = false;
     jumpScheduled = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       jumpScheduled = false;
@@ -8418,27 +8738,33 @@ class _TranscriptViewState extends State<TranscriptView> {
   }
 
   Future<bool> scrollToRow(
-    TranscriptJumpRequest request,
+    TranscriptJumpRequest? request,
     List<_VisibleTranscriptRow> rows,
     int targetRowIndex,
-    int targetRawIndex,
-  ) async {
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    int targetRawIndex, {
+    TranscriptReadingPosition? readingPosition,
+    bool Function()? isCurrent,
+  }) async {
+    final reduceMotion =
+        readingPosition != null || MediaQuery.disableAnimationsOf(context);
+    final targetKeys = readingPosition == null ? rowKeys : readingRowKeys;
     for (var attempt = 0; attempt < maxJumpAttempts; attempt++) {
-      if (!mounted || widget.jumpRequest?.generation != request.generation) {
+      if (!mounted ||
+          (isCurrent != null && !isCurrent()) ||
+          (request != null &&
+              widget.jumpRequest?.generation != request.generation)) {
         return false;
       }
-      final targetContext = rowKeys[targetRawIndex]?.currentContext;
+      final targetContext = targetKeys[targetRawIndex]?.currentContext;
       final targetObject = targetContext?.findRenderObject();
       if (targetContext != null &&
           targetContext.mounted &&
           targetObject != null &&
           scrollController.hasClients) {
         final position = scrollController.position;
-        final inset = max(
-          widget.topPadding + 12,
-          position.viewportDimension * 0.18,
-        );
+        final inset = readingPosition == null
+            ? max(widget.topPadding + 12, position.viewportDimension * 0.18)
+            : widget.topPadding + readingPosition.anchorOffset;
         final revealOffset = RenderAbstractViewport.of(
           targetObject,
         ).getOffsetToReveal(targetObject, 0).offset;
@@ -8446,7 +8772,12 @@ class _TranscriptViewState extends State<TranscriptView> {
             .clamp(position.minScrollExtent, position.maxScrollExtent)
             .toDouble();
         if (reduceMotion) {
+          final needsLayout = (position.pixels - targetOffset).abs() > 0.5;
           scrollController.jumpTo(targetOffset);
+          if (readingPosition != null && needsLayout) {
+            await WidgetsBinding.instance.endOfFrame;
+            continue;
+          }
         } else {
           await scrollController.animateTo(
             targetOffset,
@@ -8465,7 +8796,7 @@ class _TranscriptViewState extends State<TranscriptView> {
       final position = scrollController.position;
       final builtRows = <({int index, double height})>[];
       for (var index = 0; index < rows.length; index++) {
-        final rowContext = rowKeys[rows[index].rawIndex]?.currentContext;
+        final rowContext = targetKeys[rows[index].rawIndex]?.currentContext;
         final renderObject = rowContext?.findRenderObject();
         if (renderObject is RenderBox && renderObject.hasSize) {
           builtRows.add((index: index, height: renderObject.size.height));
@@ -8515,7 +8846,7 @@ class _TranscriptViewState extends State<TranscriptView> {
       scrollController.jumpTo(nextOffset);
       await WidgetsBinding.instance.endOfFrame;
     }
-    return rowKeys[targetRawIndex]?.currentContext != null;
+    return targetKeys[targetRawIndex]?.currentContext != null;
   }
 
   void finishJump(
@@ -8527,6 +8858,7 @@ class _TranscriptViewState extends State<TranscriptView> {
     handledJumpGeneration = request.generation;
     didInitialBottomJump = true;
     followingBottom = false;
+    captureReadingPosition();
     if (found && rawIndex != null) {
       highlightTimer?.cancel();
       setState(() => highlightedRawIndex = rawIndex);
@@ -8623,6 +8955,11 @@ class _TranscriptViewState extends State<TranscriptView> {
     }
 
     final visibleMessages = visibleRows();
+    renderedMessages = {
+      for (final row in visibleMessages) row.rawIndex: row.message,
+    };
+    readingTopPadding = widget.topPadding;
+    readingContentLoading = widget.loading;
     final visibleRawIndices = visibleMessages
         .map((row) => row.rawIndex)
         .toSet();
@@ -8631,6 +8968,7 @@ class _TranscriptViewState extends State<TranscriptView> {
       rowKeys.putIfAbsent(row.rawIndex, GlobalKey.new);
     }
     scheduleJump();
+    scheduleReadingRestore();
     scheduleBottomJump(force: !didInitialBottomJump);
     final items = <Object>[
       ..._groupTranscriptRows(visibleMessages, running: widget.running),
@@ -8667,148 +9005,172 @@ class _TranscriptViewState extends State<TranscriptView> {
           // Scroll relayout/repaint stops here: per-frame scrolling must not
           // re-record the composer, pill, or background display lists.
           child: RepaintBoundary(
-            child: ListView.builder(
-              key: const ValueKey('transcript-list'),
-              controller: scrollController,
-              // Tall bottom padding: last bubble can rest above the dock, while
-              // earlier lines still scroll *under* the floating composer.
-              padding: EdgeInsets.fromLTRB(0, widget.topPadding, 0, 188),
-              // Keep prefetch small so long markdown rows are not all built at once.
-              cacheExtent: 180,
-              addAutomaticKeepAlives: false,
-              addRepaintBoundaries: true,
-              itemCount: items.length,
-              itemBuilder: (context, index) {
-                final item = items[index];
-                Widget row;
-                int? rawIndex;
-                if (item is _VisibleTranscriptRow) {
-                  rawIndex = item.rawIndex;
-                  final highlighted = highlightedRawIndex == rawIndex;
-                  row = MessageBlock(
-                    key: ValueKey(transcriptRowKey(item.message, rawIndex)),
-                    message: item.message,
-                    session: widget.session,
-                    activeSessionId: widget.activeSessionId,
-                    runStartedAt: widget.runStartedAt,
-                    searchHighlighted: highlighted,
-                    isStreaming: item.rawIndex == streamingAssistantIndex,
-                    followsProcess:
-                        index > 0 && items[index - 1] is _ProcessGroupRow,
-                  );
-                  row = messageEntrance(item.message, rawIndex, row);
-                  if (highlighted) {
-                    row = Semantics(
-                      key: ValueKey('transcript-search-hit-$rawIndex'),
-                      label: '搜索命中消息',
+            child: NotificationListener<UserScrollNotification>(
+              onNotification: (notification) {
+                if (notification.direction != ScrollDirection.idle &&
+                    (pendingReadingRestore != null || readingRestoreInFlight)) {
+                  cancelReadingRestore();
+                  followingBottom = scrollController.position.extentAfter <= 72;
+                }
+                return false;
+              },
+              child: ListView.builder(
+                key: const ValueKey('transcript-list'),
+                controller: scrollController,
+                // Tall bottom padding: last bubble can rest above the dock, while
+                // earlier lines still scroll *under* the floating composer.
+                padding: EdgeInsets.fromLTRB(0, widget.topPadding, 0, 188),
+                // Keep prefetch small so long markdown rows are not all built at once.
+                cacheExtent: 180,
+                addAutomaticKeepAlives: false,
+                addRepaintBoundaries: true,
+                itemCount: items.length,
+                itemBuilder: (context, index) {
+                  final item = items[index];
+                  Widget row;
+                  int? rawIndex;
+                  if (item is _VisibleTranscriptRow) {
+                    rawIndex = item.rawIndex;
+                    final highlighted = highlightedRawIndex == rawIndex;
+                    row = MessageBlock(
+                      key: ValueKey(transcriptRowKey(item.message, rawIndex)),
+                      message: item.message,
+                      session: widget.session,
+                      activeSessionId: widget.activeSessionId,
+                      runStartedAt: widget.runStartedAt,
+                      searchHighlighted: highlighted,
+                      isStreaming: item.rawIndex == streamingAssistantIndex,
+                      followsProcess:
+                          index > 0 && items[index - 1] is _ProcessGroupRow,
+                    );
+                    row = messageEntrance(item.message, rawIndex, row);
+                    if (highlighted) {
+                      row = Semantics(
+                        key: ValueKey('transcript-search-hit-$rawIndex'),
+                        label: '搜索命中消息',
+                        child: row,
+                      );
+                    }
+                  } else if (item is _ProcessGroupRow) {
+                    row = _TranscriptProcessBlock(
+                      key: ValueKey('transcript-process-${item.rawIndex}'),
+                      group: item,
+                      revealRawIndex: revealRawIndex,
+                      buildPart: (part) {
+                        final highlighted =
+                            highlightedRawIndex == part.rawIndex;
+                        Widget child = MessageBlock(
+                          key: ValueKey(
+                            transcriptRowKey(part.message, part.rawIndex),
+                          ),
+                          message: part.message,
+                          session: widget.session,
+                          activeSessionId: widget.activeSessionId,
+                          runStartedAt: widget.runStartedAt,
+                          searchHighlighted: highlighted,
+                          isStreaming: part.rawIndex == streamingAssistantIndex,
+                        );
+                        child = messageEntrance(
+                          part.message,
+                          part.rawIndex,
+                          child,
+                        );
+                        if (highlighted) {
+                          child = Semantics(
+                            key: ValueKey(
+                              'transcript-search-hit-${part.rawIndex}',
+                            ),
+                            label: '搜索命中消息',
+                            child: child,
+                          );
+                        }
+                        return SizedBox(
+                          key: rowKeys[part.rawIndex],
+                          child: child,
+                        );
+                      },
+                    );
+                  } else if (item is WorkspaceChangeEcho) {
+                    row = WorkspaceChangeEchoChip(
+                      key: const ValueKey('workspace-change-echo'),
+                      echo: item,
+                      onTap: widget.onOpenWorkspaceChanges!,
+                    );
+                  } else {
+                    final request = item as RemotePermissionRequest;
+                    row = PermissionRequestCard(
+                      key: ValueKey('perm-${request.requestId}'),
+                      request: request,
+                      responding: widget.respondingPermissionIds.contains(
+                        request.requestId,
+                      ),
+                      connected: widget.connected,
+                      workspaceDir: workspaceDir,
+                      onAllow: () => widget.onPermissionAllow(request),
+                      onDeny: () => widget.onPermissionDeny(request),
+                    );
+                    final fresh =
+                        widget.motion?.takePermission(request.requestId) ??
+                        false;
+                    row = SignalEntrance(
+                      key: ValueKey('permission-entrance-${request.requestId}'),
+                      animate:
+                          fresh &&
+                          followingBottom &&
+                          widget.jumpRequest == null &&
+                          widget.connected,
+                      distance: 4,
                       child: row,
                     );
                   }
-                } else if (item is _ProcessGroupRow) {
-                  row = _TranscriptProcessBlock(
-                    key: ValueKey('transcript-process-${item.rawIndex}'),
-                    group: item,
-                    revealRawIndex: revealRawIndex,
-                    buildPart: (part) {
-                      final highlighted = highlightedRawIndex == part.rawIndex;
-                      Widget child = MessageBlock(
-                        key: ValueKey(
-                          transcriptRowKey(part.message, part.rawIndex),
-                        ),
-                        message: part.message,
-                        session: widget.session,
-                        activeSessionId: widget.activeSessionId,
-                        runStartedAt: widget.runStartedAt,
-                        searchHighlighted: highlighted,
-                        isStreaming: part.rawIndex == streamingAssistantIndex,
-                      );
-                      child = messageEntrance(
-                        part.message,
-                        part.rawIndex,
-                        child,
-                      );
-                      if (highlighted) {
-                        child = Semantics(
-                          key: ValueKey(
-                            'transcript-search-hit-${part.rawIndex}',
-                          ),
-                          label: '搜索命中消息',
-                          child: child,
-                        );
-                      }
-                      return SizedBox(
-                        key: rowKeys[part.rawIndex],
-                        child: child,
-                      );
-                    },
-                  );
-                } else if (item is WorkspaceChangeEcho) {
-                  row = WorkspaceChangeEchoChip(
-                    key: const ValueKey('workspace-change-echo'),
-                    echo: item,
-                    onTap: widget.onOpenWorkspaceChanges!,
-                  );
-                } else {
-                  final request = item as RemotePermissionRequest;
-                  row = PermissionRequestCard(
-                    key: ValueKey('perm-${request.requestId}'),
-                    request: request,
-                    responding: widget.respondingPermissionIds.contains(
-                      request.requestId,
-                    ),
-                    connected: widget.connected,
-                    workspaceDir: workspaceDir,
-                    onAllow: () => widget.onPermissionAllow(request),
-                    onDeny: () => widget.onPermissionDeny(request),
-                  );
-                  final fresh =
-                      widget.motion?.takePermission(request.requestId) ?? false;
-                  row = SignalEntrance(
-                    key: ValueKey('permission-entrance-${request.requestId}'),
-                    animate:
-                        fresh &&
-                        followingBottom &&
-                        widget.jumpRequest == null &&
-                        widget.connected,
-                    distance: 4,
+                  if (item is _ProcessGroupRow) {
+                    row = PageStorage(
+                      key: ValueKey(widget.activeSessionId),
+                      bucket: activityStorage.putIfAbsent(
+                        item.rawIndex,
+                        PageStorageBucket.new,
+                      ),
+                      child: row,
+                    );
+                  }
+
+                  Object gapItem(Object value) {
+                    if (value is _VisibleTranscriptRow) return value.message;
+                    if (value is _ProcessGroupRow) return value.message;
+                    return value;
+                  }
+
+                  final nextItem = index + 1 < items.length
+                      ? items[index + 1]
+                      : null;
+                  final attachedReply =
+                      item is _ProcessGroupRow &&
+                      nextItem is _VisibleTranscriptRow &&
+                      nextItem.message.role == MessageRole.assistant;
+                  final gap = nextItem == null || attachedReply
+                      ? 0.0
+                      : transcriptGapBetween(gapItem(item), gapItem(nextItem));
+                  // Spacing without ListView.separated (one less child per gap).
+                  final paddedRow = Padding(
+                    padding: EdgeInsets.only(bottom: gap),
                     child: row,
                   );
-                }
-                if (item is _ProcessGroupRow) {
-                  row = PageStorage(
-                    key: ValueKey(widget.activeSessionId),
-                    bucket: activityStorage.putIfAbsent(
-                      item.rawIndex,
-                      PageStorageBucket.new,
+                  final child = rawIndex == null
+                      ? paddedRow
+                      : SizedBox(key: rowKeys[rawIndex], child: paddedRow);
+                  final readingIndex = item is _ProcessGroupRow
+                      ? item.rawIndex
+                      : rawIndex;
+                  if (readingIndex == null) return child;
+                  return SizedBox(
+                    key: readingRowKeys.putIfAbsent(
+                      readingIndex,
+                      GlobalKey.new,
                     ),
-                    child: row,
+                    child: child,
                   );
-                }
-
-                Object gapItem(Object value) {
-                  if (value is _VisibleTranscriptRow) return value.message;
-                  if (value is _ProcessGroupRow) return value.message;
-                  return value;
-                }
-
-                final nextItem = index + 1 < items.length
-                    ? items[index + 1]
-                    : null;
-                final attachedReply =
-                    item is _ProcessGroupRow &&
-                    nextItem is _VisibleTranscriptRow &&
-                    nextItem.message.role == MessageRole.assistant;
-                final gap = nextItem == null || attachedReply
-                    ? 0.0
-                    : transcriptGapBetween(gapItem(item), gapItem(nextItem));
-                // Spacing without ListView.separated (one less child per gap).
-                final paddedRow = Padding(
-                  padding: EdgeInsets.only(bottom: gap),
-                  child: row,
-                );
-                if (rawIndex == null) return paddedRow;
-                return SizedBox(key: rowKeys[rawIndex], child: paddedRow);
-              },
+                },
+              ),
             ),
           ),
         ),

@@ -1,6 +1,6 @@
 {
   "name": "cc-remote",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "Phone-friendly remote console for local Claude Code via Cloudflare Tunnel.",
   "type": "module",
   "scripts": {
