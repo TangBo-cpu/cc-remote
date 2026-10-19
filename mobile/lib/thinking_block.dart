@@ -102,6 +102,7 @@ class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
       leading: running
           ? null
           : const SmartIcon(LucideIcons.brain, size: AppIconSizes.inline),
+      compact: true,
       tone: message.activityState == ActivityState.error
           ? palette.danger
           : null,

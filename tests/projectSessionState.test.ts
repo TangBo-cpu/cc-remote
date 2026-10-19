@@ -1,9 +1,110 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { createProjectSessionState } from '../src/projectSessionState.js';
+
+test('failed session creation preserves the active session and can be retried', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-create-failure-'));
+  const options = { dataDir: join(dir, 'data'), initialWorkspace: dir };
+  const catalogPath = join(options.dataDir, 'projects.json');
+  try {
+    const state = await createProjectSessionState(options);
+    const original = state.active();
+    original.transcript.beginPrompt('keep this history', 'manual');
+    await original.transcript.finishDone();
+    const before = state.catalog();
+    await rename(catalogPath, catalogPath + '.saved');
+    await mkdir(catalogPath);
+
+    await assert.rejects(state.createSession(original.project.id, undefined, 'codex'));
+    assert.deepEqual(state.catalog(), before);
+    assert.equal(state.active().session.id, original.session.id);
+    assert.equal(state.active().transcript.snapshot().messages[0].text, 'keep this history');
+
+    await rm(catalogPath, { recursive: true });
+    await rename(catalogPath + '.saved', catalogPath);
+    await state.flush();
+    const restored = await createProjectSessionState(options);
+    assert.equal(restored.active().session.id, original.session.id);
+    const created = await state.createSession(original.project.id, undefined, 'codex');
+    assert.equal(created.session.engine, 'codex');
+    assert.equal(state.catalog().sessions.length, 2);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+for (const lastSession of [false, true]) {
+  test(`failed deletion preserves history and supports retry (last=${lastSession})`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'cc-remote-delete-failure-'));
+    const options = { dataDir: join(dir, 'data'), initialWorkspace: dir };
+    const catalogPath = join(options.dataDir, 'projects.json');
+    try {
+      const state = await createProjectSessionState(options);
+      const original = state.active();
+      original.transcript.beginPrompt('keep this history', 'manual');
+      original.transcript.appendText('saved answer');
+      await original.transcript.finishDone();
+      if (!lastSession) await state.createSession(original.project.id);
+      const before = state.catalog();
+      const transcriptPath = join(options.dataDir, 'sessions', `${original.session.id}.json`);
+      const savedTranscript = await readFile(transcriptPath, 'utf8');
+      await rename(catalogPath, catalogPath + '.saved');
+      await mkdir(catalogPath);
+
+      await assert.rejects(state.deleteSession(original.session.id));
+      assert.deepEqual(state.catalog(), before);
+      assert.equal(state.active().session.id, before.activeSessionId);
+      assert.equal(await readFile(transcriptPath, 'utf8'), savedTranscript);
+      assert.equal(state.getSession(original.session.id)?.transcript.snapshot().messages.length, 2);
+
+      await rm(catalogPath, { recursive: true });
+      await rename(catalogPath + '.saved', catalogPath);
+      await state.flush();
+      const restored = await createProjectSessionState(options);
+      assert.equal(restored.getSession(original.session.id)?.transcript.snapshot().messages.length, 2);
+      await state.deleteSession(original.session.id);
+      assert.equal(state.getSession(original.session.id), undefined);
+      assert.equal(state.catalog().sessions.length, 1);
+      await assert.rejects(readFile(transcriptPath, 'utf8'), { code: 'ENOENT' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const background of [false, true]) {
+  test(`deleting the last Codex session preserves its engine and active selection (background=${background})`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'cc-remote-delete-selection-'));
+    const options = { dataDir: join(dir, 'data'), initialWorkspace: dir };
+    try {
+      const state = await createProjectSessionState(options);
+      const initial = state.active();
+      const codex = await state.createSession(initial.project.id, undefined, 'codex');
+      await state.deleteSession(initial.session.id);
+      if (background) {
+        const other = join(dir, 'other');
+        await mkdir(other);
+        await state.registerProject(other);
+      }
+      const activeBefore = state.active().session.id;
+      await state.deleteSession(codex.session.id);
+      const replacement = state.catalog().sessions.find(item => item.projectId === codex.project.id);
+      assert.ok(replacement);
+      assert.notEqual(replacement.id, codex.session.id);
+      assert.equal(replacement.engine, 'codex');
+      assert.equal(state.active().session.id, background ? activeBefore : replacement.id);
+      await state.flush();
+      const restored = await createProjectSessionState(options);
+      assert.equal(restored.active().session.id, state.active().session.id);
+      assert.equal(restored.getSession(replacement.id)?.session.engine, 'codex');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+}
 
 test('registers projects and keeps independent sessions', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-remote-projects-'));

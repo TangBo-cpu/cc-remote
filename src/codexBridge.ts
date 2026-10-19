@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
+import type { NativeHistory, NativeMessage } from './nativeHistory.js';
 import {
   normalizeCodexSandboxMode,
   normalizeEngineEffort,
@@ -77,6 +78,95 @@ export class CodexBridge implements EngineBridge {
 
   respondToPermission(_requestId: string, _decision: 'allow' | 'deny'): boolean {
     return false;
+  }
+
+  async readHistory(sessionId: string): Promise<NativeHistory> {
+    const state = await this.ensureProcess();
+    const read = await this.request(state, 'thread/read', { threadId: sessionId }, 5_000);
+    const thread = isRecord(read) && isRecord(read.thread) ? read.thread : undefined;
+    if (!thread || thread.id !== sessionId) throw new Error('native_history_invalid');
+    let turns: unknown[];
+    try {
+      turns = await this.readHistoryPages(state, 'thread/turns/list', {
+        threadId: sessionId, itemsView: 'full',
+      });
+    } catch (error) {
+      const cause = error instanceof Error ? error.cause : undefined;
+      if (!(isRecord(cause) && cause.code === -32601)
+          && !(error instanceof Error && /method not found|unknown method|unsupported method/i.test(error.message))) {
+        throw error;
+      }
+      const legacy = await this.request(state, 'thread/read', {
+        threadId: sessionId, includeTurns: true,
+      }, 5_000);
+      if (!isRecord(legacy) || !isRecord(legacy.thread)
+          || legacy.thread.id !== sessionId || !Array.isArray(legacy.thread.turns)) {
+        throw new Error('native_history_invalid');
+      }
+      turns = legacy.thread.turns;
+    }
+    const messages: NativeMessage[] = [];
+    let running = isRecord(thread.status) && thread.status.type === 'active';
+    for (const turn of turns) {
+      if (!isRecord(turn) || typeof turn.id !== 'string' || !Array.isArray(turn.items)) {
+        throw new Error('native_history_invalid');
+      }
+      running ||= turn.status === 'inProgress';
+      let items = turn.items;
+      if (turn.itemsView && turn.itemsView !== 'full') {
+        const entries = await this.readHistoryPages(state, 'thread/items/list', {
+          threadId: sessionId, turnId: turn.id,
+        });
+        items = entries.map(entry => {
+          if (!isRecord(entry) || entry.turnId !== turn.id || !isRecord(entry.item)) {
+            throw new Error('native_history_invalid');
+          }
+          return entry.item;
+        });
+      }
+      for (const item of items) {
+        if (!isRecord(item) || typeof item.id !== 'string' || !item.id) {
+          throw new Error('native_history_invalid');
+        }
+        if (item.type === 'agentMessage' && typeof item.text === 'string' && item.text.trim()) {
+          messages.push({ id: item.id, role: 'assistant', text: item.text });
+        } else if (item.type === 'userMessage' && Array.isArray(item.content)) {
+          const text = item.content.filter(input => isRecord(input)
+            && input.type === 'text' && typeof input.text === 'string')
+            .map(input => input.text).join('\n');
+          const hasImage = item.content.some(input => isRecord(input)
+            && (input.type === 'image' || input.type === 'localImage'));
+          if (text.trim() || hasImage) messages.push({
+            id: item.id, role: 'user', text: text || '[图片]',
+          });
+        }
+      }
+    }
+    return { sessionId, messages, running };
+  }
+
+  private async readHistoryPages(
+    state: CodexProcess,
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown[]> {
+    const data: unknown[] = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    do {
+      const page = await this.request(state, method, {
+        ...params, sortDirection: 'asc', limit: 100, ...(cursor ? { cursor } : {}),
+      }, 5_000);
+      if (!isRecord(page) || !Array.isArray(page.data)
+          || (page.nextCursor != null && typeof page.nextCursor !== 'string')) {
+        throw new Error('native_history_invalid');
+      }
+      data.push(...page.data);
+      cursor = typeof page.nextCursor === 'string' && page.nextCursor ? page.nextCursor : undefined;
+      if (cursor && cursors.has(cursor)) throw new Error('native_history_invalid');
+      if (cursor) cursors.add(cursor);
+    } while (cursor);
+    return data;
   }
 
   async listModels(): Promise<CodexModelOption[]> {
@@ -213,6 +303,7 @@ export class CodexBridge implements EngineBridge {
         type: 'text',
         text: skill ? options.prompt.replace(/^\//, '$') : options.prompt,
       }];
+      options.onPrompt?.(String(input[0].text));
       if (skill) input.push({ type: 'skill', name: skill.name, path: skill.path });
       for (const path of [...new Set(options.imagePaths ?? [])]) {
         if (path.trim()) input.push({ type: 'localImage', path });
@@ -442,7 +533,7 @@ export class CodexBridge implements EngineBridge {
         const error = isRecord(message.error) && typeof message.error.message === 'string'
           ? message.error.message
           : String(message.error);
-        pending.reject(new Error(error));
+        pending.reject(new Error(error, { cause: message.error }));
       } else {
         pending.resolve(message.result);
       }

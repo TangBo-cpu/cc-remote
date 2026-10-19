@@ -1,6 +1,6 @@
 # TODO
 
-本文同步到当前开发版本。手机端主链路、工作区冷启动对齐、流式性能合批和可靠性自动化已经完成。当前视觉是 Cool Glass Console（语义色、Phosphor Fill 身份图标、共享 option sheet）；Warm Console / 冰川蓝选择器是历史里程碑。助手短回复 hug 内容、流式期间即可 Markdown、代码块不再套第二层描边；默认阅读字号 100%。真机已覆盖安装；逐屏视觉清单与断线重连终态策略仍待收尾。
+本文同步到当前开发版本。手机端主链路、工作区冷启动对齐、流式性能合批和可靠性自动化已经完成。当前视觉使用浅色 / 深色基础样式，默认跟随系统；Warm Console 和 Cool Glass 是历史里程碑。消息阅读、流式 Markdown、代码复制、工具折叠和默认 100% 阅读字号保留。本轮外观改造仍需 Android 真机逐屏验收。
 
 ## 已完成
 
@@ -45,16 +45,16 @@
 - [x] 工作区文件与 Git diff 抽屉
 - [x] 拍照、图片和文件附件
 - [x] Android 后台本地通知与通知开关
-- [x] 浅色活力主题、紧凑双栏连接舱和 Command Dock（历史里程碑；后经 Warm Console，现为 Cool Glass）
+- [x] 浅色活力主题、紧凑双栏连接舱和 Command Dock（历史里程碑）
 - [x] 小屏、横屏、键盘、大字体和缩放溢出回归测试
 - [x] Claude 普通回复使用 `surfaceElevated` + 细描边阅读气泡、短文本 hug、统一 22px 圆角和系统默认正文
-- [x] 最新调试/release 版真机安装和主界面检查
+- [x] 旧版调试 / release 包真机安装和主界面检查（本轮外观改造待实机验证）
 
 ### Warm Console 实现（历史）
 
 - [x] 建立根目录 `DESIGN.md` 与 Impeccable 设计 sidecar
 - [x] Penpot 补齐配对、会话选择、运行控制、权限、Diff 与恢复终态
-- [x] UI 实现文档当时同步到 Warm Console；现已改记 Cool Glass
+- [x] UI 实现文档当时同步到 Warm Console（历史）
 - [x] 迁移主题 tokens；chrome 使用 Lucide，会话 / 项目 / 模型身份标记使用 Phosphor Fill
 - [x] 重构紧凑会话头、transcript 活动展示和贴底 Composer
 - [x] 完成 Composer 圆形附件 / 思考强度仪表 / 发送 / 停止、模型胶囊、权限图标和紧凑上下文余量
@@ -72,9 +72,9 @@
 - [x] 优化 IME 弹出性能：键盘动画高度只作用于外层避让，聊天子树仅感知打开/关闭；移除逐帧重建聊天页的外层 `LayoutBuilder`，指令建议使用 `Flexible` 自适应并隔离 Composer 绘制
 - [ ] 若后续定义重试耗尽策略，再增加独立的重连失败终态；当前保持持续自动恢复
 - [x] 更新组件测试，覆盖 Composer 尺寸、模型语义、菜单去 token、活动状态、连接中状态条/空状态与权限工作目录
-- [ ] 完成 Android 真机 Cool Glass 逐屏视觉验收清单（思考强度仪表与共享模型 sheet 已局部验收）
+- [ ] 完成当前浅色 / 深色界面的 Android 真机逐屏视觉验收
 
-### Cool Glass 实现
+### Cool Glass 实现（历史）
 
 - [x] `DESIGN.md` 切到 Cool Glass tokens；聊天控制台用冷近白纸面 + bounded glass chrome
 - [x] 会话 / 项目 / 模型身份标记改用 Phosphor Fill；chrome 仍用 Lucide
@@ -82,11 +82,20 @@
 - [x] 助手短回复 hug 内容；流式期间即可 Markdown；代码块去掉内描边
 - [x] 默认阅读字号 `1.0` / 100%
 
+### 简化外观
+
+- [x] 统一浅色 / 深色色板，默认跟随系统，设置可固定外观并本地保存
+- [x] 移除壁纸、背景预设、偏好预览与复杂启动动画，恢复输入区、浮动控件和面板的玻璃材质
+- [x] 外观切换保留会话、草稿和已打开的设置，Markdown 与工作区同步配色
+- [x] Flutter 自动化覆盖系统外观变化、存储失败、初始化竞态和基础对比度
+- [x] ChatScreen 改用全高 Stack 与渐隐顶部浮层，正文支持滚入导航背后并动态计算顶部间距
+- [x] 会话导航恢复 AppMark 彩色身份标记与独立蓝色导航强调色
+
 ### 文档
 
 - [x] 根 README 与当前启动、安装和协议一致
 - [x] 移动端 README 与当前 UI 和调试流程一致
-- [x] UI 设计文档更新为当前 Cool Glass 实现与验收规格（含语义色、Phosphor Fill、助手气泡 hug / 流式 Markdown、默认 100% 字号）
+- [x] UI 设计文档同步为当前浅色 / 深色实现与验收规格
 - [x] 系统架构与 Flutter 实现文档去掉初版假设
 
 ## 待专项验证
@@ -102,9 +111,10 @@
 
 ## Codex 切换待验证
 
+- [x] 自动化覆盖 Codex 流式回复、停止、断线重连后的 transcript 恢复、非图片附件拒绝与 danger-full-access 回落
 - [ ] 真机新建 Codex 会话并确认流式回复、停止与断线恢复
 - [ ] Codex `workspace-write` 下真实写入工作区文件，确认沙箱边界与活动展示
-- [ ] Codex 会话发送非图片附件被拒、danger-full-access 发送后回落 read-only
+- [ ] 真机确认 Codex 非图片附件被拒、danger-full-access 发送后回落 read-only
 
 ## 后续功能
 

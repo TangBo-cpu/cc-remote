@@ -145,7 +145,8 @@ export async function createProjectSessionState(options: {
     title = '新会话',
     engine: AgentEngine = 'claude',
   ): Promise<SessionContext> {
-    const project = catalog.projects.find(item => item.id === projectId);
+    const next = structuredClone(catalog);
+    const project = next.projects.find(item => item.id === projectId);
     if (!project) throw new Error('project_not_found');
     const now = Date.now();
     const session: StoredSession = {
@@ -156,12 +157,20 @@ export async function createProjectSessionState(options: {
       createdAt: now,
       updatedAt: now,
     };
-    catalog.sessions.push(session);
-    catalog.activeProjectId = projectId;
-    catalog.activeSessionId = session.id;
+    next.sessions.push(session);
+    next.activeProjectId = projectId;
+    next.activeSessionId = session.id;
     project.updatedAt = now;
-    await saveCatalog();
-    return { project, session, transcript: await loadTranscript(session.id) };
+    const transcript = await createTranscriptState(join(sessionsDir, `${session.id}.json`));
+    try {
+      await saveCatalog(next);
+    } catch (error) {
+      saveQueue = saveQueue.catch(() => undefined);
+      throw error;
+    }
+    transcripts.set(session.id, transcript);
+    catalog = next;
+    return { project, session, transcript };
   }
 
   if (catalog.projects.length === 0) {
@@ -415,25 +424,39 @@ export async function createProjectSessionState(options: {
       if (!context) throw new Error('session_not_found');
       if (context.transcript.snapshot().running) throw new Error('claude_is_busy');
       const projectId = context.project.id;
-      const remaining = catalog.sessions.filter(item => item.id !== sessionId);
-      const remainingInProject = remaining.filter(item => item.projectId === projectId && !item.archivedAt);
-      catalog.sessions = remaining;
-      context.project.updatedAt = Date.now();
-
-      await context.transcript.flush().catch(() => undefined);
+      const now = Date.now();
+      const next: StoredCatalog = {
+        ...catalog,
+        projects: catalog.projects.map(item => item.id === projectId ? { ...item, updatedAt: now } : item),
+        sessions: catalog.sessions.filter(item => item.id !== sessionId),
+      };
+      const remainingInProject = next.sessions.filter(item => item.projectId === projectId && !item.archivedAt);
+      let replacement: StoredSession | undefined;
+      let replacementTranscript: TranscriptState | undefined;
+      if (remainingInProject.length === 0) {
+        replacement = {
+          id: randomUUID(), projectId, title: '新会话', engine: context.session.engine,
+          createdAt: now, updatedAt: now,
+        };
+        replacementTranscript = await createTranscriptState(join(sessionsDir, `${replacement.id}.json`));
+        next.sessions.push(replacement);
+        remainingInProject.push(replacement);
+      }
+      if (next.activeSessionId === sessionId) {
+        next.activeProjectId = projectId;
+        next.activeSessionId = remainingInProject.sort((a, b) => b.updatedAt - a.updatedAt)[0].id;
+      }
+      await context.transcript.flush();
+      try {
+        await saveCatalog(next);
+      } catch (error) {
+        saveQueue = saveQueue.catch(() => undefined);
+        throw error;
+      }
+      if (replacement && replacementTranscript) transcripts.set(replacement.id, replacementTranscript);
+      catalog = next;
       transcripts.delete(sessionId);
       await rm(join(sessionsDir, `${sessionId}.json`), { force: true }).catch(() => undefined);
-
-      if (remainingInProject.length === 0) {
-        const created = await createSessionRecord(projectId);
-        catalog.activeProjectId = projectId;
-        catalog.activeSessionId = created.session.id;
-      } else if (catalog.activeSessionId === sessionId) {
-        const next = remainingInProject.sort((a, b) => b.updatedAt - a.updatedAt)[0];
-        catalog.activeProjectId = projectId;
-        catalog.activeSessionId = next.id;
-      }
-      await saveCatalog();
       return { catalog: snapshotCatalog(), deletedSessionId: sessionId };
     },
 

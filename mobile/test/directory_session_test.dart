@@ -140,7 +140,11 @@ void main() {
         expect(state.activeSessionId, 'new-session');
         expect(state.session.workspaceDir, '/projects/new');
         expect(state.activeSessionEngine, SessionEngine.codex);
-        expect(state.promptController.text, '保留这段草稿');
+        expect(state.promptController.text, isEmpty);
+        expect(
+          state.sessionMemoryStore.forSession('old-session').draft.text,
+          '保留这段草稿',
+        );
         expect(state.remoteSessions.length, 2);
         expect(
           (state.messages as List).any((message) => message.text == '旧对话内容'),

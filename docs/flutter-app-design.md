@@ -56,7 +56,7 @@ App 支持 `manual`、`acceptEdits`、`auto`、`dontAsk`、`plan` 和 `bypassPer
 
 如果 daemon 关闭 bypass 能力，选择项禁用。选择 bypass 时必须弹出确认，并持续到用户切换或新建会话。
 
-Codex 会话不使用 Claude 权限模式，改用三档沙箱模式（只读 / 工作区可写 / 完全访问），由 daemon 下发的 `codexSandboxModes` 驱动选择项。默认使用 `danger-full-access`，选择持续生效，可显式切换为只读或工作区可写。Codex 会话的附件仅允许图片，违反时提示「Codex 会话只支持图片附件」。
+Codex 会话不使用权限模式，改用三档沙箱模式（只读 / 工作区可写 / 完全访问），由 daemon 下发的 `codexSandboxModes` 驱动选择项；选择 `danger-full-access` 发送一次后自动回落为 `read-only`。Codex 会话的附件仅允许图片，违反时提示「Codex 会话只支持图片附件」。
 
 ## 附件
 

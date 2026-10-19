@@ -1,4 +1,4 @@
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 const rawArgs = process.argv.slice(2);
@@ -32,6 +32,40 @@ input.on('line', line => {
   }
   if (!initialized) {
     process.stdout.write(JSON.stringify({ id: message.id, error: { message: 'not_initialized' } }) + '\n');
+    return;
+  }
+  if (message.method === 'thread/read') {
+    const history = readHistory();
+    respond(message.id, { thread: {
+      id: fakeOptions.mode === 'history-wrong-thread' ? 'different-thread' : message.params.threadId,
+      status: { type: history.running ? 'active' : 'notLoaded' },
+      turns: message.params.includeTurns ? history.turns : [],
+    } });
+    return;
+  }
+  if (message.method === 'thread/turns/list' || message.method === 'thread/items/list') {
+    if (fakeOptions.mode === 'history-legacy' || fakeOptions.mode === 'history-error') {
+      process.stdout.write(JSON.stringify({ id: message.id, error: {
+        code: fakeOptions.mode === 'history-legacy' ? -32601 : -32000,
+        message: fakeOptions.mode === 'history-legacy' ? 'method not found' : 'history_unavailable',
+      } }) + '\n');
+      return;
+    }
+    const history = readHistory();
+    const data = message.method === 'thread/turns/list' ? history.turns.map(turn => ({
+      ...turn,
+      itemsView: fakeOptions.mode === 'history-summary' ? 'summary' : 'full',
+      ...(fakeOptions.mode === 'history-summary' ? { items: [] } : {}),
+    })) : history.turns.filter(turn => turn.id === message.params.turnId)
+      .flatMap(turn => turn.items.map(item => ({ turnId: turn.id, item })));
+    const index = Number(message.params.cursor || 0);
+    const page = {
+      data: data.slice(index, index + 1),
+      nextCursor: fakeOptions.mode === 'history-loop' ? '0'
+        : index + 1 < data.length ? String(index + 1) : null,
+    };
+    if (history.delayMs) setTimeout(() => respond(message.id, page), history.delayMs);
+    else respond(message.id, page);
     return;
   }
   if (message.method === 'model/list' || message.method === 'skills/list') {
@@ -109,6 +143,7 @@ input.on('line', line => {
     return;
   }
   if (message.method !== 'turn/start') return;
+  if (fakeOptions.history) turnNumber = Math.max(turnNumber, readHistory().turns.length);
 
   const turnId = `fake-turn-${++turnNumber}`;
   respond(message.id, { turn: { id: turnId, items: [], status: 'inProgress' } });
@@ -187,11 +222,27 @@ input.on('line', line => {
       modelContextWindow: 200000,
     },
   });
+  if (fakeOptions.history) {
+    const history = readHistory();
+    history.turns.push({
+      id: turnId, status: 'completed', itemsView: 'full',
+      items: [
+        { id: turnId + '-user', type: 'userMessage', content: message.params.input },
+        { id: 'message-' + turnNumber, type: 'agentMessage', text: 'fake codex reply' },
+      ],
+    });
+    writeFileSync(fakeOptions.history, JSON.stringify(history));
+  }
   notify('turn/completed', {
     threadId,
     turn: { id: turnId, items: [], status: 'completed' },
   });
 });
+
+function readHistory() {
+  return fakeOptions.history && existsSync(fakeOptions.history)
+    ? JSON.parse(readFileSync(fakeOptions.history, 'utf8')) : { turns: [] };
+}
 
 function respond(id, result) {
   process.stdout.write(JSON.stringify({ id, result }) + '\n');

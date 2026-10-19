@@ -137,6 +137,7 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
             ),
       leading: widget.leading,
       running: widget.running,
+      compact: true,
       expanded: (expanded || widget.reveal) && detail.isNotEmpty,
       statusText: '$status${duration.isEmpty ? '' : ' · $duration'}',
       tone: tone,
@@ -154,7 +155,7 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
               );
             },
       child: Padding(
-        padding: const EdgeInsetsDirectional.fromSTEB(26, 0, 8, 8),
+        padding: const EdgeInsetsDirectional.fromSTEB(24, 0, 8, 2),
         child: WorkspacePathText(
           filePath ?? detail,
           key: ValueKey('activity-detail-${message.activityId}'),

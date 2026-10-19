@@ -1,4 +1,6 @@
-import { appendFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 
@@ -33,6 +35,20 @@ if (options.mode === 'stale-resume' && resumeIndex >= 0) {
       return;
     }
     if (message.type !== 'user') return;
+    if (options.history) {
+      mkdirSync(dirname(options.history), { recursive: true });
+      const previous = existsSync(options.history)
+        ? readFileSync(options.history, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+        : [];
+      const parent = previous.filter(entry => entry.uuid).at(-1)?.uuid ?? null;
+      const userId = randomUUID();
+      const entries = [
+        { type: 'user', uuid: userId, parentUuid: parent, message: message.message },
+        { type: 'assistant', uuid: randomUUID(), parentUuid: userId,
+          message: { role: 'assistant', content: [{ type: 'text', text: 'fake reply' }] } },
+      ].map(entry => ({ ...entry, sessionId: options.session, entrypoint: 'sdk-cli' }));
+      appendFileSync(options.history, entries.map(entry => JSON.stringify(entry)).join('\n') + '\n');
+    }
 
     process.stdout.write(JSON.stringify({
       type: 'system',

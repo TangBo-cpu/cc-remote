@@ -51,7 +51,7 @@ import {
   type EngineBridge,
 } from './engineBridge.js';
 import { createRunFlight } from './runFlight.js';
-import { syncClaudeSessionHistory } from './claudeSessionHistory.js';
+import { ClaudeHistoryReader, syncClaudeSessionHistory } from './claudeSessionHistory.js';
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 8787);
@@ -150,6 +150,11 @@ const attachments = new AttachmentStore();
 let activeContext = projectSessions.active();
 let workspace = new WorkspaceService(activeContext.project.path);
 let bridge = createBridge(activeContext.project.path, activeContext.session.engine);
+const claudeHistoryReader = new ClaudeHistoryReader();
+let historyBridge: CodexBridge | undefined;
+let historyBridgeWorkspace: string | undefined;
+const historyErrors = new Map<string, string>();
+let nativeHistoryRefresh: Promise<void> | undefined;
 // Serializes prompt/select/register across awaits; bridge.isRunning alone races.
 const runFlight = createRunFlight(() => bridge.isRunning());
 const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_BODY_BYTES });
@@ -273,11 +278,13 @@ wss.on('connection', ws => {
     }
     void handleWsMessage(ws, data.toString('utf8'), {
       isAuthenticated: () => authenticated,
-      authenticate: token => {
+      authenticate: async token => {
         if (!auth.verifyToken(token)) return false;
         authenticated = true;
         clearAuthTimer();
         authGeneration = auth.getAuthGeneration();
+        await refreshNativeHistory(activeContext);
+        if (!auth.verifyToken(token) || ws.readyState !== WebSocket.OPEN) return false;
         authedSockets.add(ws);
         sendStatus(ws, true);
         send(ws, { type: 'catalog', ...projectSessions.catalog() });
@@ -341,6 +348,10 @@ wss.on('connection', ws => {
 let pairingPayload: PairingPayload;
 let pairingQr: ReturnType<typeof createPairingQr> | undefined;
 let shuttingDown = false;
+const nativeHistoryTimer = setInterval(() => {
+  if (!shuttingDown && authedSockets.size > 0) void refreshNativeHistory(activeContext);
+}, 30_000);
+nativeHistoryTimer.unref();
 
 server.listen(PORT, HOST, () => {
   pairingPayload = auth.createPairingPayload(PUBLIC_ORIGIN, DEVICE_NAME);
@@ -358,6 +369,7 @@ server.listen(PORT, HOST, () => {
 });
 
 async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  if (req.method !== 'GET' && nativeHistoryRefresh) await nativeHistoryRefresh;
   res.setHeader('Cache-Control', 'no-store');
 
   if (req.method === 'GET' && url.pathname === '/api/health') {
@@ -419,6 +431,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     }
     sendJson(res, 200, { ok: true });
     bridge.close();
+    historyBridge?.close();
+    clearInterval(nativeHistoryTimer);
     clearInterval(wsHeartbeatTimer);
     closeAllSockets();
     server.close();
@@ -678,6 +692,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       const existing = projectSessions.getSession(sessionId);
       if (!existing) return sendJson(res, 404, { error: 'session_not_found' });
       const result = await projectSessions.deleteSession(sessionId);
+      claudeHistoryReader.forget(existing.transcript.snapshot().engineSessionId || '');
+      historyErrors.delete(sessionId);
       await attachments.removeSessionDirectory(existing.project.id, sessionId);
       const next = projectSessions.active();
       if (next.session.id !== activeContext.session.id
@@ -706,6 +722,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   if (sessionMatch) {
     const context = projectSessions.getSession(decodeURIComponent(sessionMatch[1]));
     if (!context) return sendJson(res, 404, { error: 'session_not_found' });
+    await refreshNativeHistory(context);
     sendJson(res, 200, {
       projectId: context.project.id,
       sessionId: context.session.id,
@@ -814,7 +831,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 
 type WsSession = {
   isAuthenticated(): boolean;
-  authenticate(token: string | undefined): boolean;
+  authenticate(token: string | undefined): Promise<boolean>;
 };
 
 async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): Promise<void> {
@@ -838,7 +855,7 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
 
   if (!session.isAuthenticated()) {
     if (msg.type !== 'auth') throw new Error('auth_required');
-    if (!session.authenticate(msg.token)) {
+    if (!await session.authenticate(msg.token)) {
       ws.close(1008, 'auth_failed');
       return;
     }
@@ -934,6 +951,7 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
       return;
     }
   }
+  if (nativeHistoryRefresh) await nativeHistoryRefresh;
   if (!runFlight.tryBegin('prompt')) {
     if (promptId) {
       send(ws, sessionMessage({
@@ -1016,6 +1034,7 @@ async function runPromptFlight(
 
   const runContext = activeContext;
   if (runContext.session.engine !== engine) throw new Error('engine_mismatch');
+  if (runFlight.isStopRequested()) return;
   const promptAttachments = await attachments.resolveMany(
     runContext.project.id,
     runContext.session.id,
@@ -1037,6 +1056,18 @@ async function runPromptFlight(
   const enginePrompt = engine === 'claude'
     ? promptWithAttachments(prompt, promptAttachments)
     : prompt || '请查看附件并根据内容处理。';
+  let historyChanged: boolean;
+  try {
+    historyChanged = await syncNativeMessages(runContext, true);
+  } catch (error) {
+    const message = error instanceof Error && error.message === 'native_session_is_busy'
+      ? '电脑端仍在处理这个会话，请等它完成后再发送'
+      : '会话历史同步失败，已有记录已保留，请重试';
+    await runContext.transcript.recordRejectedPrompt(
+      displayPrompt, message, promptAttachments.map(attachmentDescriptor),
+    ).catch(() => undefined);
+    throw error;
+  }
   if (runFlight.isStopRequested()) return;
 
   activeRunStartedAt = Date.now();
@@ -1045,7 +1076,10 @@ async function runPromptFlight(
     permissionMode,
     promptAttachments.map(attachmentDescriptor),
     sandboxMode,
+    enginePrompt,
+    engine === 'codex' && /^\/(?:compact|review)(?:\s|$)/.test(prompt),
   );
+  if (historyChanged) broadcastNativeTranscript(runContext, runId);
   await projectSessions.setSessionTitleFromPrompt(
     runContext.session.id,
     prompt || promptAttachments[0]?.name || '附件会话',
@@ -1073,6 +1107,7 @@ async function runPromptFlight(
   const runEngine = (sessionId: string | undefined) => bridge.run({
     prompt: enginePrompt,
     sessionId,
+    onPrompt: prompt => runContext.transcript.setNativePrompt(prompt),
     additionalDirectories: uploadDirectory ? [uploadDirectory] : undefined,
     imagePaths: engine === 'codex'
       ? promptAttachments.map(attachment => attachment.path)
@@ -1329,6 +1364,72 @@ async function syncNativeClaudeHistory(context: SessionContext): Promise<void> {
   }
 }
 
+async function syncNativeMessages(context: SessionContext, required = false): Promise<boolean> {
+  const snapshot = context.transcript.snapshot();
+  if (!snapshot.engineSessionId || snapshot.running) return false;
+  try {
+    let history;
+    if (context.session.engine === 'claude') {
+      history = await claudeHistoryReader.read(snapshot.engineSessionId);
+    } else {
+      if (!historyBridge || historyBridgeWorkspace !== context.project.path) {
+        historyBridge?.close();
+        historyBridge = new CodexBridge({
+          codexBin: CODEX_BIN, codexArgs: CODEX_ARGS, workspaceDir: context.project.path,
+        });
+        historyBridgeWorkspace = context.project.path;
+      }
+      history = await historyBridge.readHistory(snapshot.engineSessionId);
+    }
+    if (!history) return false;
+    const result = await context.transcript.importNativeHistory(history);
+    if (result.external && context.session.id === activeContext.session.id) bridge.close();
+    historyErrors.delete(context.session.id);
+    if (required && history.running) {
+      throw new Error('native_session_is_busy');
+    }
+    return result.changed;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (required) {
+      if (message === 'native_session_is_busy') throw error;
+      throw new Error('native_history_sync_failed', { cause: error });
+    }
+    if (historyErrors.get(context.session.id) !== message) {
+      historyErrors.set(context.session.id, message);
+      console.warn('[native-history] Could not refresh session history:', error);
+    }
+    return false;
+  }
+}
+
+function broadcastNativeTranscript(context: SessionContext, runId?: string): void {
+  broadcastCatalog();
+  broadcast(sessionMessage({
+    type: 'transcript_snapshot',
+    ...context.transcript.snapshot(),
+    ...taskStatus(context),
+  }, context, runId));
+}
+
+async function refreshNativeHistory(context: SessionContext): Promise<void> {
+  if (nativeHistoryRefresh) await nativeHistoryRefresh;
+  if (!runFlight.tryBegin('mutate')) return;
+  if (!projectSessions.getSession(context.session.id)) {
+    runFlight.end();
+    return;
+  }
+  nativeHistoryRefresh = (async () => {
+    try {
+      if (await syncNativeMessages(context)) broadcastNativeTranscript(context);
+    } finally {
+      runFlight.end();
+      nativeHistoryRefresh = undefined;
+    }
+  })();
+  await nativeHistoryRefresh;
+}
+
 async function selectActiveSession(context: SessionContext): Promise<void> {
   bridge.close();
   commandDiscoveries.clear();
@@ -1340,6 +1441,7 @@ async function selectActiveSession(context: SessionContext): Promise<void> {
     context,
     context.transcript.snapshot().engineSessionId,
   );
+  await syncNativeMessages(context);
   if (context.session.engine === 'claude') void refreshCommands().catch(() => {});
 }
 

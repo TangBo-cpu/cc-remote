@@ -62,6 +62,7 @@ export type EngineRunOptions = {
   onEvent: (event: unknown) => void;
   onText: (text: string) => void;
   onSessionId: (sessionId: string) => void;
+  onPrompt?: (prompt: string) => void;
   onPermissionRequest?: (request: EnginePermissionRequest) => void;
   onPermissionClosed?: (requestId: string) => void;
 };

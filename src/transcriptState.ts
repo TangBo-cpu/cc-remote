@@ -8,6 +8,7 @@ import type {
 } from './claudeBridge.js';
 import type { CodexSandboxMode } from './engineBridge.js';
 import type { AttachmentDescriptor } from './attachmentStore.js';
+import { mergeNativeMessages, type NativeBinding, type NativeHistory } from './nativeHistory.js';
 
 const SCHEMA_VERSION = 1;
 const SAVE_DELAY_MS = 200;
@@ -16,6 +17,9 @@ const INTERRUPTED_MESSAGE = '电脑端重启，任务已中断';
 export type TranscriptMessage = {
   role: 'user' | 'assistant' | 'system' | 'activity';
   text: string;
+  native?: NativeBinding;
+  nativePrompt?: string;
+  nativeLocalOnly?: boolean;
   attachments?: AttachmentDescriptor[];
   activityId?: string;
   activityKind?: ClaudeActivity['kind'];
@@ -31,6 +35,7 @@ export type TranscriptSnapshot = {
   running: boolean;
   updatedAt: number;
   engineSessionId?: string;
+  nativeHistoryStart?: number;
   permissionMode: ClaudePermissionMode;
   sandboxMode?: CodexSandboxMode;
   pendingPermissions: TranscriptPermissionRequest[];
@@ -47,17 +52,22 @@ export type TranscriptState = {
     permissionMode: ClaudePermissionMode,
     attachments?: AttachmentDescriptor[],
     sandboxMode?: CodexSandboxMode,
+    nativePrompt?: string,
+    nativeLocalOnly?: boolean,
   ): void;
   appendText(text: string): void;
   mergeActivity(activity: ClaudeActivity): void;
   setSessionInfo(info: ClaudeSessionInfo): void;
   setEngineSessionId(sessionId: string | undefined): void;
+  setNativePrompt(prompt: string): void;
   addPermission(request: ClaudePermissionRequest): void;
   removePermission(requestId: string): void;
   finishDone(): Promise<void>;
   finishStopped(): Promise<void>;
   finishError(message: string): Promise<void>;
   clear(): Promise<void>;
+  importNativeHistory(history: NativeHistory): Promise<{ changed: boolean; external: boolean }>;
+  recordRejectedPrompt(prompt: string, error: string, attachments?: AttachmentDescriptor[]): Promise<void>;
   flush(): Promise<void>;
 };
 
@@ -76,8 +86,7 @@ export async function createTranscriptState(
   // until a non-whitespace delta arrives so indent/code fences are not lost.
   const pending = { pendingAssistantPrefix: '' };
 
-  async function saveNow(): Promise<void> {
-    const snapshot = cloneSnapshot(state);
+  async function saveSnapshot(snapshot: TranscriptSnapshot): Promise<void> {
     const write = saveQueue.catch(() => undefined).then(async () => {
       await mkdir(dirname(statePath), { recursive: true });
       const tmp = `${statePath}.${process.pid}.${tmpCounter += 1}.tmp`;
@@ -86,6 +95,20 @@ export async function createTranscriptState(
     });
     saveQueue = write;
     await write;
+  }
+
+  async function saveNow(): Promise<void> {
+    await saveSnapshot(cloneSnapshot(state));
+  }
+
+  async function commitSnapshot(next: TranscriptSnapshot): Promise<void> {
+    try {
+      await saveSnapshot(next);
+    } catch (error) {
+      saveQueue = saveQueue.catch(() => undefined);
+      throw error;
+    }
+    state = next;
   }
 
   function scheduleSave(): void {
@@ -135,6 +158,8 @@ export async function createTranscriptState(
       permissionMode: ClaudePermissionMode,
       attachments: AttachmentDescriptor[] = [],
       sandboxMode?: CodexSandboxMode,
+      nativePrompt?: string,
+      nativeLocalOnly?: boolean,
     ): void {
       clearPendingAssistantPrefix(pending);
       mutate(() => {
@@ -145,6 +170,8 @@ export async function createTranscriptState(
         state.messages.push({
           role: 'user',
           text: prompt,
+          ...(nativePrompt !== undefined && nativePrompt !== prompt ? { nativePrompt } : {}),
+          ...(nativeLocalOnly ? { nativeLocalOnly: true } : {}),
           attachments: attachments.length ? structuredClone(attachments) : undefined,
         });
       });
@@ -204,8 +231,18 @@ export async function createTranscriptState(
     setEngineSessionId(sessionId: string | undefined): void {
       if (state.engineSessionId === sessionId) return;
       mutate(() => {
+        if (state.engineSessionId) {
+          const lastUser = state.messages.map(message => message.role).lastIndexOf('user');
+          state.nativeHistoryStart = state.running && lastUser >= 0 ? lastUser : state.messages.length;
+        }
         state.engineSessionId = sessionId;
       });
+    },
+
+    setNativePrompt(prompt: string): void {
+      const user = [...state.messages].reverse().find(message => message.role === 'user');
+      if (!state.running || !user || (user.nativePrompt ?? user.text) === prompt) return;
+      mutate(() => { user.nativePrompt = prompt; });
     },
 
     addPermission(request: ClaudePermissionRequest): void {
@@ -268,6 +305,7 @@ export async function createTranscriptState(
       mutate(() => {
         state.running = false;
         state.engineSessionId = undefined;
+        state.nativeHistoryStart = undefined;
         state.permissionMode = 'auto';
         state.sandboxMode = undefined;
         state.pendingPermissions = [];
@@ -275,6 +313,42 @@ export async function createTranscriptState(
         state.messages = [];
       });
       await flush();
+    },
+
+    async importNativeHistory(history): Promise<{ changed: boolean; external: boolean }> {
+      if (state.running || state.engineSessionId !== history.sessionId) {
+        return { changed: false, external: false };
+      }
+      await flush();
+      if (state.running || state.engineSessionId !== history.sessionId) {
+        return { changed: false, external: false };
+      }
+      const merged = mergeNativeMessages(state.messages, history.messages, state.nativeHistoryStart);
+      if (JSON.stringify(merged.messages) === JSON.stringify(state.messages)) {
+        return { changed: false, external: false };
+      }
+      const next = {
+        ...cloneSnapshot(state),
+        messages: merged.messages,
+        revision: state.revision + 1,
+        updatedAt: Date.now(),
+      };
+      await commitSnapshot(next);
+      return { changed: true, external: merged.external };
+    },
+
+    async recordRejectedPrompt(prompt, error, attachments = []): Promise<void> {
+      if (state.running) throw new Error('claude_is_busy');
+      await flush();
+      await commitSnapshot({
+        ...cloneSnapshot(state),
+        revision: state.revision + 1,
+        updatedAt: Date.now(),
+        messages: [...state.messages, {
+          role: 'user', text: prompt, nativeLocalOnly: true,
+          ...(attachments.length ? { attachments: structuredClone(attachments) } : {}),
+        }, { role: 'system', text: '错误：' + error }],
+      });
     },
 
     flush,
@@ -309,6 +383,9 @@ async function loadState(statePath: string): Promise<TranscriptSnapshot> {
         : typeof parsed.claudeSessionId === 'string'
           ? parsed.claudeSessionId
           : undefined,
+      ...(Number.isSafeInteger(parsed.nativeHistoryStart)
+        && parsed.nativeHistoryStart! >= 0 && parsed.nativeHistoryStart! <= parsed.messages.length
+        ? { nativeHistoryStart: parsed.nativeHistoryStart } : {}),
       sandboxMode: isCodexSandboxMode(parsed.sandboxMode)
         ? parsed.sandboxMode
         : undefined,
@@ -317,7 +394,19 @@ async function loadState(statePath: string): Promise<TranscriptSnapshot> {
         ? parsed.pendingPermissions.filter(isTranscriptPermissionRequest)
         : [],
       sessionInfo: isRecord(parsed.sessionInfo) ? parsed.sessionInfo as ClaudeSessionInfo : {},
-      messages: parsed.messages.filter(isTranscriptMessage),
+      messages: parsed.messages.filter(isTranscriptMessage).map(message => {
+        const { native, nativePrompt, nativeLocalOnly, ...rest } = message;
+        const validBinding = message.role === 'user' && isRecord(native)
+          && Array.isArray(native.ids) && native.ids.length > 0
+          && native.ids.every(id => typeof id === 'string' && id.length > 0)
+          && typeof native.hash === 'string' && /^[a-f0-9]{64}$/.test(native.hash);
+        return {
+          ...rest,
+          ...(validBinding ? { native: native as NativeBinding } : {}),
+          ...(typeof nativePrompt === 'string' ? { nativePrompt } : {}),
+          ...(nativeLocalOnly === true ? { nativeLocalOnly: true } : {}),
+        };
+      }),
     };
   } catch {
     return emptySnapshot();

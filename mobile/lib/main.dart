@@ -1536,7 +1536,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         releaseQueuedPromptAfterTurn('stopped');
 
       case 'error':
-        final errorMessage = decoded['message']?.toString() ?? '未知错误';
+        final errorMessage = switch (decoded['message']) {
+          'native_session_is_busy' => '电脑端仍在处理这个会话，请等它完成后再发送',
+          'native_history_sync_failed' => '会话历史同步失败，已有记录已保留，请重试',
+          _ => decoded['message']?.toString() ?? '未知错误',
+        };
         flushStreamTextBatch();
         setState(() {
           running = false;
@@ -2791,6 +2795,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     setState(() => transcriptJumpRequest = null);
   }
 
+  bool isCurrentConnection(SavedSession saved) =>
+      mounted && session?.origin == saved.origin && session?.token == saved.token;
+
   Future<void> createRemoteSession(
     String projectId,
     SessionEngine engine,
@@ -2807,6 +2814,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         jsonBody: true,
         timeout: networkTimeout,
       );
+      if (!isCurrentConnection(current)) return;
       if (res.statusCode == 401) throw const UnauthorizedSession();
       if (res.statusCode != 201) throw StateError('create_session_failed');
       if (!mounted || session != current) return;
@@ -2825,9 +2833,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       if (session != null) await tokenStore.save(session!);
       persistTranscriptSnapshotLater();
     } on UnauthorizedSession {
-      await recoverUnauthorizedSession();
+      if (isCurrentConnection(current)) await recoverUnauthorizedSession();
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || session != current) return;
       setState(() => messages.add(TranscriptMessage.system('新建会话失败，请重试')));
     }
   }
@@ -2845,19 +2853,20 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         body: jsonEncode({'title': title}),
         timeout: networkTimeout,
       );
+      if (!isCurrentConnection(current)) return;
       if (res.statusCode == 401) throw const UnauthorizedSession();
       if (res.statusCode != 200) throw StateError('rename_session_failed');
       final body = jsonDecode(res.body);
       if (body is Map<String, dynamic>) {
         final catalog = RemoteProjectCatalog.tryParse(body);
-        if (catalog != null && mounted) {
+        if (catalog != null && session == current) {
           setState(() => applyCatalog(catalog));
         }
       }
     } on UnauthorizedSession {
-      await recoverUnauthorizedSession();
+      if (isCurrentConnection(current)) await recoverUnauthorizedSession();
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || session != current) return;
       setState(() => messages.add(TranscriptMessage.system('重命名会话失败，请重试')));
     }
   }
@@ -2873,19 +2882,20 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         token: current.token,
         timeout: networkTimeout,
       );
+      if (!isCurrentConnection(current)) return;
       if (res.statusCode == 401) throw const UnauthorizedSession();
       if (res.statusCode != 200) throw StateError('archive_session_failed');
       final body = jsonDecode(res.body);
       if (body is Map<String, dynamic>) {
         final catalog = RemoteProjectCatalog.tryParse(body);
-        if (catalog != null && mounted) {
+        if (catalog != null && session == current) {
           setState(() => applyCatalog(catalog));
         }
       }
     } on UnauthorizedSession {
-      await recoverUnauthorizedSession();
+      if (isCurrentConnection(current)) await recoverUnauthorizedSession();
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || session != current) return;
       setState(() => messages.add(TranscriptMessage.system('归档会话失败，请重试')));
     }
   }
@@ -2901,20 +2911,21 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         token: current.token,
         timeout: networkTimeout,
       );
+      if (!isCurrentConnection(current)) return;
       if (res.statusCode == 401) throw const UnauthorizedSession();
       if (res.statusCode != 200) throw StateError('delete_session_failed');
       final body = jsonDecode(res.body);
       if (body is Map<String, dynamic>) {
         final catalog = RemoteProjectCatalog.tryParse(body);
-        if (catalog != null && mounted) {
+        if (catalog != null && session == current) {
           setState(() => applyCatalog(catalog));
         }
       }
       sessionMemoryStore.forget(sessionId);
     } on UnauthorizedSession {
-      await recoverUnauthorizedSession();
+      if (isCurrentConnection(current)) await recoverUnauthorizedSession();
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted || session != current) return;
       setState(() => messages.add(TranscriptMessage.system('删除会话失败，请重试')));
     }
   }
@@ -10860,8 +10871,8 @@ class AssistantBubbleFrame extends StatelessWidget {
         ),
         child: Padding(
           padding: EdgeInsets.only(
-            top: topPadding ?? (compact ? 6 : 10),
-            bottom: compact ? 6 : 10,
+            top: topPadding ?? (compact ? 4 : 6),
+            bottom: compact ? 4 : 6,
           ),
           child: SizedBox(width: double.infinity, child: child),
         ),
@@ -11428,7 +11439,7 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
       running: running && activity.activityState == ActivityState.running,
     );
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
+      padding: const EdgeInsets.symmetric(vertical: 1),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,

@@ -28,6 +28,7 @@ class ActivityDisclosure extends StatefulWidget {
     this.semanticLabel,
     this.leading,
     this.titleWidget,
+    this.compact = false,
   });
 
   final bool expanded;
@@ -43,6 +44,9 @@ class ActivityDisclosure extends StatefulWidget {
   final Widget? leading;
   final Widget? titleWidget;
 
+  /// Step-level rows inside a group: a dense visual line whose tap target
+  /// still reaches [AppSizes.touchTarget] through an invisible hit area.
+  final bool compact;
   @override
   State<ActivityDisclosure> createState() => _ActivityDisclosureState();
 }
@@ -81,27 +85,34 @@ class _ActivityDisclosureState extends State<ActivityDisclosure> {
   }
 
   @override
-  Widget build(BuildContext context) => Column(
-    mainAxisSize: MainAxisSize.min,
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      ActivityStatusRow(
-        key: headerKey,
-        buttonKey: widget.toggleKey,
-        titleKey: widget.titleKey,
-        title: widget.title,
-        leading: widget.leading,
-        titleWidget: widget.titleWidget,
-        running: widget.running,
-        statusText: widget.statusText,
-        tone: widget.tone,
-        expanded: widget.expanded,
-        onTap: widget.onToggle,
-        semanticLabel: widget.semanticLabel,
-      ),
-      if (widget.expanded) ...[const SizedBox(height: 6), widget.child],
-    ],
-  );
+  Widget build(BuildContext context) {
+    final header = ActivityStatusRow(
+      key: headerKey,
+      buttonKey: widget.toggleKey,
+      titleKey: widget.titleKey,
+      title: widget.title,
+      leading: widget.leading,
+      titleWidget: widget.titleWidget,
+      running: widget.running,
+      statusText: widget.statusText,
+      tone: widget.tone,
+      expanded: widget.expanded,
+      onTap: widget.onToggle,
+      semanticLabel: widget.semanticLabel,
+      compact: widget.compact,
+    );
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        header,
+        if (widget.expanded) ...[
+          SizedBox(height: widget.compact ? 2 : 6),
+          widget.child,
+        ],
+      ],
+    );
+  }
 }
 
 class ActivityStatusRow extends StatelessWidget {
@@ -118,6 +129,7 @@ class ActivityStatusRow extends StatelessWidget {
     this.tone,
     this.onTap,
     this.semanticLabel,
+    this.compact = false,
   });
 
   final String title;
@@ -131,6 +143,10 @@ class ActivityStatusRow extends StatelessWidget {
   final Color? tone;
   final VoidCallback? onTap;
   final String? semanticLabel;
+
+  /// Step-level rows inside a group. They keep the full [AppSizes.touchTarget]
+  /// height; only the spacing around them tightens.
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {

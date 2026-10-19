@@ -1,9 +1,107 @@
-import { appendFile, open, readFile, readdir, writeFile } from 'node:fs/promises';
+import { appendFile, open, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import type { NativeHistory, NativeMessage } from './nativeHistory.js';
 
 export const CLAUDE_APP_ENTRYPOINT = 'cc-app';
 const SDK_ENTRYPOINTS = new Set(['sdk-cli', 'sdk-ts', 'sdk-py']);
+
+export class ClaudeHistoryReader {
+  private cache = new Map<string, { path: string; stamp: string; history: NativeHistory }>();
+
+  constructor(private readonly projectsDir = join(
+    process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects',
+  )) {}
+
+  forget(sessionId: string): void {
+    this.cache.delete(sessionId);
+  }
+
+  async read(sessionId: string): Promise<NativeHistory | null> {
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sessionId)) return null;
+    const cached = this.cache.get(sessionId);
+    let path = cached?.path;
+    let info;
+    try {
+      if (path) info = await stat(path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      this.cache.delete(sessionId);
+      path = undefined;
+    }
+    path ??= await findSessionTranscript(this.projectsDir, sessionId + '.jsonl') ?? undefined;
+    if (!path) return null;
+    info ??= await stat(path);
+    const stamp = [info.size, info.mtimeMs, info.ctimeMs].join(':');
+    // shortcut: JSONL has no process liveness signal; use recent writes until Claude exposes one.
+    const withRecentActivity = (history: NativeHistory): NativeHistory => ({
+      ...history, running: history.running && Date.now() - info.mtimeMs < 30_000,
+    });
+    if (cached?.path === path && cached.stamp === stamp) return withRecentActivity(cached.history);
+    const history = parseClaudeHistory(sessionId, await readFile(path, 'utf8'));
+    this.cache.set(sessionId, { path, stamp, history });
+    return withRecentActivity(history);
+  }
+}
+
+export function parseClaudeHistory(sessionId: string, source: string): NativeHistory {
+  const boundary = source.lastIndexOf('\n') + 1;
+  const entries = source.slice(0, boundary).split('\n').filter(line => line.trim()).map(line => {
+    const value: unknown = JSON.parse(line);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('native_history_invalid');
+    }
+    return value as Record<string, unknown>;
+  }).filter(entry => entry.sessionId === sessionId && entry.isSidechain !== true);
+  const main = entries.filter(entry => entry.type === 'user' || entry.type === 'assistant');
+  let chain = main;
+  const last = main.at(-1);
+  if (last && typeof last.uuid === 'string' && 'parentUuid' in last) {
+    const byId = new Map(entries.filter(entry => typeof entry.uuid === 'string')
+      .map(entry => [entry.uuid as string, entry]));
+    const visited = new Set<string>();
+    chain = [];
+    let entry: Record<string, unknown> | undefined = last;
+    while (entry && typeof entry.uuid === 'string') {
+      if (visited.has(entry.uuid)) throw new Error('native_history_invalid');
+      visited.add(entry.uuid);
+      chain.push(entry);
+      const parent: string | undefined = typeof entry.parentUuid === 'string' ? entry.parentUuid
+        : entry.subtype === 'compact_boundary' && typeof entry.logicalParentUuid === 'string'
+          ? entry.logicalParentUuid : undefined;
+      entry = parent ? byId.get(parent) : undefined;
+    }
+    chain.reverse();
+  }
+  const messages: NativeMessage[] = [];
+  for (const entry of chain) {
+    if ((entry.type !== 'user' && entry.type !== 'assistant')
+        || typeof entry.uuid !== 'string' || !entry.uuid
+        || entry.isMeta === true || entry.isCompactSummary === true) continue;
+    const message = entry.message as Record<string, unknown> | undefined;
+    if (!message || typeof message !== 'object') continue;
+    const content = message.content;
+    if (entry.type === 'user' && Array.isArray(content)
+        && content.some(block => block?.type === 'tool_result')) continue;
+    let text = typeof content === 'string' ? content : Array.isArray(content)
+      ? content.filter(block => block?.type === 'text' && typeof block.text === 'string')
+        .map(block => block.text).join('') : '';
+    if (!text.trim() && entry.type === 'user' && Array.isArray(content)
+        && content.some(block => block?.type === 'image')) text = '[图片]';
+    if (!text.trim()) continue;
+    const next: NativeMessage = { id: entry.uuid, role: entry.type, text };
+    const existing = messages.findIndex(item => item.id === next.id);
+    if (existing >= 0) messages[existing] = next;
+    else messages.push(next);
+  }
+  const lastWork = main.filter(entry => entry.isMeta !== true && entry.isCompactSummary !== true).at(-1);
+  const lastMessage = lastWork?.message as Record<string, unknown> | undefined;
+  const content = lastMessage?.content;
+  const running = boundary < source.length || lastWork?.type === 'user'
+    || lastMessage?.stop_reason === 'tool_use'
+    || (Array.isArray(content) && content.some(block => block?.type === 'tool_use'));
+  return { sessionId, messages, running };
+}
 
 export async function findSessionTranscript(root: string, fileName: string): Promise<string | null> {
   const pending = [root];

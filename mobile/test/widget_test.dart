@@ -5433,14 +5433,14 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    const path = r'D:\Workspace\project\项目笔记\学习路线.md';
+    const path = r'D:\Jayson\EMBEDDED\项目笔记\学习路线.md';
     const following = '按你库里的习惯把 YAML、callout 和清单格式写一页可勾选的路线。';
     await tester.pumpWidget(
       MaterialApp(
         theme: buildSignalConsoleTheme(),
         home: Scaffold(
           body: WorkspacePortal(
-            workspaceDir: r'D:\Workspace\project',
+            workspaceDir: r'D:\Jayson\EMBEDDED',
             onOpenPath: (_) {},
             child: MessageBlock(
               message: TranscriptMessage.assistant(

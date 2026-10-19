@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer, request } from 'node:http';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
@@ -444,14 +444,16 @@ test('daemon persists and resumes a Codex session without invoking the Claude br
           sandbox?: string;
         };
       });
-    assert.deepEqual(records.filter(record => record.kind === 'process'), [{
+    assert.deepEqual(records.filter(record => record.kind === 'process'), Array.from({ length: 2 }, () => ({
       kind: 'process',
       args: ['app-server'],
       cwd: selectedDirectory,
-    }]);
+    })));
     const requests = records.filter(record => record.kind === 'request');
-    assert.deepEqual(requests.map(record => record.method), [
-      'initialize',
+    assert.equal(requests.filter(record => record.method === 'initialize').length, 2);
+    assert.deepEqual(requests.filter(record => ![
+      'initialize', 'thread/read', 'thread/turns/list', 'thread/items/list',
+    ].includes(record.method || '')).map(record => record.method), [
       'thread/start',
       'turn/start',
       'turn/start',
@@ -464,7 +466,8 @@ test('daemon persists and resumes a Codex session without invoking the Claude br
         .map(record => record.params?.input?.find(item => item.type === 'text')?.text),
       ['first Codex prompt', 'second Codex prompt', 'danger mode prompt'],
     );
-    assert.equal(requests[4].params?.sandbox, 'danger-full-access');
+    assert.equal(requests.find(record => record.method === 'thread/resume')?.params?.sandbox,
+      'danger-full-access');
 
     await assert.rejects(
       () => readFile(join(codexDaemon.root, 'claude-args.jsonl'), 'utf8'),
@@ -552,7 +555,7 @@ test('Codex catalogs are authenticated, scoped to the session, and usable by pro
     }));
     assert.equal((await reviewPromise).text, 'native review result');
     const records = (await readFile(join(catalogDaemon.root, 'codex-catalog.jsonl'), 'utf8')).trim().split(/\r?\n/).map(line => JSON.parse(line));
-    assert.equal(records.filter(item => item.kind === 'process').length, 1);
+    assert.equal(records.filter(item => item.kind === 'process').length, 2);
     const turn = records.find(item => item.method === 'turn/start');
     assert.equal(turn.params.model, 'gpt-test-codex');
     assert.equal(turn.params.input[0].text, '$inspect check tests');
@@ -570,6 +573,177 @@ test('Codex catalogs are authenticated, scoped to the session, and usable by pro
     await rm(catalogDaemon.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   }
 });
+
+for (const engine of ['claude', 'codex'] as const) {
+  test('native ' + engine + ' history syncs live, reconnects, resumes context and stays deleted', async () => {
+    const nativeId = engine === 'claude' ? randomUUID() : 'fake-thread-id';
+    const instance = await startDaemon({
+      claudeBin: process.execPath,
+      claudeArgs: root => [
+        resolve('tests/fixtures/fakeClaude.mjs'),
+        '--fake-session=' + nativeId,
+        '--fake-log=' + join(root, 'claude-sync.jsonl'),
+        '--fake-history=' + join(root, '.claude', 'projects', 'fixture', nativeId + '.jsonl'),
+      ],
+      codexBin: process.execPath,
+      codexArgs: root => [
+        resolve('tests/fixtures/fakeCodex.mjs'),
+        '--fake-log=' + join(root, 'codex-sync.jsonl'),
+        '--fake-history=' + join(root, 'codex-native.json'),
+      ],
+    });
+    let socket: WebSocket | undefined;
+    try {
+      const paired = await fetch(instance.baseUrl + '/api/pair', {
+        method: 'POST',
+        headers: { Origin: instance.baseUrl, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nonce: instance.nonce }),
+      });
+      const { token } = await paired.json() as { token: string };
+      const headers = {
+        Origin: instance.baseUrl, Authorization: 'Bearer ' + token, 'Content-Type': 'application/json',
+      };
+      const create = await fetch(instance.baseUrl + '/api/projects/open-directory', {
+        method: 'POST', headers, body: JSON.stringify({ path: instance.root, engine }),
+      });
+      assert.equal(create.status, 201);
+      const { sessionId } = await create.json() as { sessionId: string };
+      const connect = async () => {
+        const connection = new WebSocket(instance.baseUrl.replace('http:', 'ws:') + '/ws', {
+          headers: { Origin: instance.baseUrl },
+        });
+        await once(connection, 'open');
+        const snapshot = waitForWsMessage(connection, message =>
+          message.type === 'transcript_snapshot' && message.sessionId === sessionId);
+        connection.send(JSON.stringify({ type: 'auth', token }));
+        return { connection, snapshot };
+      };
+      const first = await connect();
+      socket = first.connection;
+      await first.snapshot;
+      const run = async (text: string) => {
+        const result = waitForPromptResult(socket!, sessionId);
+        socket!.send(JSON.stringify({ type: 'prompt', sessionId, engine, text }));
+        return result;
+      };
+      assert.equal((await run('phone first')).text, engine === 'claude' ? 'fake reply' : 'fake codex reply');
+      const appendDesktop = async (prompt: string, reply: string, pending = false) => {
+        if (engine === 'claude') {
+          const path = join(instance.root, '.claude', 'projects', 'fixture', nativeId + '.jsonl');
+          const entries = (await readFile(path, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+          const parent = entries.filter(entry => entry.uuid).at(-1)?.uuid ?? null;
+          const userId = randomUUID();
+          const user = { type: 'user', uuid: userId, parentUuid: parent,
+            sessionId: nativeId, message: { role: 'user', content: prompt } };
+          const assistant = { type: 'assistant', uuid: randomUUID(), parentUuid: userId,
+            sessionId: nativeId, message: { role: 'assistant', content: reply } };
+          await appendFile(path, (pending ? [user] : [user, assistant])
+            .map(entry => JSON.stringify(entry)).join('\n') + '\n');
+          return async () => { await appendFile(path, JSON.stringify(assistant) + '\n'); };
+        } else {
+          const path = join(instance.root, 'codex-native.json');
+          const history = JSON.parse(await readFile(path, 'utf8'));
+          const turnId = randomUUID();
+          const turn = { id: turnId, status: pending ? 'inProgress' : 'completed', itemsView: 'full', items: [
+            { id: turnId + '-user', type: 'userMessage', content: [{ type: 'text', text: prompt }] },
+            ...(!pending ? [{ id: turnId + '-reply', type: 'agentMessage', text: reply }] : []),
+          ] };
+          history.turns.push(turn);
+          await writeFile(path, JSON.stringify(history));
+          return async () => {
+            turn.status = 'completed';
+            turn.items.push({ id: turnId + '-reply', type: 'agentMessage', text: reply });
+            await writeFile(path, JSON.stringify(history));
+          };
+        }
+      };
+      const contains = (message: Record<string, unknown>, text: string) =>
+        Array.isArray(message.messages) && message.messages.some(item => item.text === text);
+      const update = waitForWsMessage(socket, message =>
+        message.type === 'transcript_snapshot' && contains(message, 'desktop reply'), 40_000);
+      await appendDesktop('desktop question', 'desktop reply');
+      const synced = await update;
+      assert.equal((synced.messages as Array<{ text: string }>).filter(item => item.text === 'phone first').length, 1);
+      const beforeSend = waitForWsMessage(socket, message =>
+        message.type === 'transcript_snapshot' && message.running === true
+        && contains(message, 'before-send reply') && contains(message, 'phone continues'));
+      await appendDesktop('just before send', 'before-send reply');
+      assert.equal((await run('phone continues')).text, engine === 'claude' ? 'fake reply' : 'fake codex reply');
+      await beforeSend;
+
+      const records = (await readFile(join(instance.root, engine + '-sync.jsonl'), 'utf8'))
+        .trim().split('\n').map(line => JSON.parse(line));
+      if (engine === 'claude') {
+        const runs = records.filter(args => args.includes('--input-format'));
+        assert.equal(runs.length, 2);
+        assert.equal(runs[1][runs[1].indexOf('--resume') + 1], nativeId);
+      } else {
+        assert.equal(records.filter(record => record.kind === 'process').length, 3);
+        assert.equal(records.filter(record => record.method === 'thread/resume').length, 1);
+      }
+
+      const completeNative = await appendDesktop('native is working', 'native finished', true);
+      const blocked = waitForWsMessage(socket, message =>
+        message.type === 'error' && message.message === 'native_session_is_busy');
+      socket.send(JSON.stringify({ type: 'prompt', sessionId, engine, text: 'must wait' }));
+      await blocked;
+      const retained = await fetch(instance.baseUrl + '/api/sessions/' + sessionId, { headers });
+      const retainedBody = await retained.json() as { transcript: {
+        messages: Array<{ text: string; nativeLocalOnly?: boolean }>;
+      } };
+      assert.equal(retainedBody.transcript.messages.find(message =>
+        message.text === 'must wait')?.nativeLocalOnly, true);
+      await completeNative();
+
+      const closed = once(socket, 'close');
+      socket.close();
+      await closed;
+      await appendDesktop('offline desktop', 'offline reply');
+      const reconnected = await connect();
+      socket = reconnected.connection;
+      const restored = await reconnected.snapshot;
+      assert.equal(contains(restored, 'offline reply'), true);
+      assert.equal(contains(restored, 'phone continues'), true);
+      assert.equal(contains(restored, 'must wait'), true);
+      const current = await fetch(instance.baseUrl + '/api/sessions/' + sessionId, { headers });
+      const snapshot = await current.json() as { transcript: { revision: number; messages: unknown[] } };
+      const again = await fetch(instance.baseUrl + '/api/sessions/' + sessionId, { headers });
+      assert.deepEqual((await again.json() as typeof snapshot).transcript, snapshot.transcript);
+
+      const next = await fetch(instance.baseUrl + '/api/projects/open-directory', {
+        method: 'POST', headers, body: JSON.stringify({ path: instance.root, engine }),
+      });
+      const nextSession = await next.json() as { sessionId: string };
+      await appendDesktop('background desktop', 'background reply');
+      if (engine === 'codex') {
+        const path = join(instance.root, 'codex-native.json');
+        const history = JSON.parse(await readFile(path, 'utf8'));
+        await writeFile(path, JSON.stringify({ ...history, delayMs: 40 }));
+      }
+      const backgroundRequest = fetch(instance.baseUrl + '/api/sessions/' + sessionId, { headers });
+      await new Promise(resolveTimeout => setTimeout(resolveTimeout, 20));
+      const deleteRequest = fetch(instance.baseUrl + '/api/sessions/' + sessionId, { method: 'DELETE', headers });
+      const background = await backgroundRequest;
+      assert.equal(JSON.stringify(await background.json()).includes('background reply'), true);
+      const catalog = JSON.parse(await readFile(join(instance.root, '.data', 'projects.json'), 'utf8'));
+      assert.equal(catalog.activeSessionId, nextSession.sessionId);
+      const deleted = await deleteRequest;
+      assert.equal(deleted.status, 200);
+      await appendDesktop('after delete', 'must not resurrect');
+      const missing = await fetch(instance.baseUrl + '/api/sessions/' + sessionId, { headers });
+      assert.equal(missing.status, 404);
+      await assert.rejects(readFile(join(instance.root, '.data', 'sessions', sessionId + '.json')), { code: 'ENOENT' });
+    } finally {
+      socket?.close();
+      instance.child.kill();
+      await Promise.race([
+        instance.child.exitCode === null ? once(instance.child, 'exit') : Promise.resolve(),
+        new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
+      ]);
+      await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  });
+}
 
 async function startDaemon(options: {
   claudeBin?: string;
@@ -738,12 +912,13 @@ function rawRequest(options: {
 function waitForWsMessage(
   socket: WebSocket,
   predicate: (message: Record<string, unknown>) => boolean,
+  timeoutMs = 5_000,
 ): Promise<Record<string, unknown>> {
   return new Promise((resolveMessage, rejectMessage) => {
     const timeout = setTimeout(() => {
       cleanup();
       rejectMessage(new Error('websocket_message_timeout'));
-    }, 5_000);
+    }, timeoutMs);
     const onMessage = (data: WebSocket.RawData) => {
       const message = JSON.parse(data.toString()) as Record<string, unknown>;
       if (!predicate(message)) return;
