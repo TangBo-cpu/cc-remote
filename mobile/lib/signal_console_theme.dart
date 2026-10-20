@@ -580,15 +580,53 @@ class AppElevation {
     ),
   ];
 
+  /// Sheets, dialogs, and menus: contact, directed, and ambient layers. The
+  /// three separate blurs read as one soft shadow instead of a hard edge.
+  static List<BoxShadow> overlay({BuildContext? context}) => [
+    BoxShadow(
+      color: _shadowColor(context, 0.05),
+      blurRadius: 2,
+      offset: const Offset(0, 1),
+    ),
+    BoxShadow(
+      color: _shadowColor(context, 0.06),
+      blurRadius: 14,
+      offset: const Offset(0, 5),
+      spreadRadius: -3,
+    ),
+    BoxShadow(
+      color: _shadowColor(context, 0.05),
+      blurRadius: 32,
+      offset: const Offset(0, 14),
+      spreadRadius: -8,
+    ),
+  ];
+
+  /// Tone a floating surface leaves on the content scrolling beneath it. Used
+  /// as a gradient stop rather than a box shadow, so the header casts down.
+  static Color castShadow({BuildContext? context, double alpha = 0.06}) =>
+      _shadowColor(context, alpha);
+
   static List<BoxShadow> softCard({
     BuildContext? context,
-    double alpha = 0.07,
+    double alpha = 0.05,
   }) => [
     BoxShadow(
+      color: _shadowColor(context, alpha * 0.8),
+      blurRadius: 2,
+      offset: const Offset(0, 1),
+    ),
+    BoxShadow(
       color: _shadowColor(context, alpha),
-      blurRadius: 18,
-      offset: const Offset(0, 6),
-      spreadRadius: -4,
+      blurRadius: 10,
+      offset: const Offset(0, 4),
+      spreadRadius: -3,
+    ),
+    BoxShadow(
+      color: _shadowColor(context, alpha * 0.7),
+      blurRadius: 22,
+      offset: const Offset(0, 10),
+      spreadRadius: -6,
     ),
   ];
 
@@ -737,6 +775,7 @@ class AppLiquidGlass {
     bool focused = false,
     bool elevated = true,
     bool backdrop = false,
+    List<BoxShadow>? shadow,
   }) {
     final palette = context == null ? AppPalette.light : AppPalette.of(context);
     final gradient = backdrop
@@ -749,9 +788,10 @@ class AppLiquidGlass {
         width: focused ? 2 : 0.5,
       ),
       borderRadius: borderRadius,
-      boxShadow: elevated
-          ? AppElevation.liquidStrong(context: context, pressed: pressed)
-          : const [],
+      boxShadow: shadow ??
+          (elevated
+              ? AppElevation.liquidStrong(context: context, pressed: pressed)
+              : const []),
     );
   }
 }
@@ -1374,7 +1414,15 @@ ThemeData buildSignalConsoleTheme([Brightness brightness = Brightness.light]) {
     popupMenuTheme: PopupMenuThemeData(
       color: palette.surface,
       surfaceTintColor: Colors.transparent,
-      elevation: 0,
+      // A soft shadow needs multiple blurs; Material's menu paints one shape
+      // shadow from `elevation`, so keep it low and let `shadowColor` carry the
+      // softness. Three-layer BoxShadows would be clipped by the menu's shape.
+      // The alpha follows the theme brightness here: this theme is built outside
+      // a context, so `_shadowColor`'s own dark handling cannot apply.
+      elevation: 6,
+      shadowColor: Colors.black.withValues(
+        alpha: brightness == Brightness.dark ? 0.38 : 0.5,
+      ),
       textStyle: textTheme.bodyMedium,
       labelTextStyle: WidgetStatePropertyAll(textTheme.bodyMedium),
       position: PopupMenuPosition.under,

@@ -4669,6 +4669,16 @@ class _ChatOverlayLayoutState extends State<_ChatOverlayLayout> {
           height: widget.blurExtent,
           child: const RepaintBoundary(child: _ChatTopBackdrop()),
         ),
+        // The header casts onto the transcript: a short gradient band that
+        // starts where the backdrop blur has already faded out, so the two
+        // never stack into a darker seam over the scrolling text.
+        Positioned(
+          top: widget.blurExtent,
+          left: 0,
+          right: 0,
+          height: 20,
+          child: const RepaintBoundary(child: _ChatTopCastShadow()),
+        ),
         Positioned(
           top: 0,
           left: 0,
@@ -4723,6 +4733,33 @@ class _ChatTopBackdrop extends StatelessWidget {
   }
 }
 
+/// Depth band under the header. A gradient rather than a BoxShadow: the header
+/// sits over a live scrolling list, and one static gradient costs no per-frame
+/// blur as content moves beneath it.
+class _ChatTopCastShadow extends StatelessWidget {
+  const _ChatTopCastShadow();
+
+  @override
+  Widget build(BuildContext context) {
+    return ExcludeSemantics(
+      child: IgnorePointer(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                AppElevation.castShadow(context: context, alpha: 0.055),
+                AppElevation.castShadow(context: context, alpha: 0),
+              ],
+            ),
+          ),
+          child: const SizedBox.expand(),
+        ),
+      ),
+    );
+  }
+}
 class ConnectionHeader extends StatelessWidget {
   const ConnectionHeader({
     super.key,
@@ -7310,6 +7347,7 @@ class _SettingsModalSurface extends StatelessWidget {
           decoration: AppLiquidGlass.strong(
             context: context,
             borderRadius: borderRadius,
+            shadow: AppElevation.overlay(context: context),
           ),
           child: ClipRRect(
             clipBehavior: Clip.hardEdge,
@@ -8133,7 +8171,7 @@ Future<void> confirmLogout(BuildContext context, VoidCallback onLogout) async {
   final shouldLogout = await showDialog<bool>(
     context: context,
     animationStyle: appOverlayAnimationStyle(context),
-    builder: (context) => AlertDialog(
+    builder: (context) => AppDialog(
       title: const Text('退出配对'),
       content: const Text('退出后这台手机需要重新扫码。'),
       actions: [
@@ -12608,7 +12646,7 @@ Future<void> showPermissionModePicker(
     final confirmed = await showDialog<bool>(
       context: context,
       animationStyle: appOverlayAnimationStyle(context),
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppDialog(
         title: const Text('当前对话跳过权限检查'),
         content: const Text(
           'Claude Code 将能直接修改文件和执行命令。此设置仅作用于当前对话，切换或新建对话后不会沿用。',
@@ -12671,7 +12709,7 @@ Future<void> showCodexSandboxModePicker(
     final confirmed = await showDialog<bool>(
       context: context,
       animationStyle: appOverlayAnimationStyle(context),
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => AppDialog(
         title: const Text('当前对话使用完全访问'),
         content: const Text('Codex 将能访问工作区外的文件和命令。之后的消息沿用此模式，可随时在沙箱模式中切换。'),
         actions: [
@@ -13027,6 +13065,84 @@ Future<T?> showAppOptionPicker<T>(
     },
   );
 }
+/// Shared dialog shell: the same overlay shadow as sheets, so every modal layer
+/// reads as floating at one depth. AlertDialog's own elevation stays at 0.
+class AppDialog extends StatelessWidget {
+  const AppDialog({
+    super.key,
+    required this.title,
+    this.content,
+    this.actions = const [],
+  });
+
+  final Widget title;
+  final Widget? content;
+  final List<Widget> actions;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      surfaceTintColor: Colors.transparent,
+      elevation: 0,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+      child: Container(
+        decoration: BoxDecoration(
+          color: palette.surface,
+          borderRadius: BorderRadius.circular(AppRadii.surface),
+          border: Border.all(color: palette.glassHighlight, width: 0.5),
+          boxShadow: AppElevation.overlay(context: context),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
+        // Scrollable so long copy and large text never overflow a short screen;
+        // AlertDialog did this for us before the shadow change.
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Semantics(
+                header: true,
+                child: DefaultTextStyle.merge(
+                  style: TextStyle(
+                    color: palette.ink,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    height: 1.3,
+                  ),
+                  child: title,
+                ),
+              ),
+              if (content != null) ...[
+                const SizedBox(height: 12),
+                DefaultTextStyle.merge(
+                  style: TextStyle(
+                    color: palette.muted,
+                    fontSize: 14,
+                    height: 1.45,
+                  ),
+                  child: content!,
+                ),
+              ],
+              if (actions.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                // OverflowBar stacks the buttons vertically when large text
+                // makes them wider than the dialog, instead of clipping.
+                OverflowBar(
+                  alignment: MainAxisAlignment.end,
+                  spacing: 8,
+                  overflowSpacing: 8,
+                  children: actions,
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 class AppSheetSurface extends StatelessWidget {
   const AppSheetSurface({
@@ -13049,6 +13165,7 @@ class AppSheetSurface extends StatelessWidget {
       decoration: AppLiquidGlass.strong(
         context: context,
         borderRadius: effectiveBorderRadius,
+        shadow: AppElevation.overlay(context: context),
       ),
       child: ClipRRect(
         borderRadius: effectiveBorderRadius,
@@ -13270,7 +13387,7 @@ Future<String?> promptSessionTitle(
   return showDialog<String>(
     context: context,
     animationStyle: appOverlayAnimationStyle(context),
-    builder: (dialogContext) => AlertDialog(
+    builder: (dialogContext) => AppDialog(
       title: const Text('重命名会话'),
       content: TextField(
         key: const ValueKey('rename-session-field'),
@@ -13299,7 +13416,7 @@ Future<bool?> confirmSessionDelete(BuildContext context, String title) {
   return showDialog<bool>(
     context: context,
     animationStyle: appOverlayAnimationStyle(context),
-    builder: (dialogContext) => AlertDialog(
+    builder: (dialogContext) => AppDialog(
       title: const Text('删除会话？'),
       content: Text('将删除「$title」及其 transcript，不可恢复。'),
       actions: [

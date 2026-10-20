@@ -40,6 +40,15 @@ Use the platform UI font for interface and transcript text, and a monospace font
 
 Spacing follows 4, 8, 12, 16, 20, 24, and 32 points. Reuse the shared radius and touch-target constants. Compact visible icons retain an accessible touch target.
 
+Surfaces that float above the page carry a three-layer shadow: a tight contact
+edge, a directed blur, and a wide ambient wash. Sheets and dialogs share
+`AppElevation.overlay`; cards use `AppElevation.softCard`. Negative spread
+keeps the wide layer from smearing past the surface, and every layer stays
+below 0.1 alpha. The chat header casts a short gradient band instead of a box
+shadow, because it sits over a live scrolling list. Transcript content carries
+no shadow: user bubbles, assistant replies, reasoning, and tool groups stay
+flat so the reading column keeps one plane.
+
 ## Components
 
 - The header contains project/session navigation, a compact center notification, new conversation, and more actions. Its center stays between the side controls without overlap and can grow with system text scaling. The transcript scrolls behind it up to the screen's top edge. A clipped backdrop blur fades out below the controls and passes through touch events; controls remain inside the system safe area. Initial transcript padding follows the measured navigation and permission-status height. Search targets stop below that overlay.
