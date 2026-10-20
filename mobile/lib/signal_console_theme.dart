@@ -602,11 +602,6 @@ class AppElevation {
     ),
   ];
 
-  /// Tone a floating surface leaves on the content scrolling beneath it. Used
-  /// as a gradient stop rather than a box shadow, so the header casts down.
-  static Color castShadow({BuildContext? context, double alpha = 0.06}) =>
-      _shadowColor(context, alpha);
-
   static List<BoxShadow> softCard({
     BuildContext? context,
     double alpha = 0.05,

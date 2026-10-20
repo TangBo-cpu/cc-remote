@@ -87,16 +87,6 @@ void main() {
       expect(dark[i].color.a, greaterThan(0));
     }
   });
-
-  group('castShadow', () {
-    test('fades to fully transparent so the band has no hard edge', () {
-      final strong = AppElevation.castShadow(alpha: 0.055);
-      final none = AppElevation.castShadow(alpha: 0);
-      expect(strong.a, greaterThan(0));
-      expect(none.a, 0);
-    });
-  });
-
   group('unchanged quiet surfaces', () {
     test('bubbles still carry no shadow', () {
       expect(AppElevation.softBubble(), isEmpty);

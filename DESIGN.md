@@ -44,10 +44,11 @@ Surfaces that float above the page carry a three-layer shadow: a tight contact
 edge, a directed blur, and a wide ambient wash. Sheets and dialogs share
 `AppElevation.overlay`; cards use `AppElevation.softCard`. Negative spread
 keeps the wide layer from smearing past the surface, and every layer stays
-below 0.1 alpha. The chat header casts a short gradient band instead of a box
-shadow, because it sits over a live scrolling list. Transcript content carries
-no shadow: user bubbles, assistant replies, reasoning, and tool groups stay
-flat so the reading column keeps one plane.
+below 0.1 alpha. The chat header casts no shadow: a clipped backdrop blur
+carries a soft gradient fade, so scrolling text passes into haze instead of
+under a painted band. Transcript content carries no shadow either: user
+bubbles, assistant replies, reasoning, and tool groups stay flat so the
+reading column keeps one plane.
 
 ## Components
 

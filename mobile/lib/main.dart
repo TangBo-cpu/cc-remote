@@ -4505,7 +4505,9 @@ class ChatScreen extends StatelessWidget {
         ),
         child: _ChatOverlayLayout(
           initialTopExtent: media.padding.top + AppSizes.sessionHeader + 20,
-          blurExtent: media.padding.top + AppSizes.sessionHeader + 32,
+          // Taller than the header so the frost has room to ease out instead
+          // of ending on a visible line just under the controls.
+          blurExtent: media.padding.top + AppSizes.sessionHeader + 72,
           topOverlay: Builder(
             builder: (context) => MediaQuery(
               data: MediaQuery.of(
@@ -4669,16 +4671,6 @@ class _ChatOverlayLayoutState extends State<_ChatOverlayLayout> {
           height: widget.blurExtent,
           child: const RepaintBoundary(child: _ChatTopBackdrop()),
         ),
-        // The header casts onto the transcript: a short gradient band that
-        // starts where the backdrop blur has already faded out, so the two
-        // never stack into a darker seam over the scrolling text.
-        Positioned(
-          top: widget.blurExtent,
-          left: 0,
-          right: 0,
-          height: 20,
-          child: const RepaintBoundary(child: _ChatTopCastShadow()),
-        ),
         Positioned(
           top: 0,
           left: 0,
@@ -4703,10 +4695,14 @@ class _ChatOverlayLayoutState extends State<_ChatOverlayLayout> {
 class _ChatTopBackdrop extends StatelessWidget {
   const _ChatTopBackdrop();
 
-  static final _filter = ui.ImageFilter.blur(sigmaX: 12, sigmaY: 12);
+  // The blur carries the effect; the tint only lifts contrast a little. A
+  // heavier tint reads as a painted panel instead of frosted glass.
+  static final _filter = ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14);
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    final dark = palette.brightness == Brightness.dark;
     return ExcludeSemantics(
       child: IgnorePointer(
         child: ClipRect(
@@ -4715,14 +4711,17 @@ class _ChatTopBackdrop extends StatelessWidget {
             shaderCallback: (bounds) => const LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
+              // A short hold covers the status bar, then the frost eases out
+              // across the rest of the band. No flat step, so the transcript
+              // dissolves into the header instead of meeting a visible edge.
               colors: [Colors.white, Colors.white, Colors.transparent],
-              stops: [0, 0.55, 1],
+              stops: [0, 0.2, 1],
             ).createShader(bounds),
             child: BackdropFilter(
               filter: _filter,
               blendMode: BlendMode.src,
               child: ColoredBox(
-                color: AppPalette.of(context).paper.withValues(alpha: 0.36),
+                color: palette.paper.withValues(alpha: dark ? 0.28 : 0.16),
                 child: const SizedBox.expand(),
               ),
             ),
@@ -4733,33 +4732,6 @@ class _ChatTopBackdrop extends StatelessWidget {
   }
 }
 
-/// Depth band under the header. A gradient rather than a BoxShadow: the header
-/// sits over a live scrolling list, and one static gradient costs no per-frame
-/// blur as content moves beneath it.
-class _ChatTopCastShadow extends StatelessWidget {
-  const _ChatTopCastShadow();
-
-  @override
-  Widget build(BuildContext context) {
-    return ExcludeSemantics(
-      child: IgnorePointer(
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [
-                AppElevation.castShadow(context: context, alpha: 0.055),
-                AppElevation.castShadow(context: context, alpha: 0),
-              ],
-            ),
-          ),
-          child: const SizedBox.expand(),
-        ),
-      ),
-    );
-  }
-}
 class ConnectionHeader extends StatelessWidget {
   const ConnectionHeader({
     super.key,
