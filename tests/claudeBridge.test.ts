@@ -103,6 +103,38 @@ test('ClaudeBridge preserves stale-session stderr emitted before initialization'
   }
 });
 
+for (const mode of ['compact-success', 'compact-failed', 'compact-empty']) {
+  test('ClaudeBridge reports native compact outcomes once (' + mode + ')', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'cc-remote-claude-compact-'));
+    const bridge = new ClaudeBridge({
+      claudeBin: process.execPath,
+      claudeArgs: [join(process.cwd(), 'tests', 'fixtures', 'fakeClaude.mjs'), '--fake-mode=' + mode],
+      workspaceDir: dir,
+    });
+    const text: string[] = [];
+    const callbacks = { permissionMode: 'manual' as const,
+      onEvent: () => {}, onText: (value: string) => text.push(value), onSessionId: () => {} };
+    try {
+      const result = await bridge.run({ prompt: '/compact Keep the test code.', ...callbacks });
+      if (mode === 'compact-success') {
+        assert.equal(result.exitCode, 0);
+        assert.deepEqual(text, ['上下文压缩完成。']);
+      } else {
+        assert.equal(result.exitCode, 1);
+        assert.match(result.stderr, mode === 'compact-empty' ? /No messages to compact/ : /compaction_failed/);
+        assert.deepEqual(text, []);
+      }
+      text.length = 0;
+      assert.equal((await bridge.run({ prompt: 'continue', ...callbacks })).exitCode, 0);
+      assert.deepEqual(text, ['fake reply']);
+      assert.equal(bridge.isRunning(), false);
+    } finally {
+      bridge.close();
+      await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  });
+}
+
 test('Claude model overrides reject unsafe CLI values', () => {
   assert.equal(normalizeClaudeModel(' claude-opus-4-8 '), 'claude-opus-4-8');
   assert.equal(normalizeClaudeModel(undefined), undefined);

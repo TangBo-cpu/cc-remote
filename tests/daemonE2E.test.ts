@@ -88,6 +88,70 @@ test('session search requires bearer authentication', async () => {
   assert.equal(response.status, 401);
 });
 
+test('session center APIs persist pin and restore, broadcast catalogs and filter search', async () => {
+  const instance = await startDaemon();
+  let socket: WebSocket | undefined;
+  try {
+    assert.equal((await fetch(instance.baseUrl + '/api/sessions/missing/restore', {
+      method: 'POST', headers: { Origin: instance.baseUrl },
+    })).status, 401);
+    const paired = await fetch(instance.baseUrl + '/api/pair', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: instance.baseUrl },
+      body: JSON.stringify({ nonce: instance.nonce }),
+    });
+    const { token } = await paired.json() as { token: string };
+    const headers = { Authorization: 'Bearer ' + token, Origin: instance.baseUrl, 'Content-Type': 'application/json' };
+    const status = await fetch(instance.baseUrl + '/api/status', { headers });
+    const initial = await status.json() as { activeProjectId: string; activeSessionId: string };
+    const created = await fetch(instance.baseUrl + '/api/projects/' + initial.activeProjectId + '/sessions', {
+      method: 'POST', headers, body: JSON.stringify({ engine: 'codex' }),
+    });
+    assert.equal(created.status, 201);
+    const { sessionId } = await created.json() as { sessionId: string };
+    socket = new WebSocket(instance.baseUrl.replace('http:', 'ws:') + '/ws', { headers: { Origin: instance.baseUrl } });
+    await once(socket, 'open');
+    socket.send(JSON.stringify({ type: 'auth', token }));
+    await waitForWsMessage(socket, message => message.type === 'status');
+    const catalogUpdate = waitForWsMessage(socket, message => message.type === 'catalog'
+      && Array.isArray(message.sessions) && message.sessions.some((item: any) => item.id === sessionId && item.pinned));
+    const pinned = await fetch(instance.baseUrl + '/api/sessions/' + sessionId + '/pin', {
+      method: 'POST', headers, body: JSON.stringify({ pinned: true }),
+    });
+    assert.equal(pinned.status, 200);
+    await catalogUpdate;
+    assert.equal((await fetch(instance.baseUrl + '/api/sessions/' + sessionId + '/pin', {
+      method: 'POST', headers, body: JSON.stringify({ pinned: 'true' }),
+    })).status, 400);
+    assert.equal((await fetch(instance.baseUrl + '/api/sessions/' + sessionId + '/title', {
+      method: 'POST', headers, body: JSON.stringify({ title: 'needle session' }),
+    })).status, 200);
+    assert.equal((await fetch(instance.baseUrl + '/api/sessions/' + sessionId + '/archive', {
+      method: 'POST', headers,
+    })).status, 200);
+    const search = await fetch(instance.baseUrl + '/api/search/sessions?q=needle&engine=codex&archived=true&projectId='
+      + initial.activeProjectId + '&limit=1', { headers });
+    assert.equal(search.status, 200);
+    const { results } = await search.json() as { results: Array<{ sessionId: string }> };
+    assert.equal(results[0]?.sessionId, sessionId);
+    assert.equal((await fetch(instance.baseUrl + '/api/search/sessions?q=needle&engine=invalid', { headers })).status, 400);
+    assert.equal((await fetch(instance.baseUrl + '/api/search/sessions?q=needle&archived=invalid', { headers })).status, 400);
+    const restored = await fetch(instance.baseUrl + '/api/sessions/' + sessionId + '/restore', { method: 'POST', headers });
+    assert.equal(restored.status, 200);
+    const catalog = await restored.json() as { activeSessionId: string; sessions: Array<{ id: string; pinned: boolean; archived: boolean }> };
+    assert.equal(catalog.activeSessionId, initial.activeSessionId);
+    assert.equal(catalog.sessions.find(item => item.id === sessionId)?.pinned, true);
+    assert.equal(catalog.sessions.find(item => item.id === sessionId)?.archived, false);
+  } finally {
+    socket?.terminate();
+    instance.child.kill();
+    await Promise.race([
+      instance.child.exitCode === null ? once(instance.child, 'exit') : Promise.resolve(),
+      new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
+    ]);
+    await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
 test('logout revokes the old Bearer token and closes its WebSocket', async () => {
   const pairResponse = await fetch(`${daemon.baseUrl}/api/pair`, {
     method: 'POST',
@@ -239,6 +303,69 @@ test('daemon retries a prompt without a stale Claude session id', async () => {
     await rm(retryDaemon.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   }
 });
+
+for (const mode of ['compact-success', 'compact-failed', 'compact-empty']) {
+  test('Claude compact reports its outcome and allows the next prompt (' + mode + ')', async () => {
+    const nativeId = randomUUID();
+    const instance = await startDaemon({
+      claudeBin: process.execPath,
+      claudeArgs: root => [resolve('tests/fixtures/fakeClaude.mjs'), '--fake-mode=' + mode,
+        '--fake-session=' + nativeId,
+        '--fake-history=' + join(root, '.claude', 'projects', 'fixture', nativeId + '.jsonl')],
+    });
+    let socket: WebSocket | undefined;
+    try {
+      const paired = await fetch(instance.baseUrl + '/api/pair', {
+        method: 'POST', headers: { Origin: instance.baseUrl, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nonce: instance.nonce }),
+      });
+      const { token } = await paired.json() as { token: string };
+      const headers = { Origin: instance.baseUrl, Authorization: 'Bearer ' + token };
+      const status = await fetch(instance.baseUrl + '/api/status', { headers });
+      const { activeSessionId: sessionId } = await status.json() as { activeSessionId: string };
+      socket = new WebSocket(instance.baseUrl.replace('http:', 'ws:') + '/ws', {
+        headers: { Origin: instance.baseUrl },
+      });
+      await once(socket, 'open');
+      const authenticated = waitForWsMessage(socket, message => message.type === 'status' && message.authenticated === true);
+      socket.send(JSON.stringify({ type: 'auth', token }));
+      await authenticated;
+      const run = async (text: string) => {
+        const result = waitForPromptResult(socket!, sessionId);
+        socket!.send(JSON.stringify({ type: 'prompt', sessionId, text }));
+        return result;
+      };
+      if (mode !== 'compact-empty') assert.equal((await run('before compact')).text, 'fake reply');
+      const received: Array<Record<string, unknown>> = [];
+      socket.on('message', data => received.push(JSON.parse(data.toString())));
+      const completed = waitForWsMessage(socket, message => message.type === 'done' && message.sessionId === sessionId);
+      socket.send(JSON.stringify({ type: 'prompt', sessionId, text: '/compact' }));
+      const done = await completed;
+      assert.equal(done.exitCode, mode === 'compact-success' ? 0 : 1);
+      assert.equal(received.filter(message => message.type === 'error').length,
+        mode === 'compact-success' ? 0 : 1);
+      assert.equal(received.filter(message => message.type === 'text')
+        .map(message => message.text).join(''), mode === 'compact-success' ? '上下文压缩完成。' : '');
+      assert.equal((await run('after compact')).text, 'fake reply');
+      const current = await fetch(instance.baseUrl + '/api/sessions/' + sessionId, { headers });
+      const { transcript } = await current.json() as { transcript: {
+        messages: Array<{ role: string; text: string; nativeLocalOnly?: boolean }>;
+      } };
+      assert.equal(transcript.messages.find(message => message.text === '/compact')?.nativeLocalOnly, true);
+      assert.equal(transcript.messages.some(message => message.text.includes('本轮没有返回文本')), false);
+      assert.equal(transcript.messages.filter(message => mode === 'compact-success'
+        ? message.text === '上下文压缩完成。' : message.role === 'system' && message.text.startsWith('错误：')).length, 1);
+    } finally {
+      socket?.close();
+      instance.child.kill();
+      await Promise.race([
+        instance.child.exitCode === null ? once(instance.child, 'exit') : Promise.resolve(),
+        new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
+      ]);
+      await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  });
+}
 
 test('daemon persists and resumes a Codex session without invoking the Claude bridge', async () => {
   const claudeFixture = resolve('tests/fixtures/fakeClaude.mjs');
@@ -444,10 +571,10 @@ test('daemon persists and resumes a Codex session without invoking the Claude br
           sandbox?: string;
         };
       });
-    assert.deepEqual(records.filter(record => record.kind === 'process'), Array.from({ length: 2 }, () => ({
+    assert.deepEqual(records.filter(record => record.kind === 'process'), [selectedDirectory, codexDaemon.root].map(cwd => ({
       kind: 'process',
       args: ['app-server'],
-      cwd: selectedDirectory,
+      cwd,
     })));
     const requests = records.filter(record => record.kind === 'request');
     assert.equal(requests.filter(record => record.method === 'initialize').length, 2);
@@ -494,7 +621,9 @@ test('daemon persists and resumes a Codex session without invoking the Claude br
 test('Codex catalogs are authenticated, scoped to the session, and usable by prompts', async () => {
   const catalogDaemon = await startDaemon({
     codexBin: process.execPath,
-    codexArgs: root => [resolve('tests/fixtures/fakeCodex.mjs'), `--fake-log=${join(root, 'codex-catalog.jsonl')}`],
+    codexArgs: root => [resolve('tests/fixtures/fakeCodex.mjs'),
+      `--fake-log=${join(root, 'codex-catalog.jsonl')}`,
+      `--fake-history=${join(root, 'codex-native.json')}`],
   });
   let socket: WebSocket | undefined;
   try {
@@ -542,6 +671,12 @@ test('Codex catalogs are authenticated, scoped to the session, and usable by pro
       model: 'gpt-test-codex', text: '/inspect check tests',
     }));
     assert.equal((await resultPromise).text, 'fake codex reply');
+    const historyPath = join(catalogDaemon.root, 'codex-native.json');
+    const history = JSON.parse(await readFile(historyPath, 'utf8'));
+    history.turns[0].items.splice(1, 0, {
+      id: 'call-question', type: 'agentMessage', text: 'Which files should I inspect?',
+    });
+    await writeFile(historyPath, JSON.stringify(history));
     const compactPromise = waitForPromptResult(socket, sessionId);
     socket.send(JSON.stringify({
       type: 'prompt', promptId: 'catalog-compact', sessionId, engine: 'codex',
@@ -554,8 +689,12 @@ test('Codex catalogs are authenticated, scoped to the session, and usable by pro
       model: 'gpt-test-codex', text: '/review',
     }));
     assert.equal((await reviewPromise).text, 'native review result');
+    const session = await fetch(`${catalogDaemon.baseUrl}/api/sessions/${sessionId}`, { headers });
+    const { transcript } = await session.json() as { transcript: { messages: Array<{ text: string }> } };
+    assert.equal(transcript.messages.filter(message => message.text === 'Which files should I inspect?').length, 1);
+    assert.equal(transcript.messages.filter(message => message.text === '上下文压缩完成。').length, 1);
     const records = (await readFile(join(catalogDaemon.root, 'codex-catalog.jsonl'), 'utf8')).trim().split(/\r?\n/).map(line => JSON.parse(line));
-    assert.equal(records.filter(item => item.kind === 'process').length, 2);
+    assert.equal(records.filter(item => item.kind === 'process').length, 3);
     const turn = records.find(item => item.method === 'turn/start');
     assert.equal(turn.params.model, 'gpt-test-codex');
     assert.equal(turn.params.input[0].text, '$inspect check tests');
@@ -571,6 +710,95 @@ test('Codex catalogs are authenticated, scoped to the session, and usable by pro
       new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
     ]);
     await rm(catalogDaemon.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
+test('Codex history stays warm when switching conversations across folders', async t => {
+  const instance = await startDaemon({
+    codexBin: process.execPath,
+    codexArgs: root => [
+      resolve('tests/fixtures/fakeCodex.mjs'),
+      '--fake-log=' + join(root, 'codex-switch.jsonl'),
+      '--fake-initializeDelay=500',
+      '--fake-record-cwd=1',
+    ],
+  });
+  let socket: WebSocket | undefined;
+  try {
+    const paired = await fetch(instance.baseUrl + '/api/pair', {
+      method: 'POST',
+      headers: { Origin: instance.baseUrl, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nonce: instance.nonce }),
+    });
+    const { token } = await paired.json() as { token: string };
+    const headers = {
+      Origin: instance.baseUrl, Authorization: 'Bearer ' + token, 'Content-Type': 'application/json',
+    };
+    const sessions: string[] = [];
+    for (const name of ['first', 'second']) {
+      const path = join(instance.root, name);
+      await mkdir(path);
+      const created = await fetch(instance.baseUrl + '/api/projects/open-directory', {
+        method: 'POST', headers, body: JSON.stringify({ path, engine: 'codex' }),
+      });
+      assert.equal(created.status, 201);
+      const { sessionId } = await created.json() as { sessionId: string };
+      sessions.push(sessionId);
+      if (!socket) {
+        socket = new WebSocket(instance.baseUrl.replace('http:', 'ws:') + '/ws', {
+          headers: { Origin: instance.baseUrl },
+        });
+        await once(socket, 'open');
+        const authenticated = waitForWsMessage(socket, message => message.type === 'transcript_snapshot');
+        socket.send(JSON.stringify({ type: 'auth', token }));
+        await authenticated;
+      }
+      const result = waitForPromptResult(socket, sessionId);
+      socket.send(JSON.stringify({ type: 'prompt', sessionId, engine: 'codex', text: name }));
+      assert.equal((await result).text, 'fake codex reply');
+    }
+
+    const select = async (sessionId: string, http = false) => {
+      const snapshot = waitForWsMessage(socket!, message =>
+        message.type === 'transcript_snapshot' && message.sessionId === sessionId);
+      const started = performance.now();
+      if (http) {
+        const response = await fetch(instance.baseUrl + '/api/sessions/' + sessionId + '/select', {
+          method: 'POST', headers,
+        });
+        assert.equal(response.status, 200);
+      } else {
+        socket!.send(JSON.stringify({ type: 'select_session', sessionId }));
+      }
+      const selected = await snapshot;
+      const expectedPrompt = sessionId === sessions[0] ? 'first' : 'second';
+      assert.deepEqual(
+        (selected.messages as Array<{ role: string; text: string }>)
+          .filter(message => message.role === 'user').map(message => message.text),
+        [expectedPrompt],
+      );
+      return performance.now() - started;
+    };
+    const processes = async () => (await readFile(join(instance.root, 'codex-switch.jsonl'), 'utf8'))
+      .trim().split('\n').map(line => JSON.parse(line)).filter(entry => entry.kind === 'process');
+
+    const cold = await select(sessions[0]);
+    const before = (await processes()).length;
+    const elapsed: number[] = [];
+    for (let index = 0; index < 4; index++) {
+      elapsed.push(await select(sessions[(index + 1) % 2], index % 2 === 1));
+    }
+    t.diagnostic('Cold history: ' + cold.toFixed(0) + ' ms; cross-folder switches: '
+      + elapsed.map(value => value.toFixed(0)).join(', ') + ' ms');
+    assert.equal((await processes()).length, before, 'switching folders must reuse the history reader');
+  } finally {
+    socket?.terminate();
+    instance.child.kill();
+    await Promise.race([
+      instance.child.exitCode === null ? once(instance.child, 'exit') : Promise.resolve(),
+      new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
+    ]);
+    await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   }
 });
 
@@ -728,7 +956,7 @@ for (const engine of ['claude', 'codex'] as const) {
       const catalog = JSON.parse(await readFile(join(instance.root, '.data', 'projects.json'), 'utf8'));
       assert.equal(catalog.activeSessionId, nextSession.sessionId);
       const deleted = await deleteRequest;
-      assert.equal(deleted.status, 200);
+      assert.equal(deleted.status, 200, await deleted.text());
       await appendDesktop('after delete', 'must not resurrect');
       const missing = await fetch(instance.baseUrl + '/api/sessions/' + sessionId, { headers });
       assert.equal(missing.status, 404);
@@ -744,6 +972,85 @@ for (const engine of ['claude', 'codex'] as const) {
     }
   });
 }
+
+test('reply images are pushed with their message, require session auth, and survive native refresh', async () => {
+  const instance = await startDaemon({
+    codexBin: process.execPath,
+    codexArgs: root => [resolve('tests/fixtures/fakeCodex.mjs'),
+      '--fake-reply-file=' + join(root, 'reply.md'),
+      '--fake-history=' + join(root, 'native.json')],
+  });
+  let socket: WebSocket | undefined;
+  try {
+    const imageBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvGQAAAAASUVORK5CYII=', 'base64');
+    const imagePath = join(instance.root, 'preview 1.png');
+    const text = `截图如下：\n\n![预览](<${imagePath}>)`;
+    await writeFile(imagePath, imageBytes);
+    await writeFile(join(instance.root, 'reply.md'), text);
+    const pair = await fetch(instance.baseUrl + '/api/pair', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: instance.baseUrl },
+      body: JSON.stringify({ nonce: instance.nonce }),
+    });
+    const { token } = await pair.json() as { token: string };
+    const headers = { Authorization: 'Bearer ' + token, Origin: instance.baseUrl, 'Content-Type': 'application/json' };
+    const status = await fetch(instance.baseUrl + '/api/status', { headers });
+    const { activeProjectId, activeSessionId: otherSessionId } = await status.json() as {
+      activeProjectId: string; activeSessionId: string;
+    };
+    const created = await fetch(instance.baseUrl + '/api/projects/' + activeProjectId + '/sessions', {
+      method: 'POST', headers, body: JSON.stringify({ engine: 'codex' }),
+    });
+    const { sessionId } = await created.json() as { sessionId: string };
+    socket = new WebSocket(instance.baseUrl.replace('http:', 'ws:') + '/ws', { headers: { Origin: instance.baseUrl } });
+    await once(socket, 'open');
+    const authenticated = waitForWsMessage(socket, message => message.type === 'status');
+    socket.send(JSON.stringify({ type: 'auth', token }));
+    await authenticated;
+    const snapshotPromise = waitForWsMessage(socket, message => message.type === 'transcript_snapshot'
+      && (message.messages as Array<any>)?.some(item => item.role === 'assistant' && item.attachments?.length));
+    const promptResult = waitForPromptResult(socket, sessionId);
+    socket.send(JSON.stringify({ type: 'prompt', promptId: 'reply-image', sessionId, engine: 'codex', text: '生成截图' }));
+    assert.equal((await promptResult).text, text);
+    const snapshot = await snapshotPromise;
+    const reply = (snapshot.messages as Array<any>).find(item => item.role === 'assistant');
+    assert.equal(reply.text, text);
+    assert.equal(reply.attachments.length, 1);
+    const imageId = reply.attachments[0].id;
+    const contentUrl = instance.baseUrl + `/api/sessions/${sessionId}/attachments/${imageId}/content`;
+    assert.equal((await fetch(contentUrl)).status, 401);
+    const downloaded = await fetch(contentUrl, { headers });
+    assert.equal(downloaded.status, 200);
+    assert.equal(downloaded.headers.get('content-type'), 'image/png');
+    assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), imageBytes);
+    assert.equal((await fetch(instance.baseUrl + `/api/sessions/${otherSessionId}/attachments/${imageId}/content`, { headers })).status, 404);
+    await rm(imagePath);
+    assert.equal((await fetch(instance.baseUrl + `/api/sessions/${sessionId}/select`, { method: 'POST', headers })).status, 200);
+    const refreshed = await fetch(instance.baseUrl + `/api/sessions/${sessionId}`, { headers });
+    const saved = await refreshed.json() as { transcript: { messages: Array<any> } };
+    assert.deepEqual(saved.transcript.messages.find(item => item.role === 'assistant')?.attachments, reply.attachments);
+    assert.equal((await fetch(contentUrl, { headers })).status, 200);
+
+    await writeFile(join(instance.root, 'desktop.png'), imageBytes);
+    const native = JSON.parse(await readFile(join(instance.root, 'native.json'), 'utf8'));
+    native.turns.push({ id: 'desktop-turn', status: 'completed', itemsView: 'full', items: [
+      { id: 'desktop-user', type: 'userMessage', content: [{ type: 'text', text: '电脑端生成图片' }] },
+      { id: 'desktop-reply', type: 'agentMessage', text: '[图片](desktop.png)' },
+    ] });
+    await writeFile(join(instance.root, 'native.json'), JSON.stringify(native));
+    assert.equal((await fetch(instance.baseUrl + `/api/sessions/${sessionId}/select`, { method: 'POST', headers })).status, 200);
+    const importedResponse = await fetch(instance.baseUrl + `/api/sessions/${sessionId}`, { headers });
+    const imported = await importedResponse.json() as { transcript: { messages: Array<any> } };
+    assert.equal(imported.transcript.messages.at(-1)?.attachments?.[0].name, 'desktop.png');
+  } finally {
+    socket?.terminate();
+    instance.child.kill();
+    await Promise.race([
+      instance.child.exitCode === null ? once(instance.child, 'exit') : Promise.resolve(),
+      new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
+    ]);
+    await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
 
 async function startDaemon(options: {
   claudeBin?: string;
@@ -785,6 +1092,7 @@ async function startDaemon(options: {
     cwd: root,
     env: {
       ...process.env,
+      CC_REMOTE_DESKTOP: '0',
       HOST: '127.0.0.1',
       PORT: String(port),
       PUBLIC_ORIGIN: baseUrl,

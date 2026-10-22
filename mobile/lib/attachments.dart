@@ -33,12 +33,14 @@ class RemoteAttachment {
     required this.name,
     required this.mimeType,
     required this.size,
+    this.source,
   });
 
   final String id;
   final String name;
   final String mimeType;
   final int size;
+  final String? source;
 
   bool get isImage => mimeType.startsWith('image/');
 
@@ -52,6 +54,7 @@ class RemoteAttachment {
     'name': name,
     'mimeType': mimeType,
     'size': size,
+    if (source != null) 'source': source,
   };
 
   static RemoteAttachment fromJson(Map<String, dynamic> json) {
@@ -70,6 +73,7 @@ class RemoteAttachment {
       name: name,
       mimeType: mimeType,
       size: size.toInt(),
+      source: json['source'] is String ? json['source'] as String : null,
     );
   }
 }

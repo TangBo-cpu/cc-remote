@@ -13,6 +13,7 @@ class MessageMarkdownBody extends MarkdownBody {
     super.softLineBreak,
     super.onTapLink,
     super.builders,
+    super.imageBuilder,
   });
 
   @override

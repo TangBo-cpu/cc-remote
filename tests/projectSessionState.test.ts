@@ -5,6 +5,94 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createProjectSessionState } from '../src/projectSessionState.js';
 
+test('session metadata survives reload without changing selection or message history', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-session-metadata-'));
+  const options = { dataDir: join(dir, 'data'), initialWorkspace: dir };
+  try {
+    const state = await createProjectSessionState(options);
+    const original = state.active();
+    original.transcript.beginPrompt('question', 'manual');
+    original.transcript.appendText('  meaningful answer\nwith context  ');
+    await original.transcript.finishDone();
+    const other = await state.createSession(original.project.id);
+    await state.setSessionPinned(original.session.id, true);
+    const summary = state.catalog().sessions.find(item => item.id === original.session.id)!;
+    assert.equal(summary.preview, 'meaningful answer with context');
+    assert.equal(summary.pinned, true);
+    assert.equal(summary.needsAttention, false);
+    original.transcript.addPermission({ requestId: 'request', toolName: 'Bash', input: {}, detail: 'check', description: 'Check' });
+    assert.equal(state.catalog().sessions.find(item => item.id === original.session.id)?.needsAttention, true);
+    original.transcript.removePermission('request');
+    await state.archiveSession(original.session.id);
+    await state.restoreSession(original.session.id);
+    assert.equal(state.active().session.id, other.session.id);
+    assert.equal(state.getSession(original.session.id)?.transcript.snapshot().messages.length, 2);
+    await state.flush();
+    const restored = await createProjectSessionState(options);
+    const item = restored.catalog().sessions.find(session => session.id === original.session.id)!;
+    assert.equal(item.archived, false);
+    assert.equal(item.pinned, true);
+    assert.equal(item.preview, summary.preview);
+    assert.equal(restored.active().session.id, other.session.id);
+    await restored.setSessionPinned(original.session.id, false);
+    assert.equal(restored.catalog().sessions.find(session => session.id === original.session.id)?.pinned, false);
+    await assert.rejects(restored.restoreSession('missing'), /session_not_found/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('search applies project, engine and archive filters before its limit', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-filtered-search-'));
+  try {
+    const state = await createProjectSessionState({ dataDir: join(dir, 'data'), initialWorkspace: dir });
+    const initial = state.active();
+    const target = await state.createSession(initial.project.id, 'needle target', 'codex');
+    await state.archiveSession(target.session.id);
+    await mkdir(join(dir, 'other'));
+    await state.registerProject(join(dir, 'other'));
+    await state.createSession(state.active().project.id, 'needle newer', 'claude');
+    const results = state.searchSessions('needle', 1, {
+      projectId: initial.project.id, engine: 'codex', archived: true,
+    });
+    assert.equal(results.length, 1);
+    assert.equal(results[0].sessionId, target.session.id);
+    assert.deepEqual(state.searchSessions('needle', 1, { engine: 'codex', archived: false }), []);
+    assert.deepEqual(state.searchSessions('needle', 1, { projectId: 'missing' }), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('failed archive, restore and pin writes preserve the catalog and allow retry', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-metadata-failure-'));
+  const options = { dataDir: join(dir, 'data'), initialWorkspace: dir };
+  const path = join(options.dataDir, 'projects.json');
+  try {
+    const state = await createProjectSessionState(options);
+    const target = state.active();
+    await state.createSession(target.project.id);
+    for (const action of ['archive', 'restore', 'pin'] as const) {
+      if (action === 'restore') await state.archiveSession(target.session.id);
+      const before = state.catalog();
+      await rename(path, path + '.saved');
+      await mkdir(path);
+      const mutate = () => action === 'archive' ? state.archiveSession(target.session.id)
+        : action === 'restore' ? state.restoreSession(target.session.id)
+        : state.setSessionPinned(target.session.id, true);
+      await assert.rejects(mutate());
+      assert.deepEqual(state.catalog(), before);
+      await rm(path, { recursive: true });
+      await rename(path + '.saved', path);
+      await mutate();
+      await state.flush();
+      if (action === 'archive') await state.restoreSession(target.session.id);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('failed session creation preserves the active session and can be retried', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-remote-create-failure-'));
   const options = { dataDir: join(dir, 'data'), initialWorkspace: dir };

@@ -4,9 +4,9 @@
 
 扫码配对后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 继续运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v2.0.5](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.5/cc-remote-v2.0.5-android.apk)
+[下载 Android APK · v2.0.11](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.11/cc-remote-v2.0.11-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.5)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.11)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -130,11 +130,11 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v2.0.5 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.5/cc-remote-v2.0.5-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v2.0.11 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.11/cc-remote-v2.0.11-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫启动器窗口或终端中的二维码 → 确认电脑名与服务地址 → 进入控制台
 
-Android App 版本为 v2.0.5。目录选择需要 App 与 daemon 至少为 v2.0.0；本次界面与代码阅读更新可直接覆盖安装，已有 v2.0.0 daemon 无需重启。
+Android App 版本为 v2.0.11。本次回复图片展示与 Codex 跨目录切换优化需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
 
 ### 4. 开始对话
 
@@ -166,6 +166,7 @@ Android App 版本为 v2.0.5。目录选择需要 App 与 daemon 至少为 v2.0.
 - 六种权限模式 + 一次性工具审批（Claude 会话）
 - Codex 沙箱模式三档（read-only / workspace-write / danger-full-access），默认完全访问（danger-full-access）且持续生效，可随时显式切为只读或工作区可写
 - 图片 / 文件附件（每轮最多 5 个，单文件 ≤ 25MB；Codex 会话仅支持图片）
+- 回复中的本地图片链接自动登记为会话附件，手机鉴权下载并在对应回复下方完整展示；支持 PNG、JPEG、WebP 和 GIF，文件须位于当前项目或本会话附件目录
 
 **工作区（只读）**
 
@@ -274,7 +275,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v2.0.5](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.5)**
-APK：[`cc-remote-v2.0.5-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.5/cc-remote-v2.0.5-android.apk)
+当前公开版：**[v2.0.11](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.11)**
+APK：[`cc-remote-v2.0.11-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.11/cc-remote-v2.0.11-android.apk)
 
-v2.0.5 收紧工具调用展开后的间距：正文与工具步骤之间的留白从 14–22dp 收窄到 3–12dp，工具行仍保留 48dp 触控高度。文件类工具记录的标题与详情去重。Android 版本为 `2.0.5+15`，电脑端 package 版本为 `2.0.5`，安装包沿用旧版测试签名，适合个人使用。
+v2.0.11 加入回复图片展示，修复顶部玻璃模糊，并复用 Codex 历史进程以加快跨目录切换。公开源码同步当前会话中心与工作区预览。Android 版本为 `2.0.11+21`，电脑端 package 版本为 `2.0.11`，安装包沿用旧版测试签名，适合个人使用。

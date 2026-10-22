@@ -35,6 +35,8 @@ if (options.mode === 'stale-resume' && resumeIndex >= 0) {
       return;
     }
     if (message.type !== 'user') return;
+    const prompt = message.message.content.map(block => block.text ?? '').join('');
+    const compact = /^\/compact(?:\s|$)/.test(prompt);
     if (options.history) {
       mkdirSync(dirname(options.history), { recursive: true });
       const previous = existsSync(options.history)
@@ -42,11 +44,18 @@ if (options.mode === 'stale-resume' && resumeIndex >= 0) {
         : [];
       const parent = previous.filter(entry => entry.uuid).at(-1)?.uuid ?? null;
       const userId = randomUUID();
-      const entries = [
+      const entries = (compact ? [
+        { type: 'user', uuid: userId, parentUuid: parent,
+          message: { role: 'user', content: '<command-name>/compact</command-name>\n<command-args></command-args>' } },
+        options.mode === 'compact-failed' || options.mode === 'compact-empty'
+          ? { type: 'system', subtype: 'local_command', uuid: randomUUID(), parentUuid: userId }
+          : { type: 'user', uuid: randomUUID(), parentUuid: userId,
+              message: { role: 'user', content: '<local-command-stdout>Compacted </local-command-stdout>' } },
+      ] : [
         { type: 'user', uuid: userId, parentUuid: parent, message: message.message },
         { type: 'assistant', uuid: randomUUID(), parentUuid: userId,
           message: { role: 'assistant', content: [{ type: 'text', text: 'fake reply' }] } },
-      ].map(entry => ({ ...entry, sessionId: options.session, entrypoint: 'sdk-cli' }));
+      ]).map(entry => ({ ...entry, sessionId: options.session, entrypoint: 'sdk-cli' }));
       appendFileSync(options.history, entries.map(entry => JSON.stringify(entry)).join('\n') + '\n');
     }
 
@@ -55,6 +64,27 @@ if (options.mode === 'stale-resume' && resumeIndex >= 0) {
       subtype: 'init',
       session_id: options.session || 'fake-session-id',
     }) + '\n');
+
+    if (compact) {
+      const failed = options.mode === 'compact-failed' || options.mode === 'compact-empty';
+      const text = options.mode === 'compact-empty'
+        ? 'Error: No messages to compact'
+        : 'Error during compaction: API Error: 400 compaction_failed';
+      const events = [
+        ...(options.mode === 'compact-empty' ? [] : [
+          { type: 'system', subtype: 'status', status: 'compacting' },
+          { type: 'system', subtype: 'status', status: null, compact_result: failed ? 'failed' : 'success' },
+        ]),
+        ...(failed ? [{
+          type: 'assistant', local_command_outcome: { kind: 'failed' },
+          message: { content: [{ type: 'text', text }] },
+        }] : [{ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual' } }]),
+        { type: 'result', is_error: false, local_command: 'compact',
+          result: options.mode === 'compact-failed' ? text : '' },
+      ];
+      for (const event of events) process.stdout.write(JSON.stringify(event) + '\n');
+      return;
+    }
 
     if (options.mode === 'hang-tree') {
       const descendant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
@@ -71,6 +101,6 @@ if (options.mode === 'stale-resume' && resumeIndex >= 0) {
       type: 'assistant',
       message: { content: [{ type: 'text', text: 'fake reply' }] },
     }) + '\n');
-    process.stdout.write(JSON.stringify({ type: 'result', is_error: false }) + '\n');
+    process.stdout.write(JSON.stringify({ type: 'result', is_error: false, result: 'fake reply' }) + '\n');
   });
 }

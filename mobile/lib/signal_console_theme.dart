@@ -783,7 +783,8 @@ class AppLiquidGlass {
         width: focused ? 2 : 0.5,
       ),
       borderRadius: borderRadius,
-      boxShadow: shadow ??
+      boxShadow:
+          shadow ??
           (elevated
               ? AppElevation.liquidStrong(context: context, pressed: pressed)
               : const []),

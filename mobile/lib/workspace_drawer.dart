@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:http/http.dart' as http;
 
@@ -19,6 +20,25 @@ Future<void> showWorkspaceDrawer(
   int initialTab = 0,
   String? initialPath,
 }) {
+  if (initialTab == 1 || (initialPath?.trim().isNotEmpty ?? false)) {
+    return Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          body: SafeArea(
+            child: WorkspaceDrawer(
+              origin: origin,
+              token: token,
+              workspaceName: workspaceName,
+              demoMode: demoMode,
+              initialTab: initialTab,
+              initialPath: initialPath,
+              fullScreen: true,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
   final reduceMotion = MediaQuery.disableAnimationsOf(context);
   return showGeneralDialog<void>(
     context: context,
@@ -78,6 +98,7 @@ class WorkspaceDrawer extends StatefulWidget {
     this.api,
     this.initialTab = 0,
     this.initialPath,
+    this.fullScreen = false,
   });
 
   final Uri origin;
@@ -87,6 +108,7 @@ class WorkspaceDrawer extends StatefulWidget {
   final WorkspaceApi? api;
   final int initialTab;
   final String? initialPath;
+  final bool fullScreen;
 
   @override
   State<WorkspaceDrawer> createState() => _WorkspaceDrawerState();
@@ -201,6 +223,22 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
     }
   }
 
+  Future<void> copyDocument() async {
+    final current = document;
+    if (current == null || current.loading || current.failed) return;
+    String message;
+    try {
+      await Clipboard.setData(ClipboardData(text: current.content));
+      message = current.isDiff ? '差异已复制' : '文件内容已复制';
+    } catch (_) {
+      message = '复制失败，请重试';
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
   @override
   Widget build(BuildContext context) {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
@@ -216,11 +254,15 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
     return Material(
       color: Colors.transparent,
       child: Container(
-        margin: const EdgeInsets.all(8),
+        margin: widget.fullScreen ? EdgeInsets.zero : const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: palette.glassStrong,
-          borderRadius: BorderRadius.circular(AppRadii.surface),
-          boxShadow: AppElevation.floatingOverlay(context: context),
+          color: widget.fullScreen ? palette.surface : palette.glassStrong,
+          borderRadius: widget.fullScreen
+              ? BorderRadius.zero
+              : BorderRadius.circular(AppRadii.surface),
+          boxShadow: widget.fullScreen
+              ? null
+              : AppElevation.floatingOverlay(context: context),
         ),
         clipBehavior: Clip.antiAlias,
         child: Column(
@@ -343,9 +385,13 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
                     icon: const SmartIcon(LucideIcons.refreshCw),
                     tooltip: '刷新工作区',
                   )
-                : const SizedBox.square(
-                    key: ValueKey('workspace-refresh-spacer'),
-                    dimension: 48,
+                : IconButton(
+                    key: const ValueKey('workspace-document-copy'),
+                    onPressed: document!.loading || document!.failed
+                        ? null
+                        : copyDocument,
+                    icon: const SmartIcon(LucideIcons.copy),
+                    tooltip: document!.isDiff ? '复制差异' : '复制文件内容',
                   ),
           ),
         ],

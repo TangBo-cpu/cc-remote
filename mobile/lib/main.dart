@@ -48,6 +48,8 @@ import 'transcript_motion.dart';
 
 export 'thinking_block.dart';
 
+part 'session_navigator.dart';
+
 void main() {
   const isPreview = bool.fromEnvironment('CC_REMOTE_PREVIEW');
   runApp(CcRemoteApp(enableCamera: !isPreview, demoMode: isPreview));
@@ -334,6 +336,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final TranscriptMotion transcriptMotion = TranscriptMotion();
   final ValueNotifier<int> transcriptRevision = ValueNotifier(0);
   final ValueNotifier<bool> directoryBusy = ValueNotifier(false);
+  final ValueNotifier<RemoteProjectCatalog?> sessionCatalog = ValueNotifier(
+    null,
+  );
   final List<AttachmentDraft> pendingAttachments = [];
   final List<String> commands = [];
   bool commandsLoading = false;
@@ -438,6 +443,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     promptController.dispose();
     transcriptRevision.dispose();
     directoryBusy.dispose();
+    sessionCatalog.dispose();
     super.dispose();
   }
 
@@ -1702,7 +1708,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       final merged = messages[lastIndex].text + text;
       if (merged.trim().isEmpty) return;
       final previous = messages[lastIndex];
-      final next = TranscriptMessage.assistant(merged);
+      final next = TranscriptMessage(
+        MessageRole.assistant,
+        merged,
+        attachments: previous.attachments,
+      );
       transcriptMotion.replaceMessage(previous, next);
       if (isBlankAssistantMessage(previous) && canAnimateLiveFeedback) {
         transcriptMotion.recordMessage(next);
@@ -2399,9 +2409,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     if (project != null && session != null) {
       session = session!.copyWith(workspaceDir: project.path);
     }
+    sessionCatalog.value = catalog;
   }
 
-  Future<void> openDirectoryPicker() async {
+  Future<void> openDirectoryPicker({SessionEngine? initialEngine}) async {
     final current = session;
     if (current == null) return;
     final api = DirectoryApi(
@@ -2440,7 +2451,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         builder: (_) => DirectoryPickerPage(
           currentPath: current.workspaceDir,
           recentProjects: List.of(projects),
-          initialEngine: activeSessionEngine,
+          initialEngine: initialEngine ?? activeSessionEngine,
           busyListenable: directoryBusy,
           onBrowse: (path) => request(() => api.browse(path)),
           onCreate: (path, engine) async {
@@ -2471,6 +2482,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   void openSessions() {
     if (projects.isEmpty) return;
+    directoryBusy.value = directorySwitchBlocked;
     showSessionNavigator(
       context,
       projects: projects,
@@ -2478,27 +2490,42 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       activeProjectId: activeProjectId,
       activeSessionId: activeSessionId,
       running: running || uploadingAttachments,
+      catalogListenable: sessionCatalog,
+      busyListenable: directoryBusy,
       onSelect: selectRemoteSession,
       onOpenDirectory: widget.demoMode
           ? null
-          : () => unawaited(openDirectoryPicker()),
+          : (engine) => unawaited(openDirectoryPicker(initialEngine: engine)),
       onSearchResult: openRemoteSearchResult,
-      onCreate: createRemoteSession,
-      onRename: renameRemoteSession,
-      onArchive: archiveRemoteSession,
-      onDelete: deleteRemoteSession,
+      onCreate: (projectId, engine) =>
+          createRemoteSession(projectId, engine, reportError: false),
+      onRename: (id, title) =>
+          renameRemoteSession(id, title, reportError: false),
+      onArchive: (id) => archiveRemoteSession(id, reportError: false),
+      onDelete: (id) => deleteRemoteSession(id, reportError: false),
+      onRestore: (id) => updateSessionMetadata(id, 'restore'),
+      onPin: (id, pinned) => updateSessionMetadata(id, 'pin', pinned: pinned),
       onSearch: searchRemoteSessions,
     );
   }
 
   Future<List<RemoteSessionSearchResult>> searchRemoteSessions(
-    String query,
-  ) async {
+    String query, {
+    String? projectId,
+    SessionEngine? engine,
+    bool? archived,
+  }) async {
     if (widget.demoMode) return const [];
     final current = session;
     if (current == null) return const [];
     final encodedQuery = Uri(
-      queryParameters: {'q': query, 'limit': '50'},
+      queryParameters: {
+        'q': query,
+        'limit': '50',
+        'projectId': ?projectId,
+        if (engine != null) 'engine': engine.wireName,
+        if (archived != null) 'archived': '$archived',
+      },
     ).query;
     final res = await apiClient.get(
       current.origin,
@@ -2506,8 +2533,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       token: current.token,
       timeout: networkTimeout,
     );
+    if (!isCurrentConnection(current)) throw StateError('connection_changed');
     if (res.statusCode == 401) {
-      await recoverUnauthorizedSession();
+      if (session == current) await recoverUnauthorizedSession();
       throw const UnauthorizedSession();
     }
     if (res.statusCode != 200) throw StateError('session_search_failed');
@@ -2728,7 +2756,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         break;
       }
     }
-    if (target == null || target.archived) return false;
+    if (target == null) return false;
+    if (target.archived) {
+      if (pendingPermissions.isNotEmpty) return false;
+      unawaited(openSessionPeek(target, jump: jump));
+      return true;
+    }
     final intent = sessionOpenIntent(
       targetSessionId: sessionId,
       activeSessionId: activeSessionId,
@@ -2796,15 +2829,24 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   bool isCurrentConnection(SavedSession saved) =>
-      mounted && session?.origin == saved.origin && session?.token == saved.token;
+      mounted &&
+      session?.origin == saved.origin &&
+      session?.token == saved.token;
 
   Future<void> createRemoteSession(
     String projectId,
-    SessionEngine engine,
-  ) async {
-    if (running || uploadingAttachments) return;
+    SessionEngine engine, {
+    bool reportError = true,
+  }) async {
+    if (running || uploadingAttachments) {
+      if (!reportError) throw StateError('claude_is_busy');
+      return;
+    }
     final current = session;
-    if (current == null) return;
+    if (current == null) {
+      if (!reportError) throw StateError('connection_changed');
+      return;
+    }
     try {
       final res = await apiClient.post(
         current.origin,
@@ -2834,13 +2876,19 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       persistTranscriptSnapshotLater();
     } on UnauthorizedSession {
       if (isCurrentConnection(current)) await recoverUnauthorizedSession();
+      if (!reportError) rethrow;
     } catch (_) {
       if (!mounted || session != current) return;
+      if (!reportError) rethrow;
       setState(() => messages.add(TranscriptMessage.system('新建会话失败，请重试')));
     }
   }
 
-  Future<void> renameRemoteSession(String sessionId, String title) async {
+  Future<void> renameRemoteSession(
+    String sessionId,
+    String title, {
+    bool reportError = true,
+  }) async {
     if (running || uploadingAttachments) return;
     final current = session;
     if (current == null) return;
@@ -2865,13 +2913,18 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       }
     } on UnauthorizedSession {
       if (isCurrentConnection(current)) await recoverUnauthorizedSession();
+      if (!reportError) rethrow;
     } catch (_) {
       if (!mounted || session != current) return;
+      if (!reportError) rethrow;
       setState(() => messages.add(TranscriptMessage.system('重命名会话失败，请重试')));
     }
   }
 
-  Future<void> archiveRemoteSession(String sessionId) async {
+  Future<void> archiveRemoteSession(
+    String sessionId, {
+    bool reportError = true,
+  }) async {
     if (running || uploadingAttachments) return;
     final current = session;
     if (current == null) return;
@@ -2884,7 +2937,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       );
       if (!isCurrentConnection(current)) return;
       if (res.statusCode == 401) throw const UnauthorizedSession();
-      if (res.statusCode != 200) throw StateError('archive_session_failed');
+      if (res.statusCode != 200) {
+        final error = jsonDecode(res.body);
+        throw StateError(
+          error is Map && error['error'] == 'last_session'
+              ? 'last_session'
+              : 'archive_session_failed',
+        );
+      }
       final body = jsonDecode(res.body);
       if (body is Map<String, dynamic>) {
         final catalog = RemoteProjectCatalog.tryParse(body);
@@ -2894,13 +2954,18 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       }
     } on UnauthorizedSession {
       if (isCurrentConnection(current)) await recoverUnauthorizedSession();
+      if (!reportError) rethrow;
     } catch (_) {
       if (!mounted || session != current) return;
+      if (!reportError) rethrow;
       setState(() => messages.add(TranscriptMessage.system('归档会话失败，请重试')));
     }
   }
 
-  Future<void> deleteRemoteSession(String sessionId) async {
+  Future<void> deleteRemoteSession(
+    String sessionId, {
+    bool reportError = true,
+  }) async {
     if (running || uploadingAttachments) return;
     final current = session;
     if (current == null) return;
@@ -2924,10 +2989,42 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       sessionMemoryStore.forget(sessionId);
     } on UnauthorizedSession {
       if (isCurrentConnection(current)) await recoverUnauthorizedSession();
+      if (!reportError) rethrow;
     } catch (_) {
       if (!mounted || session != current) return;
+      if (!reportError) rethrow;
       setState(() => messages.add(TranscriptMessage.system('删除会话失败，请重试')));
     }
+  }
+
+  Future<void> updateSessionMetadata(
+    String sessionId,
+    String action, {
+    bool? pinned,
+  }) async {
+    if (running || uploadingAttachments) throw StateError('claude_is_busy');
+    final current = session;
+    if (current == null) throw StateError('connection_changed');
+    final res = await apiClient.post(
+      current.origin,
+      '/api/sessions/${Uri.encodeComponent(sessionId)}/$action',
+      token: current.token,
+      jsonBody: pinned != null,
+      body: pinned == null ? null : jsonEncode({'pinned': pinned}),
+      timeout: networkTimeout,
+    );
+    if (!isCurrentConnection(current)) throw StateError('connection_changed');
+    if (res.statusCode == 401) {
+      if (session == current) await recoverUnauthorizedSession();
+      throw const UnauthorizedSession();
+    }
+    if (res.statusCode != 200) throw StateError('session_update_failed');
+    final body = jsonDecode(res.body);
+    final catalog = body is Map<String, dynamic>
+        ? RemoteProjectCatalog.tryParse(body)
+        : null;
+    if (catalog == null) throw const FormatException('bad_session_response');
+    if (session == current) setState(() => applyCatalog(catalog));
   }
 
   Future<void> handleQr(String raw) async {
@@ -4505,9 +4602,6 @@ class ChatScreen extends StatelessWidget {
         ),
         child: _ChatOverlayLayout(
           initialTopExtent: media.padding.top + AppSizes.sessionHeader + 20,
-          // Taller than the header so the frost has room to ease out instead
-          // of ending on a visible line just under the controls.
-          blurExtent: media.padding.top + AppSizes.sessionHeader + 72,
           topOverlay: Builder(
             builder: (context) => MediaQuery(
               data: MediaQuery.of(
@@ -4608,14 +4702,12 @@ class ChatScreen extends StatelessWidget {
 class _ChatOverlayLayout extends StatefulWidget {
   const _ChatOverlayLayout({
     required this.initialTopExtent,
-    required this.blurExtent,
     required this.topOverlay,
     required this.bodyBuilder,
     this.floatingOverlay,
   });
 
   final double initialTopExtent;
-  final double blurExtent;
   final Widget topOverlay;
   final Widget Function(double topPadding) bodyBuilder;
   final Widget? floatingOverlay;
@@ -4659,6 +4751,7 @@ class _ChatOverlayLayoutState extends State<_ChatOverlayLayout> {
   @override
   Widget build(BuildContext context) {
     final topExtent = _topExtent ?? widget.initialTopExtent;
+    final blurExtent = topExtent + 48;
     return Stack(
       key: const ValueKey('chat-overlay-layout'),
       clipBehavior: Clip.none,
@@ -4668,8 +4761,10 @@ class _ChatOverlayLayoutState extends State<_ChatOverlayLayout> {
           top: 0,
           left: 0,
           right: 0,
-          height: widget.blurExtent,
-          child: const RepaintBoundary(child: _ChatTopBackdrop()),
+          height: blurExtent,
+          child: RepaintBoundary(
+            child: _ChatTopBackdrop(fadeStart: topExtent / blurExtent),
+          ),
         ),
         Positioned(
           top: 0,
@@ -4693,11 +4788,12 @@ class _ChatOverlayLayoutState extends State<_ChatOverlayLayout> {
 }
 
 class _ChatTopBackdrop extends StatelessWidget {
-  const _ChatTopBackdrop();
+  const _ChatTopBackdrop({required this.fadeStart});
 
-  // The blur carries the effect; the tint only lifts contrast a little. A
-  // heavier tint reads as a painted panel instead of frosted glass.
-  static final _filter = ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14);
+  final double fadeStart;
+
+  // Keep the tint light enough to preserve colors behind the glass.
+  static final _filter = ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22);
 
   @override
   Widget build(BuildContext context) {
@@ -4706,22 +4802,26 @@ class _ChatTopBackdrop extends StatelessWidget {
     return ExcludeSemantics(
       child: IgnorePointer(
         child: ClipRect(
-          child: ShaderMask(
-            blendMode: BlendMode.dstIn,
-            shaderCallback: (bounds) => const LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              // A short hold covers the status bar, then the frost eases out
-              // across the rest of the band. No flat step, so the transcript
-              // dissolves into the header instead of meeting a visible edge.
-              colors: [Colors.white, Colors.white, Colors.transparent],
-              stops: [0, 0.2, 1],
-            ).createShader(bounds),
-            child: BackdropFilter(
-              filter: _filter,
-              blendMode: BlendMode.src,
-              child: ColoredBox(
-                color: palette.paper.withValues(alpha: dark ? 0.28 : 0.16),
+          child: BackdropFilter(
+            filter: _filter,
+            child: ColoredBox(
+              color: palette.paper.withValues(alpha: dark ? 0.20 : 0.10),
+              // Paint into the backdrop layer; ShaderMask isolates its input.
+              child: DecoratedBox(
+                key: const ValueKey('chat-top-frost-mask'),
+                decoration: BoxDecoration(
+                  backgroundBlendMode: BlendMode.dstIn,
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: const [
+                      Colors.white,
+                      Colors.white,
+                      Colors.transparent,
+                    ],
+                    stops: [0, fadeStart, 1],
+                  ),
+                ),
                 child: const SizedBox.expand(),
               ),
             ),
@@ -5914,1386 +6014,6 @@ Future<SessionEngine?> showSessionEnginePicker(
   );
   FocusManager.instance.primaryFocus?.unfocus();
   return engine;
-}
-
-Future<void> showSessionNavigator(
-  BuildContext context, {
-  required List<RemoteProjectSummary> projects,
-  required List<RemoteSessionSummary> sessions,
-  required String? activeProjectId,
-  required String? activeSessionId,
-  required bool running,
-  VoidCallback? onOpenDirectory,
-  required ValueChanged<String> onSelect,
-  required ValueChanged<RemoteSessionSearchResult> onSearchResult,
-  required void Function(String projectId, SessionEngine engine) onCreate,
-  required Future<void> Function(String sessionId, String title) onRename,
-  required Future<void> Function(String sessionId) onArchive,
-  required Future<void> Function(String sessionId) onDelete,
-  required Future<List<RemoteSessionSearchResult>> Function(String query)
-  onSearch,
-}) {
-  FocusManager.instance.primaryFocus?.unfocus();
-  return Navigator.of(context).push(
-    AppMaterialPageRoute<void>(
-      reduceMotion: MediaQuery.disableAnimationsOf(context),
-      builder: (pageContext) => SessionNavigatorPage(
-        projects: projects,
-        sessions: sessions,
-        activeProjectId: activeProjectId,
-        activeSessionId: activeSessionId,
-        running: running,
-        onSelect: (sessionId) {
-          Navigator.pop(pageContext);
-          onSelect(sessionId);
-        },
-        onSearchResult: (result) {
-          Navigator.pop(pageContext);
-          onSearchResult(result);
-        },
-        onCreate: (projectId, engine) {
-          Navigator.pop(pageContext);
-          onCreate(projectId, engine);
-        },
-        onOpenDirectory: onOpenDirectory == null
-            ? null
-            : () {
-                Navigator.pop(pageContext);
-                onOpenDirectory();
-              },
-        onRename: (sessionId, title) async {
-          Navigator.pop(pageContext);
-          await onRename(sessionId, title);
-        },
-        onArchive: (sessionId) async {
-          Navigator.pop(pageContext);
-          await onArchive(sessionId);
-        },
-        onDelete: (sessionId) async {
-          Navigator.pop(pageContext);
-          await onDelete(sessionId);
-        },
-        onSearch: onSearch,
-      ),
-    ),
-  );
-}
-
-enum _SessionNavigatorView { home, projects, search }
-
-enum _SessionFilter {
-  all('全部'),
-  running('运行中'),
-  archived('已归档'),
-  claude('Claude'),
-  codex('Codex');
-
-  const _SessionFilter(this.label);
-
-  final String label;
-}
-
-enum _SessionAction { rename, archive, delete }
-
-class SessionNavigatorPage extends StatefulWidget {
-  const SessionNavigatorPage({
-    super.key,
-    required this.projects,
-    required this.sessions,
-    required this.activeProjectId,
-    required this.activeSessionId,
-    required this.running,
-    required this.onSelect,
-    required this.onSearchResult,
-    required this.onCreate,
-    required this.onRename,
-    required this.onArchive,
-    required this.onDelete,
-    required this.onSearch,
-    this.onOpenDirectory,
-  });
-
-  final List<RemoteProjectSummary> projects;
-  final List<RemoteSessionSummary> sessions;
-  final String? activeProjectId;
-  final String? activeSessionId;
-  final bool running;
-  final ValueChanged<String> onSelect;
-  final ValueChanged<RemoteSessionSearchResult> onSearchResult;
-  final void Function(String projectId, SessionEngine engine) onCreate;
-  final Future<void> Function(String sessionId, String title) onRename;
-  final Future<void> Function(String sessionId) onArchive;
-  final Future<void> Function(String sessionId) onDelete;
-  final Future<List<RemoteSessionSearchResult>> Function(String query) onSearch;
-  final VoidCallback? onOpenDirectory;
-
-  @override
-  State<SessionNavigatorPage> createState() => _SessionNavigatorPageState();
-}
-
-/// Linear-style smart iconography inference for projects.
-IconData inferProjectIcon(String name, [String? path]) {
-  final target = '${name.toLowerCase()} ${(path ?? '').toLowerCase()}';
-  if (target.contains('ios') || target.contains('apple')) {
-    return PhosphorIconsFill.appleLogo;
-  }
-  if (target.contains('android')) {
-    return PhosphorIconsFill.androidLogo;
-  }
-  if (target.contains('mobile') || target.contains('flutter')) {
-    return PhosphorIconsFill.deviceMobile;
-  }
-  if (target.contains('web') ||
-      target.contains('front') ||
-      target.contains('ui') ||
-      target.contains('vue') ||
-      target.contains('react')) {
-    return PhosphorIconsFill.globe;
-  }
-  if (target.contains('server') ||
-      target.contains('api') ||
-      target.contains('back') ||
-      target.contains('service')) {
-    return PhosphorIconsFill.hardDrives;
-  }
-  if (target.contains('cli') ||
-      target.contains('tool') ||
-      target.contains('script') ||
-      target.contains('terminal')) {
-    return PhosphorIconsFill.terminal;
-  }
-  if (target.contains('doc') ||
-      target.contains('wiki') ||
-      target.contains('spec') ||
-      target.contains('prd')) {
-    return PhosphorIconsFill.fileText;
-  }
-  return PhosphorIconsFill.cube;
-}
-
-/// Linear-style smart iconography inference for sessions.
-IconData inferSessionIcon(String title, [bool archived = false]) {
-  if (archived) return PhosphorIconsFill.archive;
-  final t = title.toLowerCase();
-  if (t.contains('ai') ||
-      t.contains('agent') ||
-      t.contains('思考') ||
-      t.contains('prompt')) {
-    return PhosphorIconsFill.sparkle;
-  }
-  if (t.contains('fix') ||
-      t.contains('bug') ||
-      t.contains('报错') ||
-      t.contains('修复') ||
-      t.contains('排查')) {
-    return PhosphorIconsFill.bug;
-  }
-  if (t.contains('doc') ||
-      t.contains('prd') ||
-      t.contains('设计') ||
-      t.contains('文档') ||
-      t.contains('spec')) {
-    return PhosphorIconsFill.fileText;
-  }
-  if (t.contains('review') ||
-      t.contains('检查') ||
-      t.contains('审视') ||
-      t.contains('优化') ||
-      t.contains('polish')) {
-    return PhosphorIconsFill.sparkle;
-  }
-  if (t.contains('sync') ||
-      t.contains('配对') ||
-      t.contains('连接') ||
-      t.contains('triage')) {
-    return PhosphorIconsFill.arrowsLeftRight;
-  }
-  if (t.contains('plan') || t.contains('roadmap') || t.contains('路线')) {
-    return PhosphorIconsFill.mapTrifold;
-  }
-  if (t.contains('mobile') ||
-      t.contains('flutter') ||
-      t.contains('ios') ||
-      t.contains('android')) {
-    return PhosphorIconsFill.deviceMobile;
-  }
-  return PhosphorIconsFill.chatCircle;
-}
-
-class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
-  Color get _selectedStatusColor => AppPalette.of(context).navigatorAccent;
-
-  late String selectedProjectId =
-      widget.activeProjectId ??
-      (widget.projects.isEmpty ? '' : widget.projects.first.id);
-  _SessionNavigatorView view = _SessionNavigatorView.home;
-  bool viewMovingForward = true;
-  bool searchTransitionActive = false;
-  final TextEditingController searchController = TextEditingController();
-  final FocusNode searchFocusNode = FocusNode();
-  Timer? searchDebounce;
-  Timer? searchFocusDelay;
-  int searchGeneration = 0;
-  String searchQuery = '';
-  bool searching = false;
-  String? searchError;
-  List<RemoteSessionSearchResult> searchResults = const [];
-  _SessionFilter sessionFilter = _SessionFilter.all;
-
-  RemoteProjectSummary? get selectedProject {
-    for (final project in widget.projects) {
-      if (project.id == selectedProjectId) return project;
-    }
-    return widget.projects.isEmpty ? null : widget.projects.first;
-  }
-
-  @override
-  void dispose() {
-    searchDebounce?.cancel();
-    searchFocusDelay?.cancel();
-    searchController.dispose();
-    searchFocusNode.dispose();
-    super.dispose();
-  }
-
-  void handleSearchChanged(String value) {
-    searchDebounce?.cancel();
-    final query = value.trim();
-    final generation = ++searchGeneration;
-    setState(() {
-      searchQuery = query;
-      searchError = null;
-      searching = query.isNotEmpty;
-      if (query.isEmpty) searchResults = const [];
-    });
-    if (query.isEmpty) return;
-    searchDebounce = Timer(
-      const Duration(milliseconds: 300),
-      () => runSearch(query, generation),
-    );
-  }
-
-  void submitSearch(String value) {
-    searchDebounce?.cancel();
-    final query = value.trim();
-    if (query.isEmpty) return;
-    final generation = ++searchGeneration;
-    setState(() {
-      searchQuery = query;
-      searchError = null;
-      searching = true;
-    });
-    unawaited(runSearch(query, generation));
-  }
-
-  Future<void> runSearch(String query, int generation) async {
-    try {
-      final results = await widget.onSearch(query);
-      if (!mounted || generation != searchGeneration || query != searchQuery) {
-        return;
-      }
-      setState(() {
-        searchResults = results;
-        searching = false;
-        searchError = null;
-      });
-    } catch (_) {
-      if (!mounted || generation != searchGeneration || query != searchQuery) {
-        return;
-      }
-      setState(() {
-        searchResults = const [];
-        searching = false;
-        searchError = '搜索失败，请重试';
-      });
-    }
-  }
-
-  void clearSearch() {
-    searchController.clear();
-    handleSearchChanged('');
-  }
-
-  void openView(_SessionNavigatorView next) {
-    if (next == view) return;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    searchFocusDelay?.cancel();
-    if (view == _SessionNavigatorView.search && next != view) {
-      searchDebounce?.cancel();
-      searchGeneration += 1;
-      searchFocusNode.unfocus();
-    }
-    if (next == _SessionNavigatorView.search) {
-      searchController.clear();
-      searchQuery = '';
-      searchResults = const [];
-      searchError = null;
-      searching = false;
-    }
-    setState(() {
-      searchTransitionActive =
-          next == _SessionNavigatorView.search ||
-          view == _SessionNavigatorView.search;
-      viewMovingForward = next != _SessionNavigatorView.home;
-      view = next;
-    });
-    if (next == _SessionNavigatorView.search) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted || view != _SessionNavigatorView.search) return;
-        if (reduceMotion) {
-          searchFocusNode.requestFocus();
-          return;
-        }
-        searchFocusDelay = Timer(AppMotion.standard, () {
-          if (mounted && view == _SessionNavigatorView.search) {
-            searchFocusNode.requestFocus();
-          }
-        });
-      });
-    }
-  }
-
-  void chooseProject(String projectId) {
-    setState(() {
-      selectedProjectId = projectId;
-      sessionFilter = _SessionFilter.all;
-      searchTransitionActive = false;
-      viewMovingForward = false;
-      view = _SessionNavigatorView.home;
-    });
-  }
-
-  Future<void> createSession() async {
-    if (widget.running) return;
-    var selectedEngine = SessionEngine.claude;
-    for (final session in widget.sessions) {
-      if (session.id == widget.activeSessionId) {
-        selectedEngine = session.engine;
-        break;
-      }
-    }
-    final engine = await showSessionEnginePicker(
-      context,
-      selected: selectedEngine,
-    );
-    if (engine == null || !mounted) return;
-    widget.onCreate(selectedProjectId, engine);
-  }
-
-  String projectName(String projectId) {
-    for (final project in widget.projects) {
-      if (project.id == projectId) return project.name;
-    }
-    return '未知项目';
-  }
-
-  Widget buildSearchBody() {
-    if (searchError != null) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              LucideIcons.search,
-              size: AppIconSizes.primary,
-              color: AppPalette.of(context).muted,
-            ),
-            const SizedBox(height: 8),
-            Text(searchError!),
-            const SizedBox(height: 8),
-            TextButton.icon(
-              onPressed: () => submitSearch(searchController.text),
-              icon: const SmartIcon(
-                LucideIcons.refreshCw,
-                size: AppIconSizes.inline,
-              ),
-              label: const Text('重试'),
-            ),
-          ],
-        ),
-      );
-    }
-    if (searching && searchResults.isEmpty) {
-      return const Center(child: Text('正在搜索所有会话…'));
-    }
-    if (searchResults.isEmpty) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              LucideIcons.search,
-              color: AppPalette.of(context).inactive,
-              size: AppIconSizes.hero,
-            ),
-            const SizedBox(height: 12),
-            const Text('没有找到匹配内容'),
-            const SizedBox(height: 6),
-            Text(
-              '试试项目名、会话标题或报错关键词',
-              style: TextStyle(
-                color: AppPalette.of(context).muted,
-                fontSize: 13,
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    return ListView.separated(
-      itemCount: searchResults.length,
-      separatorBuilder: (_, _) => const Divider(height: 1),
-      itemBuilder: (context, index) {
-        final result = searchResults[index];
-        final active = result.sessionId == widget.activeSessionId;
-        final canOpen = !result.archived;
-
-        return ListTile(
-          key: ValueKey('search-session-${result.sessionId}'),
-          enabled: canOpen,
-          isThreeLine: true,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 4,
-            vertical: 4,
-          ),
-          leading: PhosphorIcon(
-            inferSessionIcon(result.title, result.archived),
-            size: AppMark.size,
-            color: result.archived
-                ? AppPalette.of(context).inactive
-                : AppMark.of(result.sessionId, index),
-          ),
-          title: Text(
-            result.title,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-          ),
-          subtitle: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const SizedBox(height: 3),
-              buildHighlightedSnippet(result),
-              const SizedBox(height: 4),
-              Text(
-                '${projectName(result.projectId)} · ${result.roleLabel} · '
-                '${result.matchCount} 条匹配内容${result.archived ? ' · 已归档' : ''}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: AppPalette.of(context).muted,
-                  fontSize: 12,
-                  height: 1.3,
-                ),
-              ),
-            ],
-          ),
-          trailing: active
-              ? Icon(
-                  LucideIcons.check,
-                  size: AppIconSizes.control,
-                  color: _selectedStatusColor,
-                )
-              : Icon(
-                  LucideIcons.chevronRight,
-                  size: AppIconSizes.inline,
-                  color: AppPalette.of(context).inactive,
-                ),
-          onTap: canOpen ? () => widget.onSearchResult(result) : null,
-        );
-      },
-    );
-  }
-
-  Widget buildHighlightedSnippet(RemoteSessionSearchResult result) {
-    final start = result.matchStart.clamp(0, result.snippet.length);
-    final end = result.matchEnd.clamp(start, result.snippet.length);
-    final baseStyle = TextStyle(
-      color: AppPalette.of(context).ink,
-      fontSize: 13,
-      height: 1.4,
-    );
-    return Text.rich(
-      TextSpan(
-        style: baseStyle,
-        children: [
-          if (start > 0) TextSpan(text: result.snippet.substring(0, start)),
-          TextSpan(
-            text: result.snippet.substring(start, end),
-            style: TextStyle(
-              color: AppPalette.of(context).accentStrong,
-              backgroundColor: AppPalette.of(
-                context,
-              ).navigatorAccent.withValues(alpha: 0.08),
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          if (end < result.snippet.length)
-            TextSpan(text: result.snippet.substring(end)),
-        ],
-      ),
-      maxLines: 1,
-      overflow: TextOverflow.ellipsis,
-    );
-  }
-
-  Widget buildSectionTitle(String text) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 32, bottom: 12),
-      child: Text(
-        text,
-        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-          color: AppPalette.of(context).muted,
-          fontWeight: FontWeight.w700,
-          fontSize: 18,
-          letterSpacing: -0.2,
-        ),
-      ),
-    );
-  }
-
-  Widget buildSessionStatus(RemoteSessionSummary item, {int? index}) {
-    final iconData = inferSessionIcon(item.title, item.archived);
-    final color = item.archived
-        ? AppPalette.of(context).inactive
-        : AppMark.of(item.id, index);
-
-    if (item.running) {
-      return SizedBox.square(
-        dimension: 24,
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            PhosphorIcon(iconData, size: AppMark.size, color: color),
-            Positioned(
-              right: 1,
-              top: 1,
-              child: Container(
-                width: 6,
-                height: 6,
-                decoration: BoxDecoration(
-                  color: AppPalette.of(context).navigatorAccent,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    return PhosphorIcon(iconData, size: AppMark.size, color: color);
-  }
-
-  Future<void> handleSessionAction(
-    RemoteSessionSummary item,
-    _SessionAction action,
-  ) async {
-    if (widget.running || item.running) return;
-    switch (action) {
-      case _SessionAction.rename:
-        final next = await promptSessionTitle(context, initial: item.title);
-        if (next == null || next.trim().isEmpty) return;
-        await widget.onRename(item.id, next);
-        if (mounted) setState(() {});
-        return;
-      case _SessionAction.archive:
-        await widget.onArchive(item.id);
-        return;
-      case _SessionAction.delete:
-        final confirmed = await confirmSessionDelete(context, item.title);
-        if (confirmed == true) await widget.onDelete(item.id);
-        return;
-    }
-  }
-
-  Widget buildSessionRow(RemoteSessionSummary item, {int? index}) {
-    final active = item.id == widget.activeSessionId;
-    final canOpen = !item.archived;
-    final canMutate = !widget.running && !item.running;
-    final status = item.running
-        ? '运行中'
-        : active
-        ? '当前'
-        : item.engine.label;
-    final meta = item.running || active
-        ? '$status · ${item.engine.label} · ${item.summary}'
-        : '${item.engine.label} · ${item.summary}';
-
-    return Semantics(
-      selected: active,
-      child: ListTile(
-        key: ValueKey('session-${item.id}'),
-        enabled: canOpen,
-        contentPadding: EdgeInsets.zero,
-        horizontalTitleGap: 12,
-        minVerticalPadding: 4,
-        leading: SizedBox(
-          width: 30,
-          child: Center(child: buildSessionStatus(item, index: index)),
-        ),
-        title: Text(
-          item.title,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            fontWeight: active ? FontWeight.w700 : FontWeight.w600,
-            fontSize: 16,
-            letterSpacing: -0.15,
-          ),
-        ),
-        subtitle: Text(
-          meta,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: item.running
-                ? AppPalette.of(context).ink
-                : AppPalette.of(context).muted,
-            fontSize: 12,
-            height: 1.2,
-          ),
-        ),
-        trailing: canMutate
-            ? PopupMenuButton<_SessionAction>(
-                key: ValueKey('session-menu-${item.id}'),
-                tooltip: '${item.title} 的更多操作',
-                icon: const SmartIcon(
-                  LucideIcons.moreHorizontal,
-                  size: AppIconSizes.control,
-                ),
-                onSelected: (action) => handleSessionAction(item, action),
-                itemBuilder: (context) => [
-                  const PopupMenuItem(
-                    value: _SessionAction.rename,
-                    child: Row(
-                      children: [
-                        SmartIcon(
-                          LucideIcons.pencil,
-                          size: AppIconSizes.control,
-                        ),
-                        SizedBox(width: 12),
-                        Text('重命名'),
-                      ],
-                    ),
-                  ),
-                  if (!item.archived)
-                    const PopupMenuItem(
-                      value: _SessionAction.archive,
-                      child: Row(
-                        children: [
-                          SmartIcon(
-                            LucideIcons.archive,
-                            size: AppIconSizes.control,
-                          ),
-                          SizedBox(width: 12),
-                          Text('归档'),
-                        ],
-                      ),
-                    ),
-                  PopupMenuItem(
-                    value: _SessionAction.delete,
-                    child: Row(
-                      children: [
-                        Icon(
-                          LucideIcons.trash2,
-                          size: AppIconSizes.control,
-                          color: AppPalette.of(context).danger,
-                        ),
-                        SizedBox(width: 12),
-                        Text(
-                          '删除',
-                          style: TextStyle(
-                            color: AppPalette.of(context).danger,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              )
-            : active
-            ? null
-            : Icon(
-                LucideIcons.chevronRight,
-                size: AppIconSizes.inline,
-                color: AppPalette.of(context).inactive,
-              ),
-        onTap: canOpen && !active ? () => widget.onSelect(item.id) : null,
-      ),
-    );
-  }
-
-  Widget buildProjectRow(
-    RemoteProjectSummary project, {
-    bool compact = false,
-    int? index,
-  }) {
-    final active = project.id == selectedProjectId;
-    final subtitle = compact
-        ? active
-              ? '当前项目'
-              : project.running
-              ? '有会话正在运行'
-              : '${project.sessionCount} 个会话'
-        : project.path;
-
-    return Semantics(
-      selected: active,
-      child: ListTile(
-        key: ValueKey('project-${project.id}'),
-        contentPadding: EdgeInsets.zero,
-        horizontalTitleGap: 12,
-        minVerticalPadding: 4,
-        leading: SizedBox(
-          width: 24,
-          child: Center(
-            child: PhosphorIcon(
-              inferProjectIcon(project.name, project.path),
-              key: ValueKey('project-icon-${project.id}'),
-              size: AppMark.size,
-              color: AppMark.of(project.id, index),
-            ),
-          ),
-        ),
-        title: Text(
-          project.name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            fontWeight: active ? FontWeight.w700 : FontWeight.w600,
-            fontSize: 16,
-            letterSpacing: -0.15,
-          ),
-        ),
-        subtitle: Text(
-          subtitle,
-          maxLines: compact ? 1 : 2,
-          overflow: TextOverflow.ellipsis,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: AppPalette.of(context).muted,
-            fontSize: 12,
-            height: 1.2,
-          ),
-        ),
-        trailing: Icon(
-          LucideIcons.chevronRight,
-          size: AppIconSizes.inline,
-          color: AppPalette.of(context).inactive,
-        ),
-        onTap: () => chooseProject(project.id),
-      ),
-    );
-  }
-
-  bool sessionMatchesFilter(RemoteSessionSummary session) {
-    switch (sessionFilter) {
-      case _SessionFilter.all:
-        return true;
-      case _SessionFilter.running:
-        return session.running;
-      case _SessionFilter.archived:
-        return session.archived;
-      case _SessionFilter.claude:
-        return session.engine == SessionEngine.claude;
-      case _SessionFilter.codex:
-        return session.engine == SessionEngine.codex;
-    }
-  }
-
-  void selectSessionFilter(_SessionFilter filter) {
-    if (filter == sessionFilter) return;
-    setState(() => sessionFilter = filter);
-  }
-
-  Widget buildSessionFilterBar() {
-    final palette = AppPalette.of(context);
-    final animation = MediaQuery.disableAnimationsOf(context)
-        ? AnimationStyle.noAnimation
-        : const AnimationStyle(
-            duration: Duration(milliseconds: 150),
-            reverseDuration: Duration(milliseconds: 150),
-          );
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
-      child: SingleChildScrollView(
-        key: const ValueKey('session-filter-bar'),
-        scrollDirection: Axis.horizontal,
-        clipBehavior: Clip.hardEdge,
-        child: Row(
-          children: [
-            for (final filter in _SessionFilter.values)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: ChoiceChip(
-                  key: ValueKey('session-filter-${filter.name}'),
-                  label: Text(filter.label),
-                  selected: sessionFilter == filter,
-                  onSelected: (_) => selectSessionFilter(filter),
-                  showCheckmark: true,
-                  checkmarkColor: palette.ink,
-                  chipAnimationStyle: ChipAnimationStyle(
-                    enableAnimation: animation,
-                    selectAnimation: animation,
-                    avatarDrawerAnimation: animation,
-                    deleteDrawerAnimation: animation,
-                  ),
-                  materialTapTargetSize: MaterialTapTargetSize.padded,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  labelStyle: TextStyle(
-                    color: sessionFilter == filter
-                        ? palette.ink
-                        : palette.muted,
-                    fontWeight: sessionFilter == filter
-                        ? FontWeight.w700
-                        : FontWeight.w600,
-                    fontSize: 13,
-                  ),
-                  backgroundColor: palette.control,
-                  selectedColor: palette.accentSoft,
-                  side: BorderSide(
-                    color: sessionFilter == filter
-                        ? palette.navigatorAccent
-                        : palette.line,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(AppRadii.pill),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget buildSessionFilterEmptyState() {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '没有符合条件的会话',
-            style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-              color: AppPalette.of(context).ink,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '试试其他筛选条件',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: AppPalette.of(context).muted,
-            ),
-          ),
-          const SizedBox(height: 8),
-          TextButton.icon(
-            key: const ValueKey('session-filter-clear'),
-            onPressed: () => selectSessionFilter(_SessionFilter.all),
-            icon: const SmartIcon(LucideIcons.x, size: AppIconSizes.inline),
-            label: const Text('清除筛选'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget buildOpenDirectoryAction() => ListTile(
-    key: const ValueKey('open-computer-directory'),
-    contentPadding: EdgeInsets.zero,
-    leading: const SmartIcon(
-      LucideIcons.folderOpen,
-      size: AppIconSizes.primary,
-    ),
-    title: const Text('打开电脑目录'),
-    subtitle: const Text('浏览或输入路径，在所选目录新建对话'),
-    trailing: const SmartIcon(
-      LucideIcons.chevronRight,
-      size: AppIconSizes.inline,
-    ),
-    onTap: widget.onOpenDirectory,
-  );
-
-  Widget buildHomeView() {
-    final project = selectedProject;
-    final projectSessions = project == null
-        ? const <RemoteSessionSummary>[]
-        : widget.sessions
-              .where((session) => session.projectId == project.id)
-              .toList();
-    final sessions = projectSessions.where(sessionMatchesFilter).toList();
-
-    return ListView.builder(
-      key: const ValueKey('session-home-view'),
-      padding: const EdgeInsets.only(top: 12, bottom: 104),
-      itemCount: sessions.length + 2,
-      itemBuilder: (context, index) {
-        if (index == 0) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                '项目与会话',
-                key: const ValueKey('session-page-title'),
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  color: AppPalette.of(context).ink,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 32,
-                  height: 1.08,
-                  letterSpacing: -0.9,
-                ),
-              ),
-              const SizedBox(height: 30),
-              ListTile(
-                key: const ValueKey('open-project-browser'),
-                contentPadding: EdgeInsets.zero,
-                horizontalTitleGap: 12,
-                leading: const SizedBox(
-                  width: 24,
-                  child: PhosphorIcon(
-                    PhosphorIconsFill.squaresFour,
-                    size: AppMark.size,
-                    color: AppMark.slate,
-                  ),
-                ),
-                title: Text(
-                  '所有项目',
-                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                    fontSize: 17,
-                    letterSpacing: -0.2,
-                  ),
-                ),
-                trailing: Icon(
-                  LucideIcons.chevronRight,
-                  size: AppIconSizes.inline,
-                  color: AppPalette.of(context).inactive,
-                ),
-                onTap: () => openView(_SessionNavigatorView.projects),
-              ),
-              if (widget.onOpenDirectory != null) buildOpenDirectoryAction(),
-              buildSectionTitle('会话'),
-              if (projectSessions.isNotEmpty) buildSessionFilterBar(),
-              if (projectSessions.isEmpty)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
-                  child: OutlinedButton.icon(
-                    key: const ValueKey('session-empty-create'),
-                    onPressed: widget.running ? null : createSession,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: AppPalette.of(context).ink,
-                      backgroundColor: AppPalette.of(context).surface,
-                      side: BorderSide(
-                        color: AppPalette.of(context).lineStrong,
-                      ),
-                      minimumSize: const Size.fromHeight(48),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(AppRadii.control),
-                      ),
-                    ),
-                    icon: const SmartIcon(
-                      LucideIcons.plus,
-                      size: AppIconSizes.control,
-                    ),
-                    label: const Text('新建第一个会话'),
-                  ),
-                )
-              else if (sessions.isEmpty)
-                buildSessionFilterEmptyState(),
-            ],
-          );
-        }
-        if (index <= sessions.length) {
-          return buildSessionRow(sessions[index - 1], index: index - 1);
-        }
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            buildSectionTitle('项目'),
-            for (var i = 0; i < widget.projects.take(3).length; i++)
-              buildProjectRow(widget.projects[i], compact: true, index: i),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget buildProjectView() {
-    final current = selectedProject;
-    final others = widget.projects
-        .where((project) => project.id != selectedProjectId)
-        .toList();
-
-    return ListView.builder(
-      key: const ValueKey('session-project-view'),
-      padding: const EdgeInsets.only(top: 4, bottom: 32),
-      itemCount: others.length + 1,
-      itemBuilder: (context, index) {
-        if (index == 0) {
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (widget.onOpenDirectory != null) buildOpenDirectoryAction(),
-              buildSectionTitle('当前项目'),
-              if (current != null) buildProjectRow(current, index: 0),
-              buildSectionTitle('其他项目'),
-            ],
-          );
-        }
-        return buildProjectRow(others[index - 1], index: index);
-      },
-    );
-  }
-
-  Widget buildSearchPrompt() {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            LucideIcons.search,
-            size: AppIconSizes.hero,
-            color: AppPalette.of(context).inactive,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            '搜索所有会话',
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '输入标题或会话中的关键词',
-            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-              color: AppPalette.of(context).muted,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget buildSearchView() {
-    return Column(
-      key: const ValueKey('session-search-view'),
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (searching) const LinearProgressIndicator(minHeight: 2),
-        const SizedBox(height: 12),
-        Expanded(
-          child: searchQuery.isEmpty ? buildSearchPrompt() : buildSearchBody(),
-        ),
-      ],
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final currentProjectName = selectedProject?.name ?? '项目';
-    final titleText = switch (view) {
-      _SessionNavigatorView.home => currentProjectName,
-      _SessionNavigatorView.projects => '选择项目',
-      _SessionNavigatorView.search => '',
-    };
-    final viewKey = switch (view) {
-      _SessionNavigatorView.home => const ValueKey('session-home-transition'),
-      _SessionNavigatorView.projects => const ValueKey(
-        'session-project-transition',
-      ),
-      _SessionNavigatorView.search => const ValueKey(
-        'session-search-transition',
-      ),
-    };
-
-    return PopScope(
-      canPop: view == _SessionNavigatorView.home,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && view != _SessionNavigatorView.home) {
-          openView(_SessionNavigatorView.home);
-        }
-      },
-      child: Scaffold(
-        key: const ValueKey('session-navigator-page'),
-        backgroundColor: AppPalette.of(context).paper,
-        appBar: AppBar(
-          backgroundColor: AppPalette.of(context).paper,
-          surfaceTintColor: Colors.transparent,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          leading: IconButton(
-            key: view == _SessionNavigatorView.home
-                ? const ValueKey('session-page-back')
-                : view == _SessionNavigatorView.projects
-                ? const ValueKey('session-back-projects')
-                : const ValueKey('session-back-search'),
-            tooltip: view == _SessionNavigatorView.home ? '返回聊天' : '返回项目与会话',
-            onPressed: view == _SessionNavigatorView.home
-                ? () => Navigator.maybePop(context)
-                : () => openView(_SessionNavigatorView.home),
-            icon: const SmartIcon(
-              LucideIcons.arrowLeft,
-              size: AppIconSizes.primary,
-            ),
-          ),
-          title: Row(
-            children: [
-              SizedBox(
-                key: const ValueKey('session-index-marker'),
-                width: 22,
-                height: 22,
-                child: AnimatedSwitcher(
-                  duration: reduceMotion ? Duration.zero : AppMotion.fast,
-                  switchInCurve: AppMotion.enter,
-                  switchOutCurve: AppMotion.exit,
-                  child: view == _SessionNavigatorView.home
-                      ? PhosphorIcon(
-                          selectedProject != null
-                              ? inferProjectIcon(
-                                  selectedProject!.name,
-                                  selectedProject!.path,
-                                )
-                              : PhosphorIconsFill.cube,
-                          key: const ValueKey('session-context-icon-home'),
-                          size: AppIconSizes.control,
-                          color: AppPalette.of(context).navigatorAccent,
-                        )
-                      : Icon(
-                          view == _SessionNavigatorView.projects
-                              ? LucideIcons.layoutGrid
-                              : LucideIcons.search,
-                          key: ValueKey('session-context-icon-${view.name}'),
-                          size: AppIconSizes.control,
-                          color: view == _SessionNavigatorView.projects
-                              ? AppPalette.of(context).ink
-                              : AppPalette.of(context).navigatorAccent,
-                        ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: AnimatedSwitcher(
-                  key: const ValueKey('session-title-switcher'),
-                  duration: reduceMotion ? Duration.zero : AppMotion.standard,
-                  reverseDuration: reduceMotion
-                      ? Duration.zero
-                      : AppMotion.fast,
-                  switchInCurve: AppMotion.enter,
-                  switchOutCurve: AppMotion.exit,
-                  transitionBuilder: (child, animation) {
-                    if (reduceMotion) return child;
-                    final isSearchField =
-                        child.key == const ValueKey('session-search-field');
-                    final offset = Tween<Offset>(
-                      begin: isSearchField
-                          ? const Offset(0.08, 0)
-                          : const Offset(0, 0.12),
-                      end: Offset.zero,
-                    ).animate(animation);
-                    return FadeTransition(
-                      opacity: animation,
-                      child: SlideTransition(position: offset, child: child),
-                    );
-                  },
-                  child: view == _SessionNavigatorView.search
-                      ? TextField(
-                          key: const ValueKey('session-search-field'),
-                          controller: searchController,
-                          focusNode: searchFocusNode,
-                          maxLength: 200,
-                          buildCounter:
-                              (
-                                context, {
-                                required currentLength,
-                                required isFocused,
-                                required maxLength,
-                              }) => null,
-                          textInputAction: TextInputAction.search,
-                          onChanged: handleSearchChanged,
-                          onSubmitted: submitSearch,
-                          decoration: InputDecoration(
-                            hintText: '搜索标题与会话内容',
-                            isDense: true,
-                            filled: true,
-                            fillColor: AppPalette.of(context).control,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
-                            ),
-                            prefixIcon: const SmartIcon(
-                              LucideIcons.search,
-                              size: AppIconSizes.control,
-                            ),
-                            suffixIcon: searchQuery.isEmpty
-                                ? null
-                                : IconButton(
-                                    key: const ValueKey('session-search-clear'),
-                                    tooltip: '清除搜索',
-                                    onPressed: clearSearch,
-                                    icon: const SmartIcon(
-                                      LucideIcons.x,
-                                      size: AppIconSizes.control,
-                                    ),
-                                  ),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(
-                                AppRadii.control,
-                              ),
-                              borderSide: BorderSide.none,
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(
-                                AppRadii.control,
-                              ),
-                              borderSide: BorderSide.none,
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(
-                                AppRadii.control,
-                              ),
-                              borderSide: BorderSide(
-                                color: AppPalette.of(context).accentStrong,
-                                width: 2,
-                              ),
-                            ),
-                          ),
-                        )
-                      : Text(
-                          titleText,
-                          key: ValueKey(
-                            'session-title-${view.name}-$selectedProjectId',
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleMedium
-                              ?.copyWith(
-                                color: AppPalette.of(context).ink,
-                                fontWeight: FontWeight.w700,
-                                letterSpacing: -0.2,
-                              ),
-                        ),
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            AnimatedSwitcher(
-              key: const ValueKey('session-actions-switcher'),
-              duration: reduceMotion ? Duration.zero : AppMotion.fast,
-              switchInCurve: AppMotion.enter,
-              switchOutCurve: AppMotion.exit,
-              transitionBuilder: (child, animation) {
-                if (reduceMotion) return child;
-                return FadeTransition(
-                  opacity: animation,
-                  child: ScaleTransition(
-                    scale: Tween<double>(
-                      begin: 0.96,
-                      end: 1,
-                    ).animate(animation),
-                    child: child,
-                  ),
-                );
-              },
-              child: view == _SessionNavigatorView.home
-                  ? Row(
-                      key: const ValueKey('session-home-actions'),
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          key: const ValueKey('open-session-search'),
-                          tooltip: '搜索所有会话',
-                          onPressed: () =>
-                              openView(_SessionNavigatorView.search),
-                          icon: const SmartIcon(
-                            LucideIcons.search,
-                            size: AppIconSizes.primary,
-                          ),
-                        ),
-                        IconButton(
-                          key: const ValueKey('create-session'),
-                          tooltip: '新建会话',
-                          onPressed: widget.running ? null : createSession,
-                          style: IconButton.styleFrom(padding: EdgeInsets.zero),
-                          icon: AnimatedContainer(
-                            duration: reduceMotion
-                                ? Duration.zero
-                                : AppMotion.fast,
-                            width: 38,
-                            height: 38,
-                            decoration: BoxDecoration(
-                              color: widget.running
-                                  ? AppPalette.of(context).control
-                                  : AppPalette.of(context).ink,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Center(
-                              child: Icon(
-                                LucideIcons.plus,
-                                size: AppIconSizes.control,
-                                color: widget.running
-                                    ? AppPalette.of(context).inactive
-                                    : AppPalette.of(context).surface,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    )
-                  : const SizedBox(key: ValueKey('session-no-actions')),
-            ),
-            const SizedBox(width: 6),
-          ],
-        ),
-        body: SafeArea(
-          top: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(22, 0, 22, 20),
-            child: AnimatedSwitcher(
-              key: const ValueKey('session-view-switcher'),
-              duration: reduceMotion ? Duration.zero : AppMotion.standard,
-              reverseDuration: reduceMotion ? Duration.zero : AppMotion.fast,
-              switchInCurve: AppMotion.enter,
-              switchOutCurve: AppMotion.exit,
-              transitionBuilder: (child, animation) {
-                if (reduceMotion) return child;
-                if (searchTransitionActive) {
-                  return FadeTransition(
-                    opacity: animation,
-                    child: ScaleTransition(
-                      scale: Tween<double>(
-                        begin: 0.99,
-                        end: 1,
-                      ).animate(animation),
-                      child: child,
-                    ),
-                  );
-                }
-                final incoming = child.key == viewKey;
-                final direction = viewMovingForward ? 1.0 : -1.0;
-                final offset = Tween<Offset>(
-                  begin: Offset((incoming ? 0.045 : -0.025) * direction, 0),
-                  end: Offset.zero,
-                ).animate(animation);
-                return FadeTransition(
-                  opacity: animation,
-                  child: SlideTransition(position: offset, child: child),
-                );
-              },
-              child: KeyedSubtree(
-                key: viewKey,
-                child: switch (view) {
-                  _SessionNavigatorView.home => buildHomeView(),
-                  _SessionNavigatorView.projects => buildProjectView(),
-                  _SessionNavigatorView.search => buildSearchView(),
-                },
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _SettingsModalSurface extends StatelessWidget {
@@ -10448,12 +9168,13 @@ class MessageBlock extends StatelessWidget {
         message.text,
         isStreaming: isStreaming,
       );
-      if (text.trim().isEmpty) {
+      if (text.trim().isEmpty && message.attachments.isEmpty) {
         return const SizedBox.shrink();
       }
       final assistantBody = _CachedMarkdownBody(
         data: text,
         isStreaming: isStreaming,
+        attachments: message.attachments,
       );
       return Semantics(
         container: true,
@@ -10462,7 +9183,25 @@ class MessageBlock extends StatelessWidget {
           bubbleKey: const ValueKey('assistant-message'),
           searchHighlighted: searchHighlighted,
           topPadding: followsProcess ? 0 : null,
-          child: AssistantSelectionArea(text: text, child: assistantBody),
+          child: AssistantSelectionArea(
+            text: text,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (text.trim().isNotEmpty) assistantBody,
+                if (message.attachments.isNotEmpty) ...[
+                  if (text.trim().isNotEmpty) const SizedBox(height: 12),
+                  AttachmentMessageGrid(
+                    attachments: message.attachments,
+                    session: session,
+                    activeSessionId: activeSessionId,
+                    fullImages: true,
+                  ),
+                ],
+              ],
+            ),
+          ),
         ),
       );
     }
@@ -10517,10 +9256,15 @@ class MessageBlock extends StatelessWidget {
 // Keep the renderer mounted across stream updates and completion. Reuse its
 // widget subtree when WebSocket events leave the message text unchanged.
 class _CachedMarkdownBody extends StatefulWidget {
-  const _CachedMarkdownBody({required this.data, this.isStreaming = false});
+  const _CachedMarkdownBody({
+    required this.data,
+    this.isStreaming = false,
+    this.attachments = const [],
+  });
 
   final String data;
   final bool isStreaming;
+  final List<RemoteAttachment> attachments;
 
   @override
   State<_CachedMarkdownBody> createState() => _CachedMarkdownBodyState();
@@ -10537,7 +9281,8 @@ class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
   void didUpdateWidget(covariant _CachedMarkdownBody oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.data != oldWidget.data ||
-        widget.isStreaming != oldWidget.isStreaming) {
+        widget.isStreaming != oldWidget.isStreaming ||
+        widget.attachments != oldWidget.attachments) {
       cached = null;
     }
   }
@@ -10583,6 +9328,21 @@ class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
       softLineBreak: true,
       onTapLink: (_, href, _) => unawaited(openSearchSource(context, href)),
       styleSheet: assistantMarkdownStyleSheet(context),
+      imageBuilder: widget.attachments.isEmpty
+          ? null
+          : (uri, title, alt) {
+              if (widget.attachments.any(
+                (attachment) =>
+                    Uri.tryParse(attachment.source ?? '')?.toString() ==
+                    uri.toString(),
+              )) {
+                return const SizedBox.shrink();
+              }
+              return MarkdownBody(
+                data: '![${alt ?? ''}](<$uri>)',
+                styleSheet: assistantMarkdownStyleSheet(context),
+              );
+            },
       builders: <String, MarkdownElementBuilder>{
         'pre': _CodeBlockBuilder(preGate),
         'code': pathBuilder,
@@ -10692,11 +9452,13 @@ class AttachmentMessageGrid extends StatelessWidget {
     required this.attachments,
     required this.session,
     required this.activeSessionId,
+    this.fullImages = false,
   });
 
   final List<RemoteAttachment> attachments;
   final SavedSession? session;
   final String? activeSessionId;
+  final bool fullImages;
 
   @override
   Widget build(BuildContext context) {
@@ -10708,6 +9470,7 @@ class AttachmentMessageGrid extends StatelessWidget {
             attachment: attachments[index],
             session: session,
             activeSessionId: activeSessionId,
+            fullImage: fullImages,
           ),
           if (index != attachments.length - 1) const SizedBox(height: 7),
         ],
@@ -10722,44 +9485,46 @@ class RemoteAttachmentTile extends StatelessWidget {
     required this.attachment,
     required this.session,
     required this.activeSessionId,
+    this.fullImage = false,
   });
 
   final RemoteAttachment attachment;
   final SavedSession? session;
   final String? activeSessionId;
+  final bool fullImage;
 
   @override
   Widget build(BuildContext context) {
     final saved = session;
     final sessionId = activeSessionId;
     if (attachment.isImage && saved != null && sessionId != null) {
+      final image = Image.network(
+        attachment.contentUri(saved.origin, sessionId).toString(),
+        headers: {'Authorization': 'Bearer ${saved.token}'},
+        fit: fullImage ? BoxFit.contain : BoxFit.cover,
+        cacheWidth: 720,
+        semanticLabel: attachment.name,
+        frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+          if (frame == null && !wasSynchronouslyLoaded) return child;
+          return DecoratedBox(
+            position: DecorationPosition.foreground,
+            decoration: BoxDecoration(
+              border: Border.all(color: AppPalette.of(context).line),
+            ),
+            child: child,
+          );
+        },
+        errorBuilder: (_, _, _) => AttachmentFileTile(
+          name: attachment.name,
+          size: attachment.size,
+          mimeType: attachment.mimeType,
+        ),
+      );
       return ClipRRect(
         borderRadius: BorderRadius.circular(12),
-        child: AspectRatio(
-          aspectRatio: 4 / 3,
-          child: Image.network(
-            attachment.contentUri(saved.origin, sessionId).toString(),
-            headers: {'Authorization': 'Bearer ${saved.token}'},
-            fit: BoxFit.cover,
-            cacheWidth: 720,
-            semanticLabel: attachment.name,
-            frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-              if (frame == null && !wasSynchronouslyLoaded) return child;
-              return DecoratedBox(
-                position: DecorationPosition.foreground,
-                decoration: BoxDecoration(
-                  border: Border.all(color: AppPalette.of(context).line),
-                ),
-                child: child,
-              );
-            },
-            errorBuilder: (_, _, _) => AttachmentFileTile(
-              name: attachment.name,
-              size: attachment.size,
-              mimeType: attachment.mimeType,
-            ),
-          ),
-        ),
+        child: fullImage
+            ? image
+            : AspectRatio(aspectRatio: 4 / 3, child: image),
       );
     }
     return AttachmentFileTile(
@@ -13037,6 +11802,7 @@ Future<T?> showAppOptionPicker<T>(
     },
   );
 }
+
 /// Shared dialog shell: the same overlay shadow as sheets, so every modal layer
 /// reads as floating at one depth. AlertDialog's own elevation stays at 0.
 class AppDialog extends StatelessWidget {
@@ -13384,13 +12150,20 @@ Future<String?> promptSessionTitle(
   ).whenComplete(controller.dispose);
 }
 
-Future<bool?> confirmSessionDelete(BuildContext context, String title) {
+Future<bool?> confirmSessionDelete(
+  BuildContext context,
+  String title, {
+  bool lastSession = false,
+}) {
   return showDialog<bool>(
     context: context,
     animationStyle: appOverlayAnimationStyle(context),
     builder: (dialogContext) => AppDialog(
       title: const Text('删除会话？'),
-      content: Text('将删除「$title」及其 transcript，不可恢复。'),
+      content: Text(
+        '将永久删除 CC Remote 中「$title」的消息记录与附件，无法恢复。电脑上原生客户端的历史记录会保留。'
+        '${lastSession ? '\n\n这是项目中最后一个未归档会话，删除后会自动创建一个同引擎的空白会话。' : ''}',
+      ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(dialogContext, false),
@@ -13473,7 +12246,9 @@ String errorText(Object err) {
 }
 
 bool isBlankAssistantMessage(TranscriptMessage message) {
-  return message.role == MessageRole.assistant && message.text.trim().isEmpty;
+  return message.role == MessageRole.assistant &&
+      message.text.trim().isEmpty &&
+      message.attachments.isEmpty;
 }
 
 bool hasAssistantReplyAfterLastUser(List<TranscriptMessage> messages) {
@@ -13486,7 +12261,7 @@ bool hasAssistantReplyAfterLastUser(List<TranscriptMessage> messages) {
       .any(
         (message) =>
             message.role == MessageRole.assistant &&
-            message.text.trim().isNotEmpty,
+            (message.text.trim().isNotEmpty || message.attachments.isNotEmpty),
       );
 }
 

@@ -13,6 +13,7 @@ export type AttachmentDescriptor = {
   name: string;
   mimeType: string;
   size: number;
+  source?: string;
 };
 
 export type StoredAttachment = AttachmentDescriptor & {
@@ -31,7 +32,7 @@ type StoredAttachmentMetadata = AttachmentDescriptor & {
 };
 
 export class AttachmentStore {
-  constructor(private readonly rootDir = join(process.cwd(), '.data', 'uploads')) {}
+  constructor(readonly rootDir = join(process.cwd(), '.data', 'uploads')) {}
 
   async save(options: {
     projectId: string;

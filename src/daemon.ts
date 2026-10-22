@@ -21,6 +21,7 @@ import {
   type StoredAttachment,
 } from './attachmentStore.js';
 import { readAttachments } from './attachmentUpload.js';
+import { collectReplyImages } from './replyImages.js';
 import {
   ClaudeBridge,
   discoverClaudeCommands,
@@ -152,8 +153,8 @@ let workspace = new WorkspaceService(activeContext.project.path);
 let bridge = createBridge(activeContext.project.path, activeContext.session.engine);
 const claudeHistoryReader = new ClaudeHistoryReader();
 let historyBridge: CodexBridge | undefined;
-let historyBridgeWorkspace: string | undefined;
 const historyErrors = new Map<string, string>();
+const replyImageRevisions = new WeakMap<SessionContext['transcript'], number>();
 let nativeHistoryRefresh: Promise<void> | undefined;
 // Serializes prompt/select/register across awaits; bridge.isRunning alone races.
 const runFlight = createRunFlight(() => bridge.isRunning());
@@ -580,9 +581,20 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       sendJson(res, 400, { error: 'search_limit_invalid' });
       return;
     }
+    const projectId = url.searchParams.get('projectId') || undefined;
+    const engine = url.searchParams.get('engine') || undefined;
+    const archived = url.searchParams.get('archived');
+    if ((engine !== undefined && !isAgentEngine(engine))
+      || (archived !== null && archived !== 'true' && archived !== 'false')) {
+      sendJson(res, 400, { error: 'search_filter_invalid' });
+      return;
+    }
     sendJson(res, 200, {
       query,
-      results: projectSessions.searchSessions(query, Math.min(requestedLimit, 50)),
+      results: projectSessions.searchSessions(query, Math.min(requestedLimit, 50), {
+        projectId, engine,
+        archived: archived === null ? undefined : archived === 'true',
+      }),
     });
     return;
   }
@@ -655,6 +667,32 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     return;
   }
 
+  const sessionMetadataMatch = req.method === 'POST'
+    ? url.pathname.match(/^\/api\/sessions\/([^/]+)\/(pin|restore)$/)
+    : null;
+  if (sessionMetadataMatch) {
+    if (!runFlight.tryBegin('mutate')) return sendJson(res, 409, { error: 'claude_is_busy' });
+    try {
+      const sessionId = decodeURIComponent(sessionMetadataMatch[1]);
+      if (sessionMetadataMatch[2] === 'restore') {
+        await projectSessions.restoreSession(sessionId);
+      } else {
+        const body = await readJson<{ pinned?: unknown }>(req);
+        if (typeof body.pinned !== 'boolean') return sendJson(res, 400, { error: 'pinned_invalid' });
+        await projectSessions.setSessionPinned(sessionId, body.pinned);
+      }
+      activeContext = projectSessions.active();
+      broadcastCatalog();
+      sendJson(res, 200, { ok: true, ...projectSessions.catalog() });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      sendJson(res, message === 'session_not_found' ? 404 : 400, { error: message });
+    } finally {
+      runFlight.end();
+    }
+    return;
+  }
+
   const archiveSessionMatch = req.method === 'POST'
     ? url.pathname.match(/^\/api\/sessions\/([^/]+)\/archive$/)
     : null;
@@ -666,6 +704,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
         await selectActiveSession(next);
         broadcastActiveSession();
       } else {
+        activeContext = next;
         broadcastCatalog();
       }
       sendJson(res, 200, { ok: true, ...projectSessions.catalog() });
@@ -1077,7 +1116,7 @@ async function runPromptFlight(
     promptAttachments.map(attachmentDescriptor),
     sandboxMode,
     enginePrompt,
-    engine === 'codex' && /^\/(?:compact|review)(?:\s|$)/.test(prompt),
+    /^\/compact(?:\s|$)/.test(prompt) || engine === 'codex' && /^\/review(?:\s|$)/.test(prompt),
   );
   if (historyChanged) broadcastNativeTranscript(runContext, runId);
   await projectSessions.setSessionTitleFromPrompt(
@@ -1154,10 +1193,12 @@ async function runPromptFlight(
     },
     onPermissionRequest: request => {
       runContext.transcript.addPermission(request);
+      broadcastCatalog();
       broadcast(sessionMessage(permissionRequestMessage(request), runContext, runId));
     },
     onPermissionClosed: requestId => {
       runContext.transcript.removePermission(requestId);
+      broadcastCatalog();
       broadcast(sessionMessage({ type: 'permission_resolved', requestId }, runContext, runId));
     },
   });
@@ -1192,6 +1233,7 @@ async function runPromptFlight(
       broadcast(sessionMessage({ type: 'session_info', ...sessionInfo }, runContext, runId));
     }
   }
+  const replyImagesChanged = await syncReplyImages(runContext);
   if (result.stopped) {
     await runContext.transcript.finishStopped();
     broadcast(sessionMessage({ type: 'stopped' }, runContext, runId));
@@ -1209,6 +1251,7 @@ async function runPromptFlight(
       ...(engine === 'claude' ? { claudeSessionId: result.sessionId } : {}),
     }, runContext, runId));
   }
+  if (replyImagesChanged) broadcastNativeTranscript(runContext, runId);
   broadcast(sessionMessage({
     type: 'status',
     authenticated: true,
@@ -1366,29 +1409,28 @@ async function syncNativeClaudeHistory(context: SessionContext): Promise<void> {
 
 async function syncNativeMessages(context: SessionContext, required = false): Promise<boolean> {
   const snapshot = context.transcript.snapshot();
-  if (!snapshot.engineSessionId || snapshot.running) return false;
+  if (snapshot.running) return false;
+  if (!snapshot.engineSessionId) return syncReplyImages(context);
   try {
     let history;
     if (context.session.engine === 'claude') {
       history = await claudeHistoryReader.read(snapshot.engineSessionId);
     } else {
-      if (!historyBridge || historyBridgeWorkspace !== context.project.path) {
-        historyBridge?.close();
-        historyBridge = new CodexBridge({
-          codexBin: CODEX_BIN, codexArgs: CODEX_ARGS, workspaceDir: context.project.path,
-        });
-        historyBridgeWorkspace = context.project.path;
-      }
+      // History is addressed by thread ID, independent of the active folder.
+      historyBridge ??= new CodexBridge({
+        codexBin: CODEX_BIN, codexArgs: CODEX_ARGS, workspaceDir: WORKSPACE_DIR,
+      });
       history = await historyBridge.readHistory(snapshot.engineSessionId);
     }
-    if (!history) return false;
+    if (!history) return syncReplyImages(context);
     const result = await context.transcript.importNativeHistory(history);
+    const imagesChanged = await syncReplyImages(context);
     if (result.external && context.session.id === activeContext.session.id) bridge.close();
     historyErrors.delete(context.session.id);
     if (required && history.running) {
       throw new Error('native_session_is_busy');
     }
-    return result.changed;
+    return result.changed || imagesChanged;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (required) {
@@ -1399,8 +1441,33 @@ async function syncNativeMessages(context: SessionContext, required = false): Pr
       historyErrors.set(context.session.id, message);
       console.warn('[native-history] Could not refresh session history:', error);
     }
-    return false;
+    return syncReplyImages(context);
   }
+}
+
+async function syncReplyImages(context: SessionContext): Promise<boolean> {
+  const snapshot = context.transcript.snapshot();
+  if (replyImageRevisions.get(context.transcript) === snapshot.revision) return false;
+  let changed = false;
+  for (const [index, message] of snapshot.messages.entries()) {
+    if (message.role !== 'assistant') continue;
+    try {
+      const images = await collectReplyImages({
+        store: attachments,
+        projectId: context.project.id,
+        sessionId: context.session.id,
+        workspaceDir: context.project.path,
+        text: message.text,
+        existing: message.attachments,
+      });
+      changed = context.transcript.setAssistantAttachments(index, images) || changed;
+    } catch (error) {
+      console.warn('[reply-images] Could not attach a reply image:', error);
+    }
+  }
+  if (changed) await context.transcript.flush();
+  replyImageRevisions.set(context.transcript, context.transcript.snapshot().revision);
+  return changed;
 }
 
 function broadcastNativeTranscript(context: SessionContext, runId?: string): void {

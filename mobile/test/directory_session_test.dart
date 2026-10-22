@@ -67,6 +67,8 @@ Future<dynamic> boot(WidgetTester tester, RemoteApiClient api) async {
   await tester.pumpAndSettle();
   state.openSessions();
   await tester.pumpAndSettle();
+  await tester.tap(find.byKey(const ValueKey('create-session')));
+  await tester.pumpAndSettle();
   await tester.tap(find.byKey(const ValueKey('open-computer-directory')));
   await tester.pumpAndSettle();
   await tester.enterText(

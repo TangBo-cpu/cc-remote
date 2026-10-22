@@ -68,6 +68,80 @@ Future<void> mutate(dynamic state, String operation) async {
 void main() {
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
 
+  testWidgets(
+    'archived history opens read-only without changing the active draft',
+    (tester) async {
+      final api = RemoteApiClient(
+        client: MockClient(
+          (_) async => response({
+            'projectId': 'project',
+            'sessionId': 'archived',
+            'title': 'Archive',
+            'archived': true,
+            'transcript': {
+              'version': 1,
+              'revision': 1,
+              'running': false,
+              'messages': [
+                {'role': 'assistant', 'text': 'archived reply'},
+              ],
+              'pendingPermissions': [],
+            },
+          }),
+        ),
+      );
+      final dynamic state = await boot(tester, api);
+      state.remoteSessions.add(
+        const RemoteSessionSummary(
+          id: 'archived',
+          projectId: 'project',
+          title: 'Archive',
+          updatedAt: 1,
+          running: false,
+          messageCount: 1,
+          archived: true,
+        ),
+      );
+      state.promptController.text = 'keep draft';
+      expect(state.selectRemoteSessionWithJump('archived'), true);
+      await tester.pumpAndSettle();
+      expect(state.activeSessionId, 'a');
+      expect(state.viewingSessionId, 'archived');
+      expect(state.peekMessages.single.text, 'archived reply');
+      expect(state.promptController.text, 'keep draft');
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets(
+    'session metadata ignores an old host response and preserves current state',
+    (tester) async {
+      final pending = Completer<http.Response>();
+      final api = RemoteApiClient(client: MockClient((_) => pending.future));
+      final dynamic state = await boot(tester, api);
+      final Future<void> mutation = state.updateSessionMetadata(
+        'b',
+        'pin',
+        pinned: true,
+      );
+      final expected = expectLater(mutation, throwsStateError);
+      state.session = SavedSession(
+        origin: Uri.parse('https://new-host.test'),
+        token: 'new-token',
+        deviceName: 'New host',
+      );
+      state.handleWsMessage(jsonEncode({'type': 'catalog', ...catalog('c')}));
+      pending.complete(response(catalog('a'), 401));
+      await expected;
+      await tester.pumpAndSettle();
+      expect(state.activeSessionId, 'c');
+      expect(state.session.token, 'new-token');
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    },
+  );
+
   for (final operation in ['create', 'rename', 'archive', 'delete']) {
     testWidgets(
       '$operation ignores an HTTP catalog after a newer WS selection',

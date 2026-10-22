@@ -179,17 +179,19 @@ input.on('line', line => {
       exitCode: 0,
     },
   });
+  const reply = fakeOptions['reply-file'] ? readFileSync(fakeOptions['reply-file'], 'utf8') : 'fake codex reply';
+  const split = Math.floor(reply.length / 2);
   notify('item/agentMessage/delta', {
     threadId,
     turnId,
     itemId: `message-${turnNumber}`,
-    delta: 'fake codex ',
+    delta: reply.slice(0, split),
   });
   notify('item/agentMessage/delta', {
     threadId,
     turnId,
     itemId: `message-${turnNumber}`,
-    delta: 'reply',
+    delta: reply.slice(split),
   });
   notify('item/completed', {
     threadId,
@@ -198,7 +200,7 @@ input.on('line', line => {
     item: {
       id: `message-${turnNumber}`,
       type: 'agentMessage',
-      text: 'fake codex reply',
+      text: reply,
     },
   });
   notify('thread/tokenUsage/updated', {
@@ -228,7 +230,7 @@ input.on('line', line => {
       id: turnId, status: 'completed', itemsView: 'full',
       items: [
         { id: turnId + '-user', type: 'userMessage', content: message.params.input },
-        { id: 'message-' + turnNumber, type: 'agentMessage', text: 'fake codex reply' },
+        { id: 'message-' + turnNumber, type: 'agentMessage', text: reply },
       ],
     });
     writeFileSync(fakeOptions.history, JSON.stringify(history));

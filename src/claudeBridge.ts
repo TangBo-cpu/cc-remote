@@ -63,6 +63,9 @@ type CurrentRun = {
   options: ClaudeRunOptions;
   sessionId?: string;
   sawDelta: boolean;
+  sawText: boolean;
+  compacted?: boolean;
+  commandError?: string;
   stderr: string;
   resolve: (result: ClaudeRunResult) => void;
 };
@@ -144,6 +147,7 @@ export class ClaudeBridge implements EngineBridge {
       options,
       sessionId: options.sessionId,
       sawDelta: false,
+      sawText: false,
       stderr: '',
       resolve: resolveRun,
     };
@@ -332,23 +336,49 @@ export class ClaudeBridge implements EngineBridge {
       run.options.onSessionId(foundSessionId);
     }
 
-    const delta = extractTextDelta(event);
-    if (delta) {
-      run.sawDelta = true;
-      run.options.onText(delta);
-    } else {
-      const assistantText = extractAssistantText(event);
-      const resultText = extractResultText(event);
-      if (assistantText && !run.sawDelta) run.options.onText(assistantText);
-      else if (resultText && !run.sawDelta) run.options.onText(resultText);
+    if (isRecord(event)) {
+      if (event.type === 'system' && (event.subtype === 'compact_boundary'
+          || event.subtype === 'status' && event.compact_result === 'success')) {
+        run.compacted = true;
+      }
+      if (event.type === 'system' && event.subtype === 'status' && event.compact_result === 'failed'
+          && /^\/compact(?:\s|$)/.test(run.options.prompt)) {
+        run.commandError = '上下文压缩失败，请重试。';
+      }
+      if (isRecord(event.local_command_outcome) && event.local_command_outcome.kind === 'failed') {
+        run.commandError = extractAssistantText(event) || 'claude_command_failed';
+      }
+      if (event.type === 'result' && run.commandError) {
+        run.commandError = extractResultText(event) || run.commandError;
+      }
+    }
+
+    if (!run.commandError) {
+      const delta = extractTextDelta(event);
+      if (delta) {
+        run.sawDelta = true;
+        run.sawText = true;
+        run.options.onText(delta);
+      } else {
+        const assistantText = extractAssistantText(event);
+        const resultText = extractResultText(event);
+        const text = assistantText && !run.sawDelta ? assistantText
+          : resultText && !run.sawText ? resultText : '';
+        if (text) {
+          run.sawText = true;
+          run.options.onText(text);
+        }
+      }
     }
 
     if (isRecord(event) && event.type === 'result') {
-      this.finishRun(
-        run,
-        event.is_error === true ? 1 : 0,
-        event.is_error === true ? extractResultText(event) || 'claude_run_failed' : undefined,
-      );
+      const error = run.commandError
+        || (event.is_error === true ? extractResultText(event) || 'claude_run_failed' : undefined);
+      if (!error && !run.stopped && run.compacted && !run.sawText
+          && /^\/compact(?:\s|$)/.test(run.options.prompt)) {
+        run.options.onText('上下文压缩完成。');
+      }
+      this.finishRun(run, error ? 1 : 0, error);
     }
   }
 
@@ -367,7 +397,7 @@ export class ClaudeBridge implements EngineBridge {
       exitCode,
       stopped: run.stopped,
       sessionId: run.sessionId,
-      stderr: run.stderr.trim() || error || '',
+      stderr: run.commandError || run.stderr.trim() || error || '',
     });
   }
 

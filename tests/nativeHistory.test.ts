@@ -91,6 +91,47 @@ test('native merge aligns assistant fragments around tools without removing the 
   assert.equal(mergeNativeMessages(original, phone).messages.length, 4);
 });
 
+test('native merge imports whole assistant messages missing from the live stream', () => {
+  const original: TranscriptMessage[] = [
+    { role: 'user', text: '检查代码' },
+    { role: 'assistant', text: '开始检查。' },
+    { role: 'activity', text: '工具', activityId: 'tool' },
+    { role: 'assistant', text: '检查完成。' },
+    { role: 'user', text: '/compact', nativeLocalOnly: true },
+    { role: 'system', text: '错误：会话历史同步失败' },
+  ];
+  const incoming: NativeMessage[] = [
+    { id: 'user', role: 'user', text: '检查代码' },
+    { id: 'before', role: 'assistant', text: '开始检查。' },
+    { id: 'question', role: 'assistant', text: '需要检查哪些文件？' },
+    { id: 'after', role: 'assistant', text: '检查完成。' },
+  ];
+  const result = mergeNativeMessages(original, incoming);
+  assert.equal(result.external, true);
+  assert.deepEqual(result.messages.filter(message => message.role === 'assistant')
+    .map(message => message.text), ['开始检查。', '需要检查哪些文件？', '检查完成。']);
+  assert.equal(result.messages.find(message => message.role === 'activity')?.activityId, 'tool');
+  assert.deepEqual(result.messages.slice(-2), original.slice(-2));
+  assert.deepEqual(result.messages[0].native?.ids, ['user', 'before', 'question', 'after']);
+  assert.deepEqual(mergeNativeMessages(result.messages, incoming), {
+    messages: result.messages, external: false,
+  });
+  assert.throws(() => mergeNativeMessages(original, [
+    ...incoming, ...incoming.map(message => ({ ...message, id: 'repeat-' + message.id })),
+  ]), /native_history_conflict/);
+  for (const replies of [
+    ['开始检查。', '检查失败。'],
+    ['检查完成。', '开始检查。'],
+    ['还没开始检查。', '检查完成。'],
+  ]) {
+    assert.throws(() => mergeNativeMessages(original, [incoming[0],
+      ...replies.map((text, index): NativeMessage => ({
+        id: String(index), role: 'assistant', text,
+      })),
+    ]), /native_history_conflict/);
+  }
+});
+
 test('failed local-only requests survive subsequent native imports', () => {
   const failed: TranscriptMessage[] = [
     { role: 'user', text: '未送达' }, { role: 'system', text: '错误：进程退出' },
@@ -167,6 +208,27 @@ test('Claude compaction links to the previous conversation without importing its
     entry('a2', 'u2', 'assistant', '电脑回复'),
   ]));
   assert.deepEqual(result.messages.map(message => message.id), ['u1', 'a1', 'u2', 'a2']);
+});
+
+test('Claude compact commands stay hidden and local command completion clears the busy state', () => {
+  const previous = [entry('u1', null, 'user', '手机问题'), entry('a1', 'u1', 'assistant', '手机回复')];
+  const command = entry('compact', 'a1', 'user',
+    '<command-name>/compact</command-name>\n<command-message>compact</command-message>');
+  const completed = { sessionId, uuid: 'completed', parentUuid: 'compact',
+    type: 'system', subtype: 'local_command' };
+  const pending = parseClaudeHistory(sessionId, jsonl([...previous, command]));
+  assert.deepEqual(pending.messages.map(message => message.text), ['手机问题', '手机回复']);
+  assert.equal(pending.running, true);
+  assert.equal(parseClaudeHistory(sessionId, jsonl([...previous, command, completed])).running, false);
+  const output = entry('output', 'compact', 'user', '<local-command-stdout>Compacted </local-command-stdout>');
+  const success = parseClaudeHistory(sessionId, jsonl([...previous, command, output]));
+  assert.equal(success.running, false);
+  assert.deepEqual(success.messages.map(message => message.text), ['手机问题', '手机回复']);
+  const next = parseClaudeHistory(sessionId, jsonl([...previous, command, completed,
+    entry('u2', 'completed', 'user', '继续'), entry('a2', 'u2', 'assistant', '继续回复'),
+  ]));
+  assert.deepEqual(next.messages.map(message => message.text), ['手机问题', '手机回复', '继续', '继续回复']);
+  assert.equal(next.running, false);
 });
 
 test('Claude text blocks match the live bridge without adding whitespace', () => {

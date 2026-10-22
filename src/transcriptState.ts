@@ -56,6 +56,7 @@ export type TranscriptState = {
     nativeLocalOnly?: boolean,
   ): void;
   appendText(text: string): void;
+  setAssistantAttachments(index: number, attachments: AttachmentDescriptor[]): boolean;
   mergeActivity(activity: ClaudeActivity): void;
   setSessionInfo(info: ClaudeSessionInfo): void;
   setEngineSessionId(sessionId: string | undefined): void;
@@ -199,6 +200,16 @@ export async function createTranscriptState(
         finishActivities(state.messages, 'done', 'thinking');
         state.messages.push({ role: 'assistant', text: nextText });
       });
+    },
+
+    setAssistantAttachments(index, attachments): boolean {
+      const message = state.messages[index];
+      if (message?.role !== 'assistant'
+          || JSON.stringify(message.attachments ?? []) === JSON.stringify(attachments)) return false;
+      mutate(() => {
+        message.attachments = attachments.length ? structuredClone(attachments) : undefined;
+      });
+      return true;
     },
 
     mergeActivity(activity: ClaudeActivity): void {
@@ -472,7 +483,8 @@ function hasAssistantReplyAfterLastUser(messages: TranscriptMessage[]): boolean 
     lastUser < 0 ||
     messages
       .slice(lastUser + 1)
-      .some(message => message.role === 'assistant' && message.text.trim().length > 0)
+      .some(message => message.role === 'assistant'
+        && (message.text.trim().length > 0 || Boolean(message.attachments?.length)))
   );
 }
 
@@ -494,7 +506,8 @@ function isAttachmentDescriptor(value: unknown): value is AttachmentDescriptor {
     && typeof value.id === 'string'
     && typeof value.name === 'string'
     && typeof value.mimeType === 'string'
-    && typeof value.size === 'number';
+    && typeof value.size === 'number'
+    && (value.source === undefined || typeof value.source === 'string');
 }
 
 function isTranscriptPermissionRequest(value: unknown): value is TranscriptPermissionRequest {

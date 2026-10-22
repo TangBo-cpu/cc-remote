@@ -36,8 +36,23 @@ function assistantText(turn: Turn<{ role: string; text: string }>): string {
     .map(message => message.text).join(''));
 }
 
-function turnKey(prompt: string, turn: Turn<{ role: string; text: string }>): string {
-  return JSON.stringify([normalize(prompt), assistantText(turn)]);
+function matchesReplies(
+  local: Turn<{ role: string; text: string }>,
+  native: Turn<{ role: string; text: string }>,
+): boolean {
+  if (assistantText(local) === assistantText(native)) return true;
+  const expected = local.messages.filter(message => message.role === 'assistant')
+    .map(message => normalize(message.text)).join('');
+  if (!expected) return false;
+  const offsets = new Set([0]);
+  for (const message of native.messages) {
+    if (message.role !== 'assistant') continue;
+    const text = normalize(message.text);
+    for (const offset of [...offsets]) {
+      if (expected.startsWith(text, offset)) offsets.add(offset + text.length);
+    }
+  }
+  return offsets.has(expected.length);
 }
 
 function binding(turn: Turn<NativeMessage>): NativeBinding {
@@ -55,10 +70,10 @@ function matches(local: Turn<TranscriptMessage>, native: Turn<NativeMessage>): b
     prompt ||= '请查看附件并根据内容处理。';
     const marker = '\n\n以下附件由用户通过 CC Remote 上传。请先读取需要的文件。\n';
     if (nativePrompt.startsWith(prompt + marker)) {
-      return assistantText(local) === assistantText(native);
+      return matchesReplies(local, native);
     }
   }
-  return prompt === nativePrompt && assistantText(local) === assistantText(native);
+  return prompt === nativePrompt && matchesReplies(local, native);
 }
 
 export function mergeNativeMessages(
@@ -78,13 +93,13 @@ export function mergeNativeMessages(
     ids.add(message.id);
   }
   const byId = new Map<string, number>();
-  const byText = new Map<string, number[]>();
+  const byPrompt = new Map<string, number[]>();
   native.forEach((turn, index) => {
     byId.set(turn.messages[0].id, index);
-    const key = turnKey(turn.messages[0].text, turn);
-    const indexes = byText.get(key) ?? [];
+    const key = normalize(turn.messages[0].text);
+    const indexes = byPrompt.get(key) ?? [];
     indexes.push(index);
-    byText.set(key, indexes);
+    byPrompt.set(key, indexes);
   });
 
   const candidates = local.turns.map(turn => {
@@ -95,7 +110,8 @@ export function mergeNativeMessages(
     const indexes = previous ? known === undefined ? [] : [known]
       : user.attachments?.length && !user.nativePrompt
         ? native.flatMap((source, index) => matches(turn, source) ? [index] : [])
-        : byText.get(turnKey(user.nativePrompt ?? user.text, turn)) ?? [];
+        : (byPrompt.get(normalize(user.nativePrompt ?? user.text)) ?? [])
+          .filter(index => matches(turn, native[index]));
     // Failed requests may never have reached the engine; retain their diagnostics.
     if (indexes.length === 0 && !previous && !assistantText(turn)
         && turn.messages.some(message => message.role === 'system')) return null;
@@ -148,7 +164,8 @@ export function mergeNativeMessages(
     if (previous && previous.ids.some(id => !nextBinding.ids.includes(id))) {
       throw new Error('native_history_conflict');
     }
-    if (previous && previous.hash !== nextBinding.hash) {
+    if (previous ? previous.hash !== nextBinding.hash
+      : assistantText(local.turns[existingIndex]) !== assistantText(turn)) {
       external = true;
       result.push({ ...existing[0], native: nextBinding });
       const replies = turn.messages.slice(1);

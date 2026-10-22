@@ -89,15 +89,20 @@ export function parseClaudeHistory(sessionId: string, source: string): NativeHis
     if (!text.trim() && entry.type === 'user' && Array.isArray(content)
         && content.some(block => block?.type === 'image')) text = '[图片]';
     if (!text.trim()) continue;
+    if (entry.type === 'user' && /^<command-name>\/compact<\/command-name>(?:\s|$)/.test(text.trim())) continue;
+    if (entry.type === 'user' && /^<local-command-(?:stdout|stderr)>/.test(text.trim())) continue;
     const next: NativeMessage = { id: entry.uuid, role: entry.type, text };
     const existing = messages.findIndex(item => item.id === next.id);
     if (existing >= 0) messages[existing] = next;
     else messages.push(next);
   }
-  const lastWork = main.filter(entry => entry.isMeta !== true && entry.isCompactSummary !== true).at(-1);
+  const lastWork = entries.filter(entry => (entry.type === 'user' || entry.type === 'assistant'
+    || entry.type === 'system' && entry.subtype === 'local_command')
+    && entry.isMeta !== true && entry.isCompactSummary !== true).at(-1);
   const lastMessage = lastWork?.message as Record<string, unknown> | undefined;
   const content = lastMessage?.content;
-  const running = boundary < source.length || lastWork?.type === 'user'
+  const localCommandOutput = typeof content === 'string' && /^<local-command-(?:stdout|stderr)>/.test(content.trim());
+  const running = boundary < source.length || lastWork?.type === 'user' && !localCommandOutput
     || lastMessage?.stop_reason === 'tool_use'
     || (Array.isArray(content) && content.some(block => block?.type === 'tool_use'));
   return { sessionId, messages, running };

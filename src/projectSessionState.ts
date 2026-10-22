@@ -23,6 +23,7 @@ type StoredSession = {
   createdAt: number;
   updatedAt: number;
   archivedAt?: number;
+  pinned?: boolean;
 };
 
 type StoredCatalog = {
@@ -44,6 +45,8 @@ export type SessionSummary = StoredSession & {
   model?: string;
   remainingTokens?: number;
   archived: boolean;
+  preview?: string;
+  needsAttention: boolean;
 };
 
 export type ProjectSessionCatalog = {
@@ -79,7 +82,7 @@ export type ProjectSessionState = {
   catalog(): ProjectSessionCatalog;
   active(): SessionContext;
   getSession(sessionId: string): SessionContext | undefined;
-  searchSessions(query: string, limit?: number): SessionSearchResult[];
+  searchSessions(query: string, limit?: number, filters?: { projectId?: string; engine?: AgentEngine; archived?: boolean }): SessionSearchResult[];
   registerProject(path: string, name?: string): Promise<ProjectSessionCatalog>;
   createSession(projectId: string, title?: string, engine?: AgentEngine): Promise<SessionContext>;
   createSessionAtDirectory(path: unknown, engine: AgentEngine): Promise<SessionContext>;
@@ -87,6 +90,8 @@ export type ProjectSessionState = {
   setSessionTitleFromPrompt(sessionId: string, prompt: string): Promise<void>;
   setSessionTitle(sessionId: string, title: string): Promise<SessionContext>;
   archiveSession(sessionId: string): Promise<SessionContext>;
+  restoreSession(sessionId: string): Promise<void>;
+  setSessionPinned(sessionId: string, pinned: boolean): Promise<void>;
   deleteSession(sessionId: string): Promise<{ catalog: ProjectSessionCatalog; deletedSessionId: string }>;
   flush(): Promise<void>;
 };
@@ -251,11 +256,14 @@ export async function createProjectSessionState(options: {
     active: current,
     getSession: getSessionContext,
 
-    searchSessions(query: string, limit = 50): SessionSearchResult[] {
+    searchSessions(query: string, limit = 50, filters: { projectId?: string; engine?: AgentEngine; archived?: boolean } = {}): SessionSearchResult[] {
       const needle = query.trim();
       if (!needle) return [];
       const maxResults = Math.max(1, Math.min(Math.trunc(limit), 50));
       return catalog.sessions
+        .filter(session => (!filters.projectId || session.projectId === filters.projectId)
+          && (!filters.engine || session.engine === filters.engine)
+          && (filters.archived === undefined || Boolean(session.archivedAt) === filters.archived))
         .map(session => {
           const snapshot = transcripts.get(session.id)?.snapshot();
           if (!snapshot) return undefined;
@@ -401,22 +409,42 @@ export async function createProjectSessionState(options: {
       const context = getSessionContext(sessionId);
       if (!context) throw new Error('session_not_found');
       if (context.transcript.snapshot().running) throw new Error('claude_is_busy');
+      if (context.session.archivedAt) return current();
       const projectSessions = catalog.sessions.filter(item =>
         item.projectId === context.project.id && !item.archivedAt);
       if (projectSessions.length <= 1) throw new Error('last_session');
       const now = Date.now();
-      context.session.archivedAt = now;
-      context.session.updatedAt = now;
-      context.project.updatedAt = now;
+      const nextCatalog = structuredClone(catalog);
+      const archived = nextCatalog.sessions.find(item => item.id === sessionId)!;
+      archived.archivedAt = now;
+      archived.updatedAt = now;
+      nextCatalog.projects.find(item => item.id === context.project.id)!.updatedAt = now;
       if (catalog.activeSessionId === sessionId) {
         const next = catalog.sessions
           .filter(item => item.projectId === context.project.id && !item.archivedAt && item.id !== sessionId)
           .sort((a, b) => b.updatedAt - a.updatedAt)[0];
         if (!next) throw new Error('last_session');
-        catalog.activeSessionId = next.id;
+        nextCatalog.activeSessionId = next.id;
       }
-      await saveCatalog();
+      await saveCatalog(nextCatalog);
+      catalog = nextCatalog;
       return getSessionContext(catalog.activeSessionId!)!;
+    },
+
+    async restoreSession(sessionId: string): Promise<void> {
+      if (!getSessionContext(sessionId)) throw new Error('session_not_found');
+      const next = structuredClone(catalog);
+      delete next.sessions.find(item => item.id === sessionId)!.archivedAt;
+      await saveCatalog(next);
+      catalog = next;
+    },
+
+    async setSessionPinned(sessionId: string, pinned: boolean): Promise<void> {
+      if (!getSessionContext(sessionId)) throw new Error('session_not_found');
+      const next = structuredClone(catalog);
+      next.sessions.find(item => item.id === sessionId)!.pinned = pinned;
+      await saveCatalog(next);
+      catalog = next;
     },
 
     async deleteSession(sessionId: string): Promise<{ catalog: ProjectSessionCatalog; deletedSessionId: string }> {
@@ -480,6 +508,15 @@ function newProject(path: string, name?: string): StoredProject {
 }
 
 function sessionSummary(session: StoredSession, snapshot?: TranscriptSnapshot): SessionSummary {
+  let preview: string | undefined;
+  const messages = snapshot?.messages ?? [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if ((message.role === 'user' || message.role === 'assistant') && message.text.trim()) {
+      preview = message.text.replace(/\s+/g, ' ').trim().slice(0, 160);
+      break;
+    }
+  }
   return {
     ...session,
     updatedAt: Math.max(session.updatedAt, snapshot?.updatedAt ?? 0),
@@ -488,6 +525,9 @@ function sessionSummary(session: StoredSession, snapshot?: TranscriptSnapshot): 
     model: snapshot?.sessionInfo.model,
     remainingTokens: snapshot?.sessionInfo.remainingTokens,
     archived: typeof session.archivedAt === 'number',
+    pinned: session.pinned === true,
+    preview,
+    needsAttention: (snapshot?.pendingPermissions.length ?? 0) > 0,
   };
 }
 
@@ -535,6 +575,7 @@ async function loadCatalog(path: string): Promise<StoredCatalog> {
         .map(session => ({
           ...session,
           engine: isAgentEngine(session.engine) ? session.engine : 'claude',
+          pinned: session.pinned === true,
         })),
     };
   } catch {

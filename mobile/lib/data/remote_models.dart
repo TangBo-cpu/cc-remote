@@ -215,6 +215,9 @@ class RemoteSessionSummary {
     this.model,
     this.engine = SessionEngine.claude,
     this.archived = false,
+    this.pinned = false,
+    this.preview,
+    this.needsAttention = false,
   });
 
   final String id;
@@ -226,6 +229,9 @@ class RemoteSessionSummary {
   final String? model;
   final SessionEngine engine;
   final bool archived;
+  final bool pinned;
+  final String? preview;
+  final bool needsAttention;
 
   String get summary {
     final parts = <String>[];
@@ -251,6 +257,9 @@ class RemoteSessionSummary {
       model: json['model'] as String?,
       engine: SessionEngine.fromWire(json['engine']),
       archived: json['archived'] == true || json['archivedAt'] is num,
+      pinned: json['pinned'] == true,
+      preview: json['preview'] is String ? json['preview'] as String : null,
+      needsAttention: json['needsAttention'] == true,
     );
   }
 }
