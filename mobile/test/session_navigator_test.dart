@@ -722,8 +722,53 @@ void main() {
       );
       await tester.tap(find.byTooltip('关闭'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('session-page-back')));
+      await tester.tap(find.byKey(const ValueKey('session-drawer-close')));
       await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets(
+    'the sidebar keeps a chat strip exposed that closes on tap',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildSignalConsoleTheme(),
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: TextButton(
+                onPressed: () => showSessionNavigator(
+                  context,
+                  projects: projects,
+                  sessions: [item('current')],
+                  activeProjectId: 'p1',
+                  activeSessionId: 'current',
+                  running: false,
+                  onSelect: (_) {},
+                  onSearchResult: (_) {},
+                  onCreate: (_, _) {},
+                  onRename: (_, _) async {},
+                  onArchive: (_) async {},
+                  onRestore: (_) async {},
+                  onPin: (_, _) async {},
+                  onDelete: (_) async {},
+                  onSearch: (_, {projectId, engine, archived}) async => [],
+                ),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.tap(find.text('open'));
+      await tester.pumpAndSettle();
+      // The 800-point test window leaves a 64-point chat strip beside the
+      // 400-point sidebar.
+      final panel = find.byType(SessionNavigatorPage);
+      expect(tester.getSize(panel).width, 400);
+      expect(tester.getTopLeft(panel).dx, 0);
+      await tester.tapAt(const Offset(780, 300));
+      await tester.pumpAndSettle();
+      expect(panel, findsNothing);
     },
   );
 

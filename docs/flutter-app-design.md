@@ -28,7 +28,7 @@ Flutter App 是产品主入口。当前实现集中在少量文件中，优先�
 
 `PermissionRequestCard` 为全宽决策面：命令 → 工作目录（`session.workspaceDir` 或 fallback 文案）→ 影响 → 范围 →「仅本次允许」/「拒绝并返回」。
 
-`SessionNavigatorPage` 使用平台路由与 predictive back，减少动态效果时路由时长归零。当前项目会话、所有项目和全文搜索仍为三个视图；项目与会话使用扁平列表，保留原版 `AppMark.of(id, index)` 彩色会话/项目身份图标与独立蓝色导航强调色（`navigatorAccent`），选中项使用高亮底色与图标提示。新建会话仍先选择 Claude / Codex，引擎创建后不可更改。搜索保留 300ms 防抖、片段高亮、错误重试和命中消息定位。`SettingsSheet` 使用扁平分组，提供外观、模型、字号与通知；外观只有跟随系统、浅色和深色，壁纸与偏好预览已移除。`WorkspaceDrawer` 只读展示活动项目的文件与 Git diff。Bottom sheet / dialog 保留 220ms 进入 / 160ms 退出，减少动态效果时关闭空间转场。
+`SessionNavigatorPage` 以左侧侧边栏呼出：贴边全高的平面面板从左滑入、遮罩随路由进度渐显（220ms easeOutCubic），宽度为 min(400, 屏宽 − 64)，右侧保留一条聊天窄边，点窄边、遮罩、关闭按钮或返回手势关闭；减少动态效果时转场时长归零。当前项目会话、所有项目和全文搜索仍为三个视图；项目与会话使用扁平列表，保留原版 `AppMark.of(id, index)` 彩色会话/项目身份图标与独立蓝色导航强调色（`navigatorAccent`），项目行使用带身份色的 Lucide 标准笔画文件夹图标，选中项使用高亮底色与图标提示。新建会话仍先选择 Claude / Codex，引擎创建后不可更改。搜索保留 300ms 防抖、片段高亮、错误重试和命中消息定位。`SettingsSheet` 使用扁平分组，提供外观、模型、字号与通知；外观只有跟随系统、浅色和深色，壁纸与偏好预览已移除。`WorkspaceDrawer` 只读展示活动项目的文件与 Git diff。Bottom sheet / dialog 保留 220ms 进入 / 160ms 退出，减少动态效果时关闭空间转场。
 
 chrome 使用 `lucide_icons_flutter`；会话、项目与模型身份标记使用 `phosphor_icons` Fill。主题不打包自定义字体，UI 与助手正文使用当前手机的系统默认字体，阅读字号默认 100%。思考态使用 `AnimationController` 驱动固定中心的花形帧动画，由 `CustomPainter` 在圆点、四瓣、六瓣和八瓣星芒间生长 / 收缩；系统关闭动画时固定为完整花形。可见计时明确标为「本轮已运行」，屏读 live region 只播报一次「正在思考」，不会随秒数重复播报。普通活动 running 继续使用 `CircularProgressIndicator`。项目不依赖 `flutter_animate`，保留 `SignalPressEffect` 等已有原生交互效果。
 

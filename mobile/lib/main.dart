@@ -4792,8 +4792,8 @@ class _ChatTopBackdrop extends StatelessWidget {
 
   final double fadeStart;
 
-  // Keep the tint light enough to preserve colors behind the glass.
-  static final _filter = ui.ImageFilter.blur(sigmaX: 22, sigmaY: 22);
+    // Keep the tint light enough to preserve colors behind the glass.
+    static final _filter = ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14);
 
   @override
   Widget build(BuildContext context) {

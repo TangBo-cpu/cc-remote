@@ -1076,7 +1076,7 @@ void main() {
       expect(find.byTooltip('当前会话'), findsOneWidget);
       expect(find.text('mobile'), findsOneWidget);
       expect(find.text('暂无消息'), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('session-page-back')));
+      await tester.tap(find.byKey(const ValueKey('session-drawer-close')));
       await tester.pumpAndSettle();
       expect(find.byType(PromptBar), findsOneWidget);
     }, () => client);
