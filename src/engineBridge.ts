@@ -99,7 +99,7 @@ export function normalizeEngineModel(value: unknown): string | undefined {
   if (value === undefined || value === null || value === '') return undefined;
   if (typeof value !== 'string') throw new Error('invalid_model');
   const model = value.trim();
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(model)) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(model)) {
     throw new Error('invalid_model');
   }
   return model;

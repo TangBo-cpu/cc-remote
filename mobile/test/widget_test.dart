@@ -104,7 +104,7 @@ void main() {
                   .decoration
               as BoxDecoration)
           .gradient,
-      isNull,
+      AppLiquidGlass.thinPressedGradient,
     );
     await press.up();
     await tester.pump();
@@ -117,7 +117,7 @@ void main() {
                   .decoration
               as BoxDecoration)
           .gradient,
-      isNull,
+      AppLiquidGlass.thinGradient,
     );
 
     await pumpEffect(scaleOnPress: false);
@@ -587,7 +587,8 @@ void main() {
       const CcRemoteApp(enableCamera: false, demoMode: true),
     );
 
-    expect(find.text('扫描电脑终端里的二维码'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(find.byType(PairScreen), findsOneWidget);
     expect(find.text('连接这台电脑'), findsOneWidget);
     expect(find.byKey(const ValueKey('boot')), findsNothing);
     final shellOverlay = tester
@@ -801,7 +802,7 @@ void main() {
     );
     final settingsDecoration =
         tester.widget<Container>(settingsSurface).decoration! as BoxDecoration;
-    expect(settingsDecoration.gradient, isNull);
+    expect(settingsDecoration.gradient, AppLiquidGlass.strongGradient);
     expect(
       find.descendant(
         of: settingsSurface,
@@ -816,7 +817,7 @@ void main() {
     );
     expect(find.text('后台通知'), findsOneWidget);
     expect(find.text('开启新对话'), findsNothing);
-    expect(find.text('扫描电脑终端里的二维码'), findsNothing);
+    expect(find.byType(PairScreen), findsNothing);
     expect(find.text('字体大小'), findsOneWidget);
 
     await tester.tap(find.byTooltip('关闭'));
@@ -846,11 +847,12 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('退出配对'));
     await tester.pumpAndSettle();
-    expect(find.text('退出后这台手机需要重新扫码。'), findsOneWidget);
+    expect(find.text('退出后这台手机需要重新扫码，其他已配对设备不受影响。'), findsOneWidget);
 
     await tester.tap(find.text('退出').last);
     await tester.pumpAndSettle();
-    expect(find.text('扫描电脑终端里的二维码'), findsOneWidget);
+    expect(find.byType(PairScreen), findsOneWidget);
+    expect(find.text('连接这台电脑'), findsOneWidget);
     expect(await TranscriptStore().load(), isNull);
   });
 
@@ -1477,7 +1479,7 @@ void main() {
       composerDecoration.borderRadius,
       const BorderRadius.vertical(top: Radius.circular(AppRadii.composerFloat)),
     );
-    expect(composerDecoration.boxShadow, isNull);
+    expect(composerDecoration.boxShadow, isEmpty);
     expect(tester.takeException(), isNull);
   });
 
@@ -1523,7 +1525,7 @@ void main() {
     );
   });
 
-  testWidgets('app sheet surfaces use opaque neutral fills', (tester) async {
+  testWidgets('app sheet surfaces use neutral glass fills', (tester) async {
     await tester.pumpWidget(
       const MaterialApp(
         home: Scaffold(body: AppSheetSurface(child: Text('content'))),
@@ -1533,8 +1535,8 @@ void main() {
     expect(find.byType(BackdropFilter), findsNothing);
     final surface = tester.widget<Container>(find.byType(Container).first);
     final decoration = surface.decoration! as BoxDecoration;
-    expect(decoration.gradient, isNull);
-    expect(decoration.color, AppColors.surface);
+    expect(decoration.gradient, AppLiquidGlass.strongGradient);
+    expect(decoration.color, isNull);
     expect(decoration.boxShadow, isNotEmpty);
   });
 
@@ -2778,11 +2780,15 @@ void main() {
       find.byKey(const ValueKey('recovery-state-stopTimedOut')),
       findsOneWidget,
     );
-    expect(find.text('停止尚未确认'), findsOneWidget);
+    expect(find.text('停止未确认'), findsOneWidget);
     expect(find.text('任务已停止'), findsNothing);
     expect(find.byTooltip('再次停止'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('recovery-state-stopTimedOut')));
+    await tester.pumpAndSettle();
+    expect(find.text('停止尚未确认'), findsOneWidget);
 
     await tester.tap(find.text('再次停止'));
+    await tester.pumpAndSettle();
     expect(stopCount, 1);
 
     await tester.tap(find.byKey(const ValueKey('composer-primary-action')));
@@ -2843,8 +2849,11 @@ void main() {
         find.byKey(const ValueKey('recovery-state-failed')),
         findsOneWidget,
       );
-      expect(find.text('命令退出码为 1'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('recovery-state-failed')));
+      await tester.pumpAndSettle();
+      expect(find.widgetWithText(SelectableText, '命令退出码为 1'), findsOneWidget);
       await tester.tap(find.text('重新编辑上条指令'));
+      await tester.pumpAndSettle();
       expect(controller.text, '运行测试');
     },
   );
@@ -2908,8 +2917,15 @@ void main() {
     );
     expect(newConversation.onPressed, isNull);
     expect(find.byType(LinearProgressIndicator), findsNothing);
-    expect(find.byType(BackdropGroup), findsNothing);
-    expect(find.byType(BackdropFilter), findsNothing);
+    expect(find.byType(BackdropGroup), findsOneWidget);
+    expect(find.byKey(const ValueKey('chat-top-frost-mask')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('transcript-list')),
+        matching: find.byType(BackdropFilter),
+      ),
+      findsNothing,
+    );
   });
 
   testWidgets('minimal header omits redundant identity and status copy', (
@@ -3083,7 +3099,7 @@ void main() {
       find.byKey(const ValueKey('composer-primary-visual')),
     );
     final stopDecoration = stopVisual.decoration! as BoxDecoration;
-    expect(stopDecoration.color, AppColors.stopGlass);
+    expect(stopDecoration.color, AppColors.stop);
     expect(stopDecoration.border, isNotNull);
     expect(stopDecoration.boxShadow, isNotEmpty);
     final stopIcon = tester.widget<Icon>(
@@ -3259,25 +3275,30 @@ void main() {
               body: SafeArea(
                 child: Padding(
                   padding: const EdgeInsets.all(14),
-                  child: ConnectionHeader(
-                    session: SavedSession(
-                      origin: Uri.parse('https://cc-remote.example.com'),
-                      token: 'demo',
-                      deviceName: 'My PC',
-                      workspaceDir: 'cc-remote',
-                    ),
-                    running: false,
-                    connected: false,
-                    offline: true,
-                    modelName: 'claude-opus-4-8',
-                    contextWindow: 200000,
-                    remainingContext: 174919,
-                    onReconnect: () {},
-                    onOpenSettings: () {},
-                    onNewConversation: () {},
-                    onOpenSessions: () {},
-                    onOpenWorkspace: () {},
-                    uploadingAttachments: false,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ConnectionHeader(
+                        session: SavedSession(
+                          origin: Uri.parse('https://cc-remote.example.com'),
+                          token: 'demo',
+                          deviceName: 'My PC',
+                          workspaceDir: 'cc-remote',
+                        ),
+                        running: false,
+                        connected: false,
+                        offline: true,
+                        modelName: 'claude-opus-4-8',
+                        contextWindow: 200000,
+                        remainingContext: 174919,
+                        onReconnect: () {},
+                        onOpenSettings: () {},
+                        onNewConversation: () {},
+                        onOpenSessions: () {},
+                        onOpenWorkspace: () {},
+                        uploadingAttachments: false,
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -3332,7 +3353,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('attachment upload blocks conversation navigation', (
+  testWidgets('attachment upload allows session browsing but blocks creation', (
     tester,
   ) async {
     final controller = TextEditingController();
@@ -3384,11 +3405,11 @@ void main() {
     await tester.tap(find.byTooltip('项目与会话'));
     await tester.tap(find.byTooltip('新对话'));
 
-    expect(openedSessions, isFalse);
+    expect(openedSessions, isTrue);
     expect(createdConversation, isFalse);
   });
 
-  testWidgets('streaming Markdown is parsed only after the turn completes', (
+  testWidgets('streaming Markdown stays rendered through completion', (
     tester,
   ) async {
     var isStreaming = true;
@@ -3403,12 +3424,15 @@ void main() {
     );
 
     await tester.pumpWidget(buildReply());
-    expect(find.byKey(const ValueKey('code-block-card')), findsNothing);
+    final code = find.byKey(const ValueKey('code-block-card'));
+    expect(code, findsOneWidget);
+    final codeElement = tester.element(code);
 
     isStreaming = false;
     await tester.pumpWidget(buildReply());
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('code-block-card')), findsOneWidget);
+    expect(tester.element(code), same(codeElement));
   });
 
   testWidgets('stream text refreshes only the transcript subtree', (
@@ -3471,8 +3495,8 @@ void main() {
     transcriptRevision.value++;
     await tester.pump();
 
-    expect(find.text('**streaming**'), findsOneWidget);
-    expect(find.bySubtype<MarkdownBody>(), findsOneWidget);
+    expect(find.text('streaming', findRichText: true), findsOneWidget);
+    expect(find.bySubtype<MarkdownBody>(), findsNWidgets(2));
     expect(tester.widget(find.byType(ConnectionHeader)), same(header));
   });
 
@@ -3512,7 +3536,7 @@ void main() {
     expect(markdown.styleSheet!.tableColumnWidth, isA<IntrinsicColumnWidth>());
     expect(
       markdown.styleSheet!.tableCellsPadding,
-      const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
     );
     expect(markdown.styleSheet!.p!.fontFamily, isNot('NotoSerifSC'));
     expect(markdown.styleSheet!.p!.fontSize, AppTypography.assistantBodySize);
@@ -3528,10 +3552,7 @@ void main() {
       markdown.styleSheet!.listBullet!.fontSize,
       AppTypography.assistantBodySize,
     );
-    expect(
-      markdown.styleSheet!.tableBody!.fontSize,
-      AppTypography.assistantBodySize,
-    );
+    expect(markdown.styleSheet!.tableBody!.fontSize, 14);
     expect(
       markdown.styleSheet!.checkbox!.fontSize,
       AppTypography.assistantBodySize,
@@ -3539,7 +3560,7 @@ void main() {
     expect(markdown.styleSheet!.h1!.fontFamily, isNot('NotoSerifSC'));
     expect(markdown.styleSheet!.blockSpacing, 12);
     expect(markdown.styleSheet!.listIndent, 24);
-    expect(markdown.styleSheet!.h1Padding, EdgeInsets.zero);
+    expect(markdown.styleSheet!.h1Padding, const EdgeInsets.only(bottom: 10));
     expect(markdown.builders.containsKey('pre'), isTrue);
     final bubble = tester.widget<DecoratedBox>(assistant.first);
     final decoration = bubble.decoration as BoxDecoration;
@@ -3752,7 +3773,7 @@ void main() {
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('composer-expand-visual'))),
-      const Size.square(AppSizes.iconControl),
+      const Size.square(38),
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('composer-primary-action'))),
@@ -3786,7 +3807,7 @@ void main() {
                   .decoration!
               as BoxDecoration)
           .color,
-      AppColors.glassControl,
+      AppColors.control,
     );
     controller.text = '继续';
     await tester.pump();
@@ -3794,14 +3815,14 @@ void main() {
       find.byKey(const ValueKey('composer-control-rail')),
     );
     final railDecoration = rail.decoration as BoxDecoration;
-    expect(railDecoration.color, AppColors.composerControlRest);
+    expect(railDecoration.color, Colors.transparent);
     expect(railDecoration.boxShadow, isNull);
 
     final expandSurface = tester.widget<SignalAnimatedSurface>(
       find.byKey(const ValueKey('composer-expand-visual')),
     );
     final expandDecoration = expandSurface.decoration as BoxDecoration;
-    expect(expandDecoration.color, Colors.transparent);
+    expect(expandDecoration.color, AppColors.glassControl);
     expect(expandDecoration.boxShadow, isNull);
 
     final modelSurface = tester.widget<SignalAnimatedSurface>(
@@ -3831,7 +3852,7 @@ void main() {
       find.byKey(const ValueKey('composer')),
     );
     final decoration = composer.decoration;
-    expect(decoration.gradient, isNull);
+    expect(decoration.gradient, AppLiquidGlass.strongBackdropGradient);
     expect(decoration.border, isNotNull);
     expect(
       decoration.borderRadius,
@@ -3843,7 +3864,7 @@ void main() {
         of: find.byKey(const ValueKey('composer')),
         matching: find.byType(BackdropFilter),
       ),
-      findsNothing,
+      findsWidgets,
     );
 
     await tester.showKeyboard(find.byType(TextField));
@@ -4202,11 +4223,8 @@ void main() {
       find.byKey(const ValueKey('code-block-card')),
     );
     final cardDecoration = card.decoration as BoxDecoration;
-    expect(
-      cardDecoration.border,
-      Border.all(color: AppPalette.light.line, width: 0.8),
-    );
-    expect(cardDecoration.color, AppColors.control);
+    expect(cardDecoration.border, isNull);
+    expect(cardDecoration.color, AppPalette.light.codeBlockBackground);
 
     await tester.tap(find.byKey(const ValueKey('code-copy-button')));
     await tester.pump();
@@ -4214,39 +4232,44 @@ void main() {
     expect(find.text('已复制'), findsOneWidget);
   });
 
-  testWidgets('assistant replies can be selected and copied in full', (
-    tester,
-  ) async {
-    String? copiedText;
-    addTearDown(
-      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+  testWidgets(
+    'assistant replies can be selected and copied in full',
+    (tester) async {
+      String? copiedText;
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
         SystemChannels.platform,
-        null,
-      ),
-    );
-    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-      SystemChannels.platform,
-      (call) async {
-        if (call.method == 'Clipboard.setData') {
-          copiedText =
-              (call.arguments as Map<Object?, Object?>)['text'] as String?;
-        }
-        return null;
-      },
-    );
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copiedText =
+                (call.arguments as Map<Object?, Object?>)['text'] as String?;
+          }
+          return null;
+        },
+      );
 
-    await pumpAssistantMessage(tester, text: '先改 daemon 启动参数');
-    expect(find.byType(AssistantSelectionArea), findsOneWidget);
-    expect(find.byType(SelectionArea), findsOneWidget);
+      await pumpAssistantMessage(tester, text: '先改 daemon 启动参数');
+      expect(find.byType(AssistantSelectionArea), findsOneWidget);
+      expect(find.byType(SelectionArea), findsOneWidget);
 
-    await tester.longPress(find.text('先改 daemon 启动参数'));
-    await tester.pumpAndSettle();
-    expect(find.text('复制全部'), findsOneWidget);
+      final replyBounds = tester.getRect(find.text('先改 daemon 启动参数'));
+      await tester.longPressAt(
+        Offset(replyBounds.left + 8, replyBounds.center.dy),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('复制全部'), findsOneWidget);
 
-    await tester.tap(find.text('复制全部'));
-    await tester.pumpAndSettle();
-    expect(copiedText, '先改 daemon 启动参数');
-  });
+      await tester.tap(find.text('复制全部'));
+      await tester.pumpAndSettle();
+      expect(copiedText, '先改 daemon 启动参数');
+    },
+    variant: TargetPlatformVariant.only(TargetPlatform.android),
+  );
 
   testWidgets('markdown assistant replies stay inside a selection area', (
     tester,
@@ -4531,18 +4554,22 @@ void main() {
       ),
     );
 
+    expect(find.text('重连 · 30 秒后'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 1));
+    expect(find.text('重连 · 29 秒后'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('recovery-state-offline')));
+    await tester.pumpAndSettle();
     expect(find.text('正在自动重连'), findsOneWidget);
     expect(find.textContaining('自动重连第 3 次'), findsOneWidget);
-    expect(find.textContaining('约 30 秒后再次尝试'), findsOneWidget);
+    expect(find.textContaining('约 29 秒后再次尝试'), findsOneWidget);
     expect(find.textContaining('电脑端拒绝连接'), findsOneWidget);
     expect(find.text('对话记录已保留，当前输入仍在编辑框中'), findsOneWidget);
     expect(find.text('立即重连'), findsOneWidget);
     expect(tester.takeException(), isNull);
 
-    await tester.pump(const Duration(seconds: 1));
-    expect(find.textContaining('约 29 秒后再次尝试'), findsOneWidget);
-
     await tester.tap(find.text('立即重连'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('recovery-status-details')), findsNothing);
     expect(reconnectCount, 1);
   });
 

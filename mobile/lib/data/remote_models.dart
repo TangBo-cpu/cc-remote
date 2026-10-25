@@ -55,12 +55,14 @@ class SavedSession {
     required this.origin,
     required this.token,
     required this.deviceName,
+    this.deviceId,
     this.workspaceDir,
   });
 
   final Uri origin;
   final String token;
   final String deviceName;
+  final String? deviceId;
   final String? workspaceDir;
 
   String get workspaceName {
@@ -74,6 +76,7 @@ class SavedSession {
       origin: origin,
       token: token,
       deviceName: deviceName ?? this.deviceName,
+      deviceId: deviceId,
       workspaceDir: workspaceDir ?? this.workspaceDir,
     );
   }
@@ -83,6 +86,7 @@ class SavedSession {
       'origin': origin.toString(),
       'token': token,
       'deviceName': deviceName,
+      if (deviceId != null) 'deviceId': deviceId,
       if (workspaceDir != null) 'workspaceDir': workspaceDir,
     };
   }
@@ -93,7 +97,39 @@ class SavedSession {
       origin: origin,
       token: json['token'] as String,
       deviceName: json['deviceName'] as String? ?? 'Unknown PC',
+      deviceId: json['deviceId'] as String?,
       workspaceDir: json['workspaceDir'] as String?,
+    );
+  }
+}
+
+class RemoteDevice {
+  const RemoteDevice({
+    required this.id,
+    required this.name,
+    required this.pairedAt,
+    required this.current,
+    this.lastSeen,
+  });
+
+  final String id;
+  final String name;
+  final int pairedAt;
+  final int? lastSeen;
+  final bool current;
+
+  static RemoteDevice? tryParse(Map<String, dynamic> json) {
+    final id = json['id'];
+    final name = json['name'];
+    if (id is! String || id.isEmpty || name is! String || name.isEmpty) {
+      return null;
+    }
+    return RemoteDevice(
+      id: id,
+      name: name,
+      pairedAt: json['pairedAt'] is int ? json['pairedAt'] as int : 0,
+      lastSeen: json['lastSeen'] is int ? json['lastSeen'] as int : null,
+      current: json['current'] == true,
     );
   }
 }

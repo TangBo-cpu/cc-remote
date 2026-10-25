@@ -54,6 +54,35 @@ for (const catalogError of [false, true]) {
   });
 }
 
+test('Codex catalog preserves provider-qualified model IDs through selection', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-codex-catalog-'));
+  const logPath = join(dir, 'requests.jsonl');
+  const bridge = new CodexBridge({
+    codexBin: process.execPath,
+    codexArgs: [fixture, `--fake-log=${logPath}`, '--fake-mode=catalog-namespaced'],
+    workspaceDir: dir,
+  });
+  try {
+    const models = await bridge.listModels();
+    assert.deepEqual(models.map(item => item.model), [
+      'gpt-test-codex', 'gpt-test-fast',
+      'workbuddy-ai/deepseek-v4.1-flash', 'workbuddy/deepseek-v4.1-flash',
+    ]);
+    const model = models.at(-1)!.model;
+    const result = await bridge.run({
+      prompt: 'hello', permissionMode: 'manual', model,
+      onEvent: () => {}, onText: () => {}, onSessionId: () => {},
+    });
+    assert.equal(result.exitCode, 0);
+    const records = (await readFile(logPath, 'utf8')).trim().split(/\r?\n/).map(line => JSON.parse(line));
+    assert.equal(records.find(item => item.method === 'thread/start').params.model, model);
+    assert.equal(records.find(item => item.method === 'turn/start').params.model, model);
+  } finally {
+    bridge.close();
+    await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
 test('Codex slash skill uses native skill input and preserves its arguments', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-remote-codex-skill-'));
   const logPath = join(dir, 'requests.jsonl');

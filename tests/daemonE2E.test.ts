@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer, request } from 'node:http';
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
@@ -199,6 +199,88 @@ test('logout revokes the old Bearer token and closes its WebSocket', async () =>
     headers: { Authorization: `Bearer ${token}` },
   });
   assert.equal(statusResponse.status, 401);
+});
+
+test('revoking one device closes only its WebSocket and notifies the others', async () => {
+  const localControl = JSON.parse(
+    await readFile(join(daemon.root, '.data', 'local-control.json'), 'utf8'),
+  ) as { token: string };
+  const pairHeaders = {
+    'Content-Type': 'application/json',
+    Origin: daemon.baseUrl,
+    'x-cc-remote-local-token': localControl.token,
+  };
+
+  const pairAs = async (deviceName: string, nonce: string) => {
+    const response = await fetch(`${daemon.baseUrl}/api/pair`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: daemon.baseUrl,
+      },
+      body: JSON.stringify({ nonce, deviceName }),
+    });
+    assert.equal(response.status, 200);
+    return await response.json() as { token: string; deviceId: string };
+  };
+
+  const phonePairing = await fetch(`${daemon.baseUrl}/api/local/pairing`, {
+    method: 'POST',
+    headers: pairHeaders,
+  });
+  const { payload: phonePayload } = await phonePairing.json() as { payload: { nonce: string } };
+  const phone = await pairAs('Pixel 9', phonePayload.nonce);
+  const phoneSocket = new WebSocket(daemon.baseUrl.replace('http:', 'ws:') + '/ws', {
+    headers: { Origin: daemon.baseUrl },
+  });
+  phoneSocket.on('error', () => {});
+  await once(phoneSocket, 'open');
+  phoneSocket.send(JSON.stringify({ type: 'auth', token: phone.token }));
+  assert.equal((await waitForWsMessage(phoneSocket, message => message.type === 'status')).authenticated, true);
+  const devicesBroadcast = waitForWsMessage(phoneSocket, message => message.type === 'devices');
+
+  const refreshed = await fetch(`${daemon.baseUrl}/api/local/pairing`, {
+    method: 'POST',
+    headers: pairHeaders,
+  });
+  const { payload } = await refreshed.json() as { payload: { nonce: string } };
+  const tablet = await pairAs('Pixel Tablet', payload.nonce);
+
+  const tabletSocket = new WebSocket(daemon.baseUrl.replace('http:', 'ws:') + '/ws', {
+    headers: { Origin: daemon.baseUrl },
+  });
+  tabletSocket.on('error', () => {});
+  await once(tabletSocket, 'open');
+  tabletSocket.send(JSON.stringify({ type: 'auth', token: tablet.token }));
+  assert.equal((await waitForWsMessage(tabletSocket, message => message.type === 'status')).authenticated, true);
+  const tabletClosed = once(tabletSocket, 'close');
+
+  const revokeResponse = await fetch(
+    `${daemon.baseUrl}/api/devices/${encodeURIComponent(tablet.deviceId)}/revoke`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${phone.token}`, Origin: daemon.baseUrl },
+    },
+  );
+  assert.equal(revokeResponse.status, 200);
+  await tabletClosed;
+
+  const broadcast = await devicesBroadcast;
+  assert.deepEqual(
+    (broadcast.devices as Array<{ name: string; current: boolean }>).map(device => [device.name, device.current]),
+    [['Pixel 9', true]],
+  );
+  assert.equal(phoneSocket.readyState, WebSocket.OPEN);
+
+  assert.equal((await fetch(`${daemon.baseUrl}/api/status`, {
+    headers: { Authorization: `Bearer ${phone.token}` },
+  })).status, 200);
+  assert.equal((await fetch(`${daemon.baseUrl}/api/status`, {
+    headers: { Authorization: `Bearer ${tablet.token}` },
+  })).status, 401);
+
+  phoneSocket.terminate();
+  await once(phoneSocket, 'close');
 });
 
 test('daemon exposes existing Claude app sessions and syncs renamed desktop titles', async () => {
@@ -1051,6 +1133,77 @@ test('reply images are pushed with their message, require session auth, and surv
     await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   }
 });
+
+for (const failure of ['catalog', 'auth', 'transcript'] as const) {
+  test(`prompt persistence failure clears running state and allows retry (${failure})`, async () => {
+    const nativeId = randomUUID();
+    const instance = await startDaemon({
+      claudeBin: process.execPath,
+      claudeArgs: root => [resolve('tests/fixtures/fakeClaude.mjs'), '--fake-session=' + nativeId,
+        '--fake-history=' + join(root, '.claude', 'projects', 'fixture', nativeId + '.jsonl')],
+    });
+    let socket: WebSocket | undefined;
+    try {
+      const paired = await fetch(instance.baseUrl + '/api/pair', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Origin: instance.baseUrl },
+        body: JSON.stringify({ nonce: instance.nonce }),
+      });
+      assert.equal(paired.status, 200);
+      const { token } = await paired.json() as { token: string };
+      const headers = { Authorization: 'Bearer ' + token, Origin: instance.baseUrl };
+      const status = await fetch(instance.baseUrl + '/api/status', { headers });
+      const { activeSessionId: sessionId } = await status.json() as { activeSessionId: string };
+      socket = new WebSocket(instance.baseUrl.replace('http:', 'ws:') + '/ws', {
+        headers: { Origin: instance.baseUrl },
+      });
+      await once(socket, 'open');
+      const ready = waitForWsMessage(socket, message => message.type === 'transcript_snapshot');
+      socket.send(JSON.stringify({ type: 'auth', token }));
+      await ready;
+      const path = join(instance.root, '.data', failure === 'catalog' ? 'projects.json'
+        : failure === 'auth' ? 'state.json' : join('sessions', sessionId + '.json'));
+      if (failure === 'transcript') await writeFile(path, '{}');
+      await rename(path, path + '.saved');
+      await mkdir(path);
+      const prompt = { type: 'prompt', sessionId, promptId: 'retry-persistence', text: 'probe' };
+      const failed = Promise.all([
+        waitForWsMessage(socket, message => message.type === 'error' && message.promptId === prompt.promptId),
+        waitForWsMessage(socket, message => message.type === 'status'
+          && message.running === false && typeof message.runId === 'string'),
+      ]);
+      socket.send(JSON.stringify(prompt));
+      await failed;
+      assert.equal(instance.child.exitCode, null);
+      const afterFailure = await fetch(instance.baseUrl + '/api/status', { headers });
+      assert.equal((await afterFailure.json() as { running: boolean }).running, false);
+      const stop = await fetch(instance.baseUrl + '/api/stop', { method: 'POST', headers });
+      assert.deepEqual(await stop.json(), { stopped: false });
+      await rm(path, { recursive: true });
+      await rename(path + '.saved', path);
+      const retry = Promise.all([
+        waitForPromptResult(socket, sessionId),
+        waitForWsMessage(socket, message => message.type === 'status'
+          && message.running === false && typeof message.runId === 'string'),
+      ]);
+      socket.send(JSON.stringify(prompt));
+      assert.equal((await retry)[0].text, 'fake reply');
+      const saved = JSON.parse(await readFile(join(instance.root, '.data', 'sessions', sessionId + '.json'), 'utf8'));
+      assert.equal(saved.running, false);
+      assert.ok(saved.messages.some((message: { text: string }) => message.text === 'fake reply'));
+      const native = (await readFile(join(instance.root, '.claude', 'projects', 'fixture', nativeId + '.jsonl'), 'utf8'))
+        .trim().split('\n').map(line => JSON.parse(line));
+      assert.equal(native.filter(entry => entry.type === 'custom-title').at(-1)?.customTitle, 'probe');
+    } finally {
+      socket?.terminate();
+      instance.child.kill();
+      await Promise.race([
+        instance.child.exitCode === null ? once(instance.child, 'exit') : Promise.resolve(),
+        new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
+      ]);
+      await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  });
+}
 
 async function startDaemon(options: {
   claudeBin?: string;

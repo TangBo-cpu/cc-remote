@@ -111,7 +111,7 @@ test('desktop control routes reject missing tokens, public hosts, and foreign or
   }
 });
 
-test('desktop pairing refresh preserves the paired token until another device pairs', async () => {
+test('desktop pairing refresh preserves paired tokens even after another device pairs', async () => {
   const headers = { 'x-cc-remote-local-token': await localControlToken() };
   const initial = await fetch(`${daemon.baseUrl}/api/local/status`, { headers });
   const initialStatus = await initial.json() as { paired: boolean; pairing: { payload: { nonce: string }; modules: boolean[][] } };
@@ -130,9 +130,9 @@ test('desktop pairing refresh preserves the paired token until another device pa
   assert.equal(obsolete.status, 401);
 
   const paired = await fetch(`${daemon.baseUrl}/api/pair`, {
-    method: 'POST', body: JSON.stringify({ nonce: payload.nonce }),
+    method: 'POST', body: JSON.stringify({ nonce: payload.nonce, deviceName: 'Pixel 9' }),
   });
-  const { token } = await paired.json() as { token: string };
+  const { token, deviceId } = await paired.json() as { token: string; deviceId: string };
   assert.ok(token);
   const status = await fetch(`${daemon.baseUrl}/api/local/status`, { headers });
   assert.deepEqual((await status.json() as { pairing: unknown }).pairing, null);
@@ -142,6 +142,43 @@ test('desktop pairing refresh preserves the paired token until another device pa
     headers: { Authorization: `Bearer ${token}` },
   });
   assert.equal(stillAuthorized.status, 200);
+
+  const secondPairing = await fetch(`${daemon.baseUrl}/api/local/pairing`, { method: 'POST', headers });
+  const { payload: secondPayload } = await secondPairing.json() as { payload: { nonce: string } };
+  const secondPaired = await fetch(`${daemon.baseUrl}/api/pair`, {
+    method: 'POST', body: JSON.stringify({ nonce: secondPayload.nonce, deviceName: 'Pixel Tablet' }),
+  });
+  assert.equal(secondPaired.status, 200);
+  const second = await secondPaired.json() as { token: string; deviceId: string };
+  assert.notEqual(second.deviceId, deviceId);
+
+  const firstStillAuthorized = await fetch(`${daemon.baseUrl}/api/status`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  assert.equal(firstStillAuthorized.status, 200);
+
+  const devices = await (await fetch(`${daemon.baseUrl}/api/devices`, {
+    headers: { Authorization: `Bearer ${second.token}` },
+  })).json() as { devices: Array<{ id: string; name: string; current: boolean }> };
+  assert.deepEqual(
+    devices.devices.map(device => [device.name, device.current]),
+    [['Pixel 9', false], ['Pixel Tablet', true]],
+  );
+
+  const revocation = await fetch(
+    `${daemon.baseUrl}/api/devices/${encodeURIComponent(second.deviceId)}/revoke`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  );
+  assert.equal(revocation.status, 200);
+  assert.equal((await fetch(`${daemon.baseUrl}/api/status`, {
+    headers: { Authorization: `Bearer ${second.token}` },
+  })).status, 401);
+  assert.equal((await fetch(`${daemon.baseUrl}/api/status`, {
+    headers: { Authorization: `Bearer ${token}` },
+  })).status, 200);
 });
 
 test('paired phone browses directories and opens a new engine session without local-control access', async () => {

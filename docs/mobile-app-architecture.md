@@ -12,7 +12,7 @@ Flutter App
   -> 常驻 Claude Code stream-json 或 Codex App Server
 ```
 
-当前是单设备授权模型。一个 daemon 可以注册多个项目，每个项目拥有多条独立会话，每条会话绑定一个引擎（`claude` 或 `codex`），新建会话时选择且不可更改。已配对手机可浏览电脑目录，提交已有目录的绝对路径，并在该目录新建会话；已有会话仍绑定原项目。
+当前是多设备授权模型：一个 daemon 可以同时配对多台手机（默认上限 8 台，`MAX_PAIRED_DEVICES` 可调），每台设备持有独立 token，手机端可在设置中查看设备列表并逐台撤销。一个 daemon 可以注册多个项目，每个项目拥有多条独立会话，每条会话绑定一个引擎（`claude` 或 `codex`），新建会话时选择且不可更改。已配对手机可浏览电脑目录，提交已有目录的绝对路径，并在该目录新建会话；已有会话仍绑定原项目。多台设备共享同一个全局活跃会话。
 
 ## 仓库结构
 
@@ -20,7 +20,7 @@ Flutter App
 cc-remote/
     src/
     daemon.ts                 HTTP、WebSocket 和运行编排
-    authState.ts              配对、token hash 和授权代际
+    authState.ts              配对、多设备记录、token hash 和授权代际
     engineBridge.ts           引擎无关类型、EngineBridge 接口与归一化
     claudeBridge.ts           Claude Code stream-json 桥接
     codexBridge.ts            Codex App Server JSON-RPC 桥接
@@ -45,6 +45,8 @@ cc-remote/
     main.dart                 App shell、网络状态和主要页面
     signal_console_theme.dart 浅深色色板、主题与共享视觉部件
     appearance_preference.dart 外观持久化、控制器与作用域
+    device_manager.dart       已配对设备列表与逐台撤销
+    window_adaptive.dart      宽度断点（compact/medium/expanded）与弹层限宽
     effort_gauge.dart          Composer 思考强度仪表与模态层
     workspace_drawer.dart     只读工作区和 Git diff
     attachments.dart          选择、上传和附件模型
@@ -70,17 +72,17 @@ daemon 将项目与会话目录保存在 `.data/projects.json`，各会话 trans
 
 ## 配对与鉴权
 
-daemon 生成一次性二维码，payload 包含 `type`、`version`、`origin`、`nonce`、`deviceName` 和 `expiresAt`。nonce 5 分钟过期，只保存 hash，使用一次后失效。
+daemon 生成一次性二维码，payload 包含 `type`、`version`、`origin`、`nonce`、`deviceName` 和 `expiresAt`。nonce 5 分钟过期，只保存 hash，使用一次后失效；并发配对多台手机时需各自刷新二维码。
 
-命令行将二维码打印到终端；Windows 启动器设置 `CC_REMOTE_DESKTOP=1`，通过本机接口取得二维码矩阵并在原生窗口绘制。生成新二维码不会撤销已配对手机的 token；新配对成功后才替换旧授权。
+命令行将二维码打印到终端；Windows 启动器设置 `CC_REMOTE_DESKTOP=1`，通过本机接口取得二维码矩阵并在原生窗口绘制。生成新二维码不会撤销已配对设备的 token；新设备配对成功后，旧设备继续可用。
 
-App 调用 `POST /api/pair` 换取 Bearer token。token 明文只返回给 App，App 存入 Secure Storage，daemon 只保存 hash。重新配对和 logout 会增加授权代际并关闭旧 WebSocket；关闭握手卡住时，daemon 会在 `WS_CLOSE_TIMEOUT_MS` 后强制释放连接。
+App 调用 `POST /api/pair`（可携带手机 `deviceName`）换取 Bearer token 与 `deviceId`。token 明文只返回给 App，App 存入 Secure Storage，daemon 只保存 hash。每台设备是 `state.json` `devices` 数组中的一条记录（含名称、配对时间与节流更新的最近活跃时间）；旧版单 token 状态文件加载时自动迁移为首条设备记录，保存时镜像回 `tokenHash` 字段以兼容降级。达到设备上限时配对返回 409 `device_limit`，且不消耗二维码 nonce。
 
 普通 HTTP 请求使用 `Authorization: Bearer <token>`。WebSocket token 不放 URL，连接 `/ws` 后第一条消息必须是 `auth`。
 
 WebSocket 升级会校验 `/ws`、Host、Origin 和连接上限。未认证连接必须在 `WS_AUTH_TIMEOUT_MS` 内完成首帧鉴权；非法首帧或鉴权失败会以 1008 关闭。鉴权成功后加入广播集合并接收权威快照。
 
-daemon 按 `WS_HEARTBEAT_INTERVAL_MS` 发送标准 WebSocket ping，未收到 pong 的连接会被 terminate；连接错误也会被消费并 terminate，正常 close/error 后都会从连接集合移除。logout 或重新配对会增加授权代际，以 `authorization_changed` 关闭旧连接，并在 `WS_CLOSE_TIMEOUT_MS` 后强制释放未完成关闭握手的连接；旧授权代际收到后续消息时会以 `authorization_expired` 关闭。参数默认值与整数范围见根目录 README 的“配置（摘要）”。
+daemon 按 `WS_HEARTBEAT_INTERVAL_MS` 发送标准 WebSocket ping，未收到 pong 的连接会被 terminate；连接错误也会被消费并 terminate，正常 close/error 后都会从连接集合移除。已认证连接按设备归属跟踪：撤销某台设备会以 `authorization_changed` 只关闭该设备的连接，并在 `WS_CLOSE_TIMEOUT_MS` 后强制释放未完成关闭握手的连接；被撤销设备收到后续消息时以 `authorization_expired` 关闭。`POST /api/logout` 仅撤销调用方设备；`POST /api/devices/{id}/revoke` 撤销指定设备（未授权方不可用）。设备列表变化时，daemon 向所有已认证连接广播 `{ "type": "devices", ... }`，每台设备的 `current` 标记按连接单独计算。参数默认值与整数范围见根目录 README 的“配置（摘要）”。
 
 ## HTTP API
 
@@ -105,13 +107,13 @@ daemon 开始退出后，对新 HTTP 请求返回 503，并关闭 WebSocket。�
 
 附件通过 `/api/sessions/:id/attachments` 上传，通过带会话归属的 content 接口读取。上传是事务式的，失败时清理已经写入的同批文件。附件路径不会进入 transcript 或手机 UI。
 
-`POST /api/new-conversation` 是兼容入口，实际会在活动项目下创建新会话。`POST /api/stop` 请求当前桥接停止：Claude 终止当前进程树；Codex 优先发送 `turn/interrupt`，2 秒内没有结束时再终止 App Server。`POST /api/logout` 撤销配对。
+`POST /api/new-conversation` 是兼容入口，实际会在活动项目下创建新会话。`POST /api/stop` 请求当前桥接停止：Claude 终止当前进程树；Codex 优先发送 `turn/interrupt`，2 秒内没有结束时再终止 App Server。`POST /api/logout` 撤销调用方自己的设备；`GET /api/devices` 返回设备列表；`POST /api/devices/{id}/revoke` 撤销单台设备。
 
 ## WebSocket 运行流
 
 鉴权完成后，daemon 发送 `catalog`、`status`、`transcript_snapshot`、`permission_capabilities` 和当前 `session_info`。App 由此恢复项目、会话、运行状态、待审批请求、模型和剩余上下文。活动任务状态包含 `running`、`stopping`、`runId` 和 `startedAt`，用于在重连后恢复 Stop 按钮状态与思考计时。
 
-`status` 中的 `connectionProbe: true` 表示 daemon 支持应用层存活探测。鉴权后的客户端可发送 `{ "type": "ping", "probeId": "..." }`，daemon 返回同 ID 的 `{ "type": "pong", "probeId": "..." }`，不改变会话或任务。`probeId` 必须是非空字符串，最长 128 个字符，否则返回 `invalid_probe_id`。
+`status` 中的 `connectionProbe: true` 表示 daemon 支持应用层存活探测，`multiDevice: true` 表示支持多设备管理（设备列表、单台撤销与 `devices` 广播）。鉴权后的客户端可发送 `{ "type": "ping", "probeId": "..." }`，daemon 返回同 ID 的 `{ "type": "pong", "probeId": "..." }`，不改变会话或任务。`probeId` 必须是非空字符串，最长 128 个字符，否则返回 `invalid_probe_id`。
 
 Flutter 的 `ensureConnected()` 会合并同一连接上的并发探测，默认等待 8 秒。探测绑定当前连接、generation 和 `probeId`；关闭或替换连接时取消旧探测，旧连接的回复不能确认新连接。超时记为 `websocket_liveness_timeout` 并进入现有退避重连；握手进行中不会重复建连。旧服务端没有声明能力时不发送应用层探测，原有心跳与重连机制继续生效。恢复前台调用 `ensureConnected(retryNow: true, probeTimeout: resumeProbeTimeout, reconnectNowOnProbeFailure: true)`，沿用默认 8 秒探测窗口，避免隧道延迟超过 2 秒时误断健康连接。健康连接继续使用；前台请求会将已有探测提升为失败后立即建连，发送失败或连接流关闭时也跳过退避。无连接时立即重试，自动恢复已经开始的握手继续完成。探测成功后，后续普通断线仍使用退避。后台时长不能证明连接失效，不再仅按后台时间关闭现有连接。
 
@@ -159,6 +161,6 @@ daemon 默认只监听 loopback，公网访问由 tunnel 提供。已配对手�
 
 ## 当前未完成
 
-多设备管理、FCM 推送、发布签名和商店材料尚未实现。公网 health 检查、冷启动切项目 / 隧道首字延迟、真实账户连续轮次首字延迟，以及长任务 Stop 回归仍需专项验证。可选局域网直连属于后续性能项。
+FCM 推送、发布签名和商店材料尚未实现。公网 health 检查、冷启动切项目 / 隧道首字延迟、真实账户连续轮次首字延迟，以及长任务 Stop 回归仍需专项验证。可选局域网直连属于后续性能项。
 
 本轮连接稳定性改动完成了本地模拟、回环 WebSocket 和测试子进程验证，尚未更新实际运行的 App、daemon 或桌面启动器。Wi-Fi / 蜂窝切换、长短后台、锁屏、电脑休眠唤醒、真实隧道退出和长时间运行仍需验证；恢复机制不保证 daemon 重启后继续执行原任务。

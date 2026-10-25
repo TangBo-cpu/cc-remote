@@ -45,8 +45,19 @@ export type TranscriptSnapshot = {
 
 export type TranscriptPermissionRequest = Omit<ClaudePermissionRequest, 'input'>;
 
+export type TranscriptSummary = {
+  updatedAt: number;
+  running: boolean;
+  messageCount: number;
+  model?: string;
+  remainingTokens?: number;
+  preview?: string;
+  needsAttention: boolean;
+};
+
 export type TranscriptState = {
   snapshot(): TranscriptSnapshot;
+  summary(): TranscriptSummary;
   beginPrompt(
     prompt: string,
     permissionMode: ClaudePermissionMode,
@@ -116,7 +127,9 @@ export async function createTranscriptState(
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = undefined;
-      void saveNow();
+      void saveNow().catch(error => {
+        console.warn('[transcript] Could not save session history:', error);
+      });
     }, SAVE_DELAY_MS);
     saveTimer.unref();
   }
@@ -135,7 +148,7 @@ export async function createTranscriptState(
       await saveNow();
       return;
     }
-    await saveQueue;
+    await saveQueue.catch(() => saveNow());
   }
 
   if (state.running) {
@@ -152,6 +165,26 @@ export async function createTranscriptState(
   return {
     snapshot(): TranscriptSnapshot {
       return cloneSnapshot(state);
+    },
+
+    summary(): TranscriptSummary {
+      let preview: string | undefined;
+      for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+        const message = state.messages[index];
+        if ((message.role === 'user' || message.role === 'assistant') && message.text.trim()) {
+          preview = message.text.replace(/\s+/g, ' ').trim().slice(0, 160);
+          break;
+        }
+      }
+      return {
+        updatedAt: state.updatedAt,
+        running: state.running,
+        messageCount: state.messages.length,
+        model: state.sessionInfo.model,
+        remainingTokens: state.sessionInfo.remainingTokens,
+        preview,
+        needsAttention: state.pendingPermissions.length > 0,
+      };
     },
 
     beginPrompt(
@@ -383,7 +416,10 @@ async function loadState(statePath: string): Promise<TranscriptSnapshot> {
   try {
     const parsed = JSON.parse(await readFile(statePath, 'utf8')) as
       Partial<TranscriptSnapshot> & { claudeSessionId?: unknown };
-    if (parsed.version !== SCHEMA_VERSION || !Array.isArray(parsed.messages)) return emptySnapshot();
+    if (!isRecord(parsed) || parsed.version !== SCHEMA_VERSION
+      || !Array.isArray(parsed.messages) || !parsed.messages.every(isTranscriptMessage)) {
+      throw new Error(`Invalid transcript state: ${statePath}`);
+    }
     return {
       version: SCHEMA_VERSION,
       revision: typeof parsed.revision === 'number' ? parsed.revision : 0,
@@ -405,7 +441,7 @@ async function loadState(statePath: string): Promise<TranscriptSnapshot> {
         ? parsed.pendingPermissions.filter(isTranscriptPermissionRequest)
         : [],
       sessionInfo: isRecord(parsed.sessionInfo) ? parsed.sessionInfo as ClaudeSessionInfo : {},
-      messages: parsed.messages.filter(isTranscriptMessage).map(message => {
+      messages: parsed.messages.map(message => {
         const { native, nativePrompt, nativeLocalOnly, ...rest } = message;
         const validBinding = message.role === 'user' && isRecord(native)
           && Array.isArray(native.ids) && native.ids.length > 0
@@ -419,8 +455,9 @@ async function loadState(statePath: string): Promise<TranscriptSnapshot> {
         };
       }),
     };
-  } catch {
-    return emptySnapshot();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptySnapshot();
+    throw error;
   }
 }
 

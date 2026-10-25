@@ -138,6 +138,11 @@ void main() {
       await tester.pump();
       await tester.pump();
       await tester.pump();
+      expect(state.activeSessionId, 'other-session');
+      expect(state.promptController.text, isEmpty);
+      expect(requestedSessions, ['codex-session', 'codex-session']);
+      await tester.enterText(find.byType(TextField).first, '/');
+      await tester.pump();
       expect(requestedSessions, [
         'codex-session',
         'codex-session',

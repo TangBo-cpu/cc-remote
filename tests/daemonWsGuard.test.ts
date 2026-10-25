@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { createServer } from 'node:http';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer, request } from 'node:http';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -79,6 +79,132 @@ test('malformed WebSocket frame does not terminate daemon', async () => {
   }
 });
 
+test('malformed upgrade URLs and Hosts are rejected without terminating daemon', async () => {
+  const instance = await startGuardDaemon();
+  try {
+    const endpoint = new URL(instance.baseUrl);
+    for (const [path, host, status] of [
+      ['//[', endpoint.host, 400],
+      ['/ws', '[', 401],
+    ] as const) {
+      const socket = net.createConnection({ host: endpoint.hostname, port: Number(endpoint.port) });
+      socket.setTimeout(2000, () => socket.destroy(new Error('upgrade_response_timeout')));
+      let response = '';
+      socket.on('data', chunk => { response += chunk.toString('latin1'); });
+      const closed = once(socket, 'close');
+      try {
+        await once(socket, 'connect');
+        socket.write(`GET ${path} HTTP/1.1\r\nHost: ${host}\r\nConnection: Upgrade\r\n`
+          + 'Upgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
+          + 'Sec-WebSocket-Version: 13\r\n\r\n');
+        await closed;
+        assert.match(response, new RegExp(`^HTTP/1.1 ${status} `));
+        assert.equal((await fetch(instance.baseUrl + '/api/health')).status, 200);
+      } finally {
+        socket.destroy();
+      }
+    }
+  } finally {
+    instance.child.kill();
+    if (instance.child.exitCode === null) await once(instance.child, 'exit');
+    await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
+test('HTTP JSON preserves UTF-8 across chunks and limits bytes', async () => {
+  const instance = await startGuardDaemon();
+  try {
+    const paired = await fetch(instance.baseUrl + '/api/pair', {
+      method: 'POST', headers: { Origin: instance.baseUrl },
+      body: JSON.stringify({ nonce: instance.nonce }),
+    });
+    const { token } = await paired.json() as { token: string };
+    const headers = { Authorization: `Bearer ${token}`, Origin: instance.baseUrl };
+    const status = await (await fetch(instance.baseUrl + '/api/status', { headers })).json() as { activeSessionId: string };
+    const body = Buffer.from(JSON.stringify({ title: '中文标题' }));
+    const split = body.indexOf(Buffer.from('中')) + 1;
+    const response = await new Promise<{ status: number; body: string }>((resolveResponse, rejectResponse) => {
+      const req = request(`${instance.baseUrl}/api/sessions/${status.activeSessionId}/title`, {
+        method: 'POST', headers: { ...headers, 'Content-Length': body.length },
+      }, res => {
+        const chunks: Buffer[] = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('error', rejectResponse);
+        res.on('end', () => resolveResponse({ status: res.statusCode!, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+      req.on('error', rejectResponse);
+      req.write(body.subarray(0, split));
+      setTimeout(() => req.end(body.subarray(split)), 50);
+    });
+    assert.equal(response.status, 200);
+    const catalog = JSON.parse(response.body) as { sessions: Array<{ id: string; title: string }> };
+    assert.equal(catalog.sessions.find(session => session.id === status.activeSessionId)?.title, '中文标题');
+    const oversized = await fetch(instance.baseUrl + '/api/pair', {
+      method: 'POST', headers: { Origin: instance.baseUrl },
+      body: JSON.stringify({ nonce: '中'.repeat(24_000) }),
+    });
+    assert.deepEqual(await oversized.json(), { error: 'body_too_large' });
+    assert.equal((await fetch(instance.baseUrl + '/api/health')).status, 200);
+  } finally {
+    instance.child.kill();
+    if (instance.child.exitCode === null) await once(instance.child, 'exit');
+    await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
+for (const sizeMiB of [1, 12]) {
+  test(`large snapshots sync, slow readers disconnect, and history survives reconnect (${sizeMiB} MiB)`, async () => {
+    const text = 'x'.repeat(sizeMiB * 1024 * 1024);
+    const instance = await startGuardDaemon({ WS_AUTH_TIMEOUT_MS: '10000' }, text);
+    let socket: WebSocket | undefined;
+    try {
+      const paired = await fetch(instance.baseUrl + '/api/pair', {
+        method: 'POST', headers: { Origin: instance.baseUrl },
+        body: JSON.stringify({ nonce: instance.nonce }),
+      });
+      const { token } = await paired.json() as { token: string };
+      const headers = { Authorization: `Bearer ${token}`, Origin: instance.baseUrl };
+      const connect = async () => {
+        const peer = new WebSocket(instance.baseUrl.replace('http:', 'ws:') + '/ws', { headers: { Origin: instance.baseUrl } });
+        peer.on('error', () => {});
+        socket = peer;
+        await once(peer, 'open');
+        const snapshot = nextMessage(peer, 'transcript_snapshot');
+        peer.send(JSON.stringify({ type: 'auth', token }));
+        assert.equal(((await snapshot).messages as Array<{ text: string }>)[0].text, text);
+        const pong = nextMessage(peer, 'pong');
+        peer.send(JSON.stringify({ type: 'ping', probeId: 'after-snapshot' }));
+        await pong;
+        return peer;
+      };
+      const slow = await connect();
+      const closed = once(slow, 'close');
+      slow.pause();
+      for (let i = 0; i < Math.ceil(48 / sizeMiB); i += 1) {
+        const selected = await fetch(instance.baseUrl + '/api/sessions/seed-session/select', { method: 'POST', headers });
+        assert.equal(selected.status, 200);
+        await selected.arrayBuffer();
+      }
+      slow.resume();
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await Promise.race([closed, new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('slow_reader_not_disconnected')), 3000);
+        })]);
+      } finally {
+        clearTimeout(timer);
+      }
+      assert.equal(instance.child.exitCode, null);
+      await connect();
+    } finally {
+      socket?.terminate();
+      instance.child.kill();
+      if (instance.child.exitCode === null) await once(instance.child, 'exit');
+      await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  });
+}
+
 test('heartbeat terminates a peer that does not answer ping', async () => {
   const heartbeatDaemon = await startGuardDaemon({
     WS_HEARTBEAT_INTERVAL_MS: '1000',
@@ -150,7 +276,7 @@ test('invalid heartbeat interval falls back instead of creating a busy loop', as
   }
 });
 
-test('authorization close fallback releases the final connection slot', async () => {
+test('device revocation close fallback releases the final connection slot', async () => {
   const limitDaemon = await startGuardDaemon({
     MAX_WS_CONNECTIONS: '1',
     WS_HEARTBEAT_INTERVAL_MS: '10000',
@@ -168,12 +294,38 @@ test('authorization close fallback releases the final connection slot', async ()
         'Content-Type': 'application/json',
         Origin: limitDaemon.baseUrl,
       },
-      body: JSON.stringify({ nonce: limitDaemon.nonce }),
+      body: JSON.stringify({ nonce: limitDaemon.nonce, deviceName: 'Raw client' }),
     });
     assert.equal(pairResponse.status, 200);
-    await pairResponse.text();
+    const { token, deviceId } = await pairResponse.json() as { token: string; deviceId: string };
 
+    // Authenticate the raw socket so the daemon tracks it as the device socket.
+    // The raw client never answers close frames, so revocation must fall back
+    // to terminate() to release the single connection slot.
+    const authFrame = Buffer.from(JSON.stringify({ type: 'auth', token }), 'utf8');
+    const mask = randomBytes(4);
+    const maskedAuth = Buffer.from(authFrame.map((value, index) => value ^ mask[index % 4]));
+    raw.socket.write(Buffer.concat([
+      Buffer.from([0x81, 0x80 | maskedAuth.length]),
+      mask,
+      maskedAuth,
+    ]));
     await new Promise(resolveTimeout => setTimeout(resolveTimeout, 250));
+
+    const revokeResponse = await fetch(
+      `${limitDaemon.baseUrl}/api/devices/${encodeURIComponent(deviceId)}/revoke`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, Origin: limitDaemon.baseUrl },
+      },
+    );
+    assert.equal(revokeResponse.status, 200);
+    await Promise.race([
+      raw.closed,
+      new Promise<never>((_, rejectTimeout) => {
+        setTimeout(() => rejectTimeout(new Error('revoked_raw_socket_not_terminated')), 2_000);
+      }),
+    ]);
 
     const socket = new WebSocket(
       limitDaemon.baseUrl.replace('http:', 'ws:') + '/ws',
@@ -284,6 +436,7 @@ test('authenticated application probe echoes its id without changing the session
     socket.send(JSON.stringify({ type: 'auth', token }));
     const status = await statusReceived;
     assert.equal(status.connectionProbe, true);
+    assert.equal(status.multiDevice, true);
 
     const before = await (await fetch(`${daemon.baseUrl}/api/status`, {
       headers: { Authorization: `Bearer ${token}`, Origin: daemon.baseUrl },
@@ -326,9 +479,23 @@ function nextMessage(socket: WebSocket, type: string): Promise<Record<string, un
 
 async function startGuardDaemon(
   extraEnv: Record<string, string> = {},
+  transcriptText?: string,
 ): Promise<RunningDaemon> {
   const root = await mkdtemp(join(tmpdir(), 'cc-remote-daemon-ws-guard-'));
   await writeFile(join(root, 'README.md'), '# fixture\n', 'utf8');
+  if (transcriptText) {
+    await mkdir(join(root, '.data', 'sessions'), { recursive: true });
+    const now = Date.now();
+    await writeFile(join(root, '.data', 'projects.json'), JSON.stringify({
+      version: 1, activeProjectId: 'seed-project', activeSessionId: 'seed-session',
+      projects: [{ id: 'seed-project', name: 'fixture', path: root, createdAt: now, updatedAt: now }],
+      sessions: [{ id: 'seed-session', projectId: 'seed-project', title: 'fixture', engine: 'claude', createdAt: now, updatedAt: now }],
+    }));
+    await writeFile(join(root, '.data', 'sessions', 'seed-session.json'), JSON.stringify({
+      version: 1, revision: 1, running: false, updatedAt: now, permissionMode: 'auto',
+      sessionInfo: {}, messages: [{ role: 'assistant', text: transcriptText }],
+    }));
+  }
   const port = await findFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const daemonPath = resolve('src/daemon.ts');

@@ -43,9 +43,9 @@ test('running task recovers across reconnect and stops after the process exits',
       permissionMode: 'manual',
     }));
     const accepted = await inbox.next(message =>
-      message.type === 'prompt_accepted' && message.promptId === promptId);
+      message.type === 'prompt_accepted' && message.promptId === promptId, 'accepted');
     assert.equal(typeof accepted.runId, 'string');
-    const started = await inbox.next(message => message.type === 'status' && message.running === true);
+    const started = await inbox.next(message => message.type === 'status' && message.running === true, 'running');
     assert.equal(started.runId, accepted.runId);
     assert.equal(typeof started.startedAt, 'number');
     assert.equal(started.stopping, false);
@@ -57,7 +57,7 @@ test('running task recovers across reconnect and stops after the process exits',
       permissionMode: 'manual',
     }));
     const busy = await inbox.next(message =>
-      message.type === 'error' && String(message.message || '').includes('claude_is_busy'));
+      message.type === 'error' && String(message.message || '').includes('claude_is_busy'), 'busy');
     assert.equal(busy.type, 'error');
 
     const createResponse = await fetch(
@@ -100,14 +100,14 @@ test('running task recovers across reconnect and stops after the process exits',
     const reconnected = await connectWithToken(token);
     activeSocket = reconnected.socket;
     const recoveredStatus = await reconnected.inbox.next(message =>
-      message.type === 'status' && message.authenticated === true);
+      message.type === 'status' && message.authenticated === true, 'recoveredStatus');
     assert.equal(recoveredStatus.running, true);
     assert.equal(recoveredStatus.stopping, false);
     assert.equal(recoveredStatus.runId, started.runId);
     assert.equal(recoveredStatus.startedAt, started.startedAt);
 
     const recoveredSnapshot = await reconnected.inbox.next(message =>
-      message.type === 'transcript_snapshot');
+      message.type === 'transcript_snapshot', 'recoveredSnapshot');
     assert.equal(recoveredSnapshot.running, true);
     assert.equal(recoveredSnapshot.stopping, false);
     assert.equal(recoveredSnapshot.runId, started.runId);
@@ -121,7 +121,7 @@ test('running task recovers across reconnect and stops after the process exits',
       permissionMode: 'manual',
     }));
     const duplicateAccepted = await reconnected.inbox.next(message =>
-      message.type === 'prompt_accepted' && message.promptId === promptId);
+      message.type === 'prompt_accepted' && message.promptId === promptId, 'duplicateAccepted');
     assert.equal(duplicateAccepted.runId, started.runId);
 
     const stopResponse = await fetch(`${daemon.baseUrl}/api/stop`, {
@@ -135,15 +135,15 @@ test('running task recovers across reconnect and stops after the process exits',
     assert.deepEqual(await stopResponse.json(), { stopped: true });
 
     const stopping = await reconnected.inbox.next(message =>
-      message.type === 'status' && message.stopping === true);
+      message.type === 'status' && message.stopping === true, 'stopping');
     assert.equal(stopping.running, true);
     assert.equal(stopping.runId, started.runId);
     assert.equal(stopping.startedAt, started.startedAt);
 
-    const stopped = await reconnected.inbox.next(message => message.type === 'stopped');
+    const stopped = await reconnected.inbox.next(message => message.type === 'stopped', 'stopped');
     assert.equal(stopped.runId, started.runId);
     const finished = await reconnected.inbox.next(message =>
-      message.type === 'status' && message.running === false);
+      message.type === 'status' && message.running === false, 'finished');
     assert.equal(finished.stopping, false);
     assert.equal(finished.runId, started.runId);
 
@@ -300,7 +300,7 @@ class WsInbox {
     });
   }
 
-  next(predicate: (message: Record<string, unknown>) => boolean): Promise<Record<string, unknown>> {
+  next(predicate: (message: Record<string, unknown>) => boolean, label = 'unlabeled'): Promise<Record<string, unknown>> {
     const queuedIndex = this.queue.findIndex(predicate);
     if (queuedIndex >= 0) {
       const [message] = this.queue.splice(queuedIndex, 1);
@@ -310,7 +310,7 @@ class WsInbox {
       const timer = setTimeout(() => {
         const index = this.waiters.findIndex(item => item.timer === timer);
         if (index >= 0) this.waiters.splice(index, 1);
-        reject(new Error('websocket_message_timeout'));
+        reject(new Error(`websocket_message_timeout label=${label} queue=[${this.queue.map(message => String(message.type) + (message.running !== undefined ? `:${message.running}:${message.stopping}` : '')).join(',')}]`));
       }, 15_000);
       this.waiters.push({ predicate, resolve, reject, timer });
     });

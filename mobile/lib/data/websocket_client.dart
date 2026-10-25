@@ -80,6 +80,7 @@ class RemoteWebSocketClient {
   bool _transportReady = false;
   bool _authenticated = false;
   bool _supportsConnectionProbe = false;
+  bool _supportsMultiDevice = false;
   Timer? _probeTimer;
   Completer<void>? _probe;
   String? _probeId;
@@ -100,6 +101,7 @@ class RemoteWebSocketClient {
   WebSocketChannel? get channel => _channel;
   bool get isActive => !_explicitlyClosed && _origin != null && _token != null;
   bool get isAuthenticated => _authenticated;
+  bool get supportsMultiDevice => _supportsMultiDevice;
 
   Future<void> ensureConnected({
     bool retryNow = false,
@@ -335,6 +337,11 @@ class RemoteWebSocketClient {
           decoded.containsKey('connectionProbe')) {
         _supportsConnectionProbe = decoded['connectionProbe'] == true;
       }
+      if (decoded['type'] == 'status' &&
+          decoded['authenticated'] == true &&
+          decoded.containsKey('multiDevice')) {
+        _supportsMultiDevice = decoded['multiDevice'] == true;
+      }
       final pendingPromptId = _pendingPrompt?['promptId'];
       final messagePromptId = decoded['promptId'];
       if (pendingPromptId is String && messagePromptId == pendingPromptId) {
@@ -412,6 +419,7 @@ class RemoteWebSocketClient {
     _transportReady = false;
     _authenticated = false;
     _supportsConnectionProbe = false;
+    _supportsMultiDevice = false;
     _finishProbe();
     final subscription = _subscription;
     if (subscription != null) unawaited(subscription.cancel());

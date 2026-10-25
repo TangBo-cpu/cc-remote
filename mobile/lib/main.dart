@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:phosphor_icons/phosphor_icons.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
@@ -45,9 +46,11 @@ import 'session_memory.dart';
 import 'thinking_block.dart';
 import 'tool_activity_detail.dart';
 import 'transcript_motion.dart';
+import 'window_adaptive.dart';
 
 export 'thinking_block.dart';
 
+part 'device_manager.dart';
 part 'session_navigator.dart';
 
 void main() {
@@ -292,6 +295,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   bool handlingQr = false;
   bool wsReady = false;
   bool remoteOffline = false;
+  bool multiDeviceSupported = false;
+  final ValueNotifier<int> devicesRevision = ValueNotifier(0);
+  bool sessionRailVisible = true;
   RemoteConnectionSnapshot reconnectSnapshot =
       const RemoteConnectionSnapshot.idle();
   String? pausedQrRaw;
@@ -1319,6 +1325,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         setState(() {
           wsReady = decoded['authenticated'] == true;
           remoteOffline = false;
+          if (decoded.containsKey('multiDevice')) {
+            multiDeviceSupported = decoded['multiDevice'] == true;
+          }
           running = decoded['running'] == true;
           stopping = running && decoded['stopping'] == true;
           final nextRunId = decoded['runId'];
@@ -1334,6 +1343,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         openPendingNotificationSession();
         persistTranscriptSnapshotLater();
         if (wasRunning && !running) releaseQueuedPromptIfTurnIdle();
+
+      case 'devices':
+        devicesRevision.value += 1;
 
       case 'prompt_accepted':
         return;
@@ -2220,6 +2232,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       stopping = false;
       wsReady = false;
       remoteOffline = false;
+      multiDeviceSupported = false;
       pausedQrRaw = null;
       modelName = null;
       contextWindow = null;
@@ -2480,8 +2493,37 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     );
   }
 
+  Widget buildSessionRail() {
+    return SessionRail(
+      projects: projects,
+      sessions: remoteSessions,
+      activeProjectId: activeProjectId,
+      activeSessionId: activeSessionId,
+      running: running || uploadingAttachments,
+      catalogListenable: sessionCatalog,
+      busyListenable: directoryBusy,
+      onSelect: selectRemoteSession,
+      onOpenDirectory: widget.demoMode
+          ? null
+          : (engine) => unawaited(openDirectoryPicker(initialEngine: engine)),
+      onSearchResult: openRemoteSearchResult,
+      onCreate: (projectId, engine) =>
+          createRemoteSession(projectId, engine, reportError: false),
+      onRename: (id, title) => renameRemoteSession(id, title, reportError: false),
+      onArchive: (id) => archiveRemoteSession(id, reportError: false),
+      onDelete: (id) => deleteRemoteSession(id, reportError: false),
+      onRestore: (id) => updateSessionMetadata(id, 'restore'),
+      onPin: (id, pinned) => updateSessionMetadata(id, 'pin', pinned: pinned),
+      onSearch: searchRemoteSessions,
+    );
+  }
+
   void openSessions() {
     if (projects.isEmpty) return;
+    if (isExpandedWindow(context) && route == ShellRoute.chat) {
+      setState(() => sessionRailVisible = !sessionRailVisible);
+      return;
+    }
     directoryBusy.value = directorySwitchBlocked;
     showSessionNavigator(
       context,
@@ -2506,6 +2548,62 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       onRestore: (id) => updateSessionMetadata(id, 'restore'),
       onPin: (id, pinned) => updateSessionMetadata(id, 'pin', pinned: pinned),
       onSearch: searchRemoteSessions,
+    );
+  }
+
+  Future<List<RemoteDevice>> fetchPairedDevices() async {
+    final current = session;
+    if (current == null) throw StateError('connection_changed');
+    final res = await apiClient.get(
+      current.origin,
+      '/api/devices',
+      token: current.token,
+      timeout: networkTimeout,
+    );
+    if (res.statusCode == 401) {
+      if (session == current) await recoverUnauthorizedSession();
+      throw const UnauthorizedSession();
+    }
+    if (res.statusCode != 200) throw StateError('device_list_failed');
+    final body = jsonDecode(res.body);
+    if (body is! Map<String, dynamic> || body['devices'] is! List) {
+      throw const FormatException('bad_device_list_response');
+    }
+    return (body['devices'] as List)
+        .whereType<Map>()
+        .map((item) => RemoteDevice.tryParse(Map<String, dynamic>.from(item)))
+        .whereType<RemoteDevice>()
+        .toList();
+  }
+
+  Future<bool> revokePairedDevice(String deviceId) async {
+    final current = session;
+    if (current == null) throw StateError('connection_changed');
+    final res = await apiClient.post(
+      current.origin,
+      '/api/devices/${Uri.encodeComponent(deviceId)}/revoke',
+      token: current.token,
+      timeout: networkTimeout,
+    );
+    if (res.statusCode == 401) {
+      if (session == current) await recoverUnauthorizedSession();
+      throw const UnauthorizedSession();
+    }
+    if (res.statusCode == 404) return false;
+    if (res.statusCode != 200) throw StateError('device_revoke_failed');
+    devicesRevision.value += 1;
+    return true;
+  }
+
+  Future<void> openDeviceManager() async {
+    final current = session;
+    if (current == null || !multiDeviceSupported) return;
+    await showDeviceManagerSheet(
+      context,
+      revisionListenable: devicesRevision,
+      fetchDevices: fetchPairedDevices,
+      revokeDevice: revokePairedDevice,
+      onSelfRevoked: () => unawaited(recoverUnauthorizedSession()),
     );
   }
 
@@ -3053,7 +3151,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         payload.origin,
         '/api/pair',
         jsonBody: true,
-        body: jsonEncode({'nonce': payload.nonce}),
+        body: jsonEncode({
+          'nonce': payload.nonce,
+          'deviceName': await currentDeviceName(),
+        }),
         timeout: networkTimeout,
       );
       if (res.statusCode != 200) throw StateError('pair_failed');
@@ -3066,6 +3167,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         origin: payload.origin,
         token: token,
         deviceName: body['deviceName'] as String? ?? payload.deviceName,
+        deviceId: body['deviceId'] as String?,
       );
       await tokenStore.save(saved);
       await clearTranscriptStore();
@@ -3173,6 +3275,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           setModelPreference,
           widget.onReadingFontScaleChanged,
           logoutPairedDevice,
+          onOpenDevices: multiDeviceSupported ? openDeviceManager : null,
         ),
         onOpenModelPicker: () => openModelPicker(context),
         onEffortSelected: (effort) => unawaited(setEffortPreference(effort)),
@@ -3197,6 +3300,25 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         onCancelQueue: () => setState(restoreQueuedPrompt),
       ),
     };
+    // Expanded windows (tablets, landscape desktops) keep the session list
+    // mounted as a rail beside the chat instead of a modal sidebar.
+    final showSessionRail = route == ShellRoute.chat &&
+        sessionRailVisible &&
+        projects.isNotEmpty &&
+        isExpandedWindow(context);
+    final shellChild = showSessionRail
+        ? Row(
+            key: const ValueKey('chat-session-rail'),
+            children: [
+              SafeArea(
+                bottom: false,
+                right: false,
+                child: buildSessionRail(),
+              ),
+              Expanded(child: screen),
+            ],
+          )
+        : screen;
     final colors = AppPalette.of(context);
     final dark = Theme.of(context).brightness == Brightness.dark;
     return AnnotatedRegion<SystemUiOverlayStyle>(
@@ -3236,7 +3358,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
               ),
             );
           },
-          child: KeyedSubtree(key: ValueKey(route), child: screen),
+          child: KeyedSubtree(key: ValueKey(route), child: shellChild),
         ),
       ),
     );
@@ -3701,7 +3823,13 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
               ],
             ),
           );
-          return compact ? SingleChildScrollView(child: content) : content;
+          final capped = Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: content,
+            ),
+          );
+          return compact ? SingleChildScrollView(child: capped) : capped;
         },
       ),
     );
@@ -4644,7 +4772,11 @@ class ChatScreen extends StatelessWidget {
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(8, 0, 8, composerBottomGap),
                     child: RepaintBoundary(
-                      child: peeking
+                      // Keep the floating composer aligned with the capped
+                      // transcript column instead of stretching on tablets.
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 760),
+                        child: peeking
                           ? SessionPeekDock(
                               peek: peek!,
                               onReturn: onExitPeek ?? () {},
@@ -4689,9 +4821,10 @@ class ChatScreen extends StatelessWidget {
                               onSend: onSend,
                               onStop: onStop,
                             ),
-                    ),
-                  ),
-                )
+                          ),
+                        ),
+                      ),
+                    )
               : null,
         ),
       ),
@@ -4751,7 +4884,7 @@ class _ChatOverlayLayoutState extends State<_ChatOverlayLayout> {
   @override
   Widget build(BuildContext context) {
     final topExtent = _topExtent ?? widget.initialTopExtent;
-    final blurExtent = topExtent + 48;
+    final blurExtent = topExtent + 32;
     return Stack(
       key: const ValueKey('chat-overlay-layout'),
       clipBehavior: Clip.none,
@@ -4793,7 +4926,7 @@ class _ChatTopBackdrop extends StatelessWidget {
   final double fadeStart;
 
     // Keep the tint light enough to preserve colors behind the glass.
-    static final _filter = ui.ImageFilter.blur(sigmaX: 14, sigmaY: 14);
+    static final _filter = ui.ImageFilter.blur(sigmaX: 11, sigmaY: 11);
 
   @override
   Widget build(BuildContext context) {
@@ -5941,8 +6074,9 @@ Future<void> showSettingsSheet(
   Future<bool> Function(bool) onNotificationsChanged,
   Future<void> Function(ClaudeModelPreference) onModelChanged,
   Future<void> Function(double scale, {bool persist}) onReadingFontScaleChanged,
-  VoidCallback onLogout,
-) async {
+  VoidCallback onLogout, {
+  VoidCallback? onOpenDevices,
+}) async {
   FocusManager.instance.primaryFocus?.unfocus();
   await showModalBottomSheet<void>(
     context: context,
@@ -5964,6 +6098,7 @@ Future<void> showSettingsSheet(
         onModelChanged: onModelChanged,
         onReadingFontScaleChanged: onReadingFontScaleChanged,
         onLogout: onLogout,
+        onOpenDevices: onOpenDevices,
       ),
       barrierColor: AppPalette.of(context).scrim,
     ),
@@ -6025,17 +6160,27 @@ class _SettingsModalSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final media = MediaQuery.of(context);
+    // Compact keeps the classic full-width bottom sheet; medium windows cap
+    // the sheet width, and expanded windows present a centered dialog card.
+    final widthClass = windowWidthClassOf(context);
+    final expanded = widthClass == WindowWidthClass.expanded;
+    final capped = widthClass != WindowWidthClass.compact;
     final height = min(
-      media.size.height * 0.94,
+      media.size.height * (expanded ? 0.86 : 0.94),
       media.size.height - media.padding.top - 8,
     );
-    const borderRadius = BorderRadius.vertical(top: Radius.circular(28));
+    final borderRadius = expanded
+        ? BorderRadius.circular(28)
+        : const BorderRadius.vertical(top: Radius.circular(28));
+    final maxWidth = expanded ? 640.0 : 600.0;
     return Align(
-      alignment: Alignment.bottomCenter,
+      alignment: expanded ? Alignment.center : Alignment.bottomCenter,
       child: RepaintBoundary(
         child: Container(
           key: surfaceKey,
           height: height,
+          width: capped ? min(maxWidth, media.size.width - 32) : null,
+          margin: expanded ? const EdgeInsets.symmetric(horizontal: 24) : null,
           decoration: AppLiquidGlass.strong(
             context: context,
             borderRadius: borderRadius,
@@ -6045,7 +6190,7 @@ class _SettingsModalSurface extends StatelessWidget {
             clipBehavior: Clip.hardEdge,
             borderRadius: borderRadius,
             child: Padding(
-              padding: EdgeInsets.only(bottom: media.padding.bottom),
+              padding: EdgeInsets.only(bottom: expanded ? 0 : media.padding.bottom),
               child: RepaintBoundary(child: child),
             ),
           ),
@@ -6068,6 +6213,7 @@ class SettingsSheet extends StatefulWidget {
     required this.onModelChanged,
     required this.onReadingFontScaleChanged,
     required this.onLogout,
+    this.onOpenDevices,
   });
 
   final SavedSession? session;
@@ -6081,6 +6227,7 @@ class SettingsSheet extends StatefulWidget {
   final Future<void> Function(double scale, {bool persist})
   onReadingFontScaleChanged;
   final VoidCallback onLogout;
+  final VoidCallback? onOpenDevices;
 
   @override
   State<SettingsSheet> createState() => _SettingsSheetState();
@@ -6400,6 +6547,18 @@ class _SettingsSheetState extends State<SettingsSheet> {
                       widget.onReconnect();
                     },
                   ),
+                  if (widget.onOpenDevices != null) ...[
+                    const Divider(height: 1),
+                    _SettingsActionRow(
+                      key: const ValueKey('paired-devices-setting'),
+                      icon: LucideIcons.smartphone,
+                      label: '已配对设备',
+                      onTap: () {
+                        Navigator.pop(context);
+                        widget.onOpenDevices!();
+                      },
+                    ),
+                  ],
                 ],
               ),
               const SizedBox(height: 24),
@@ -6711,6 +6870,7 @@ class _SettingsDetailLine extends StatelessWidget {
 
 class _SettingsActionRow extends StatelessWidget {
   const _SettingsActionRow({
+    super.key,
     required this.icon,
     required this.label,
     required this.onTap,
@@ -6865,7 +7025,7 @@ Future<void> confirmLogout(BuildContext context, VoidCallback onLogout) async {
     animationStyle: appOverlayAnimationStyle(context),
     builder: (context) => AppDialog(
       title: const Text('退出配对'),
-      content: const Text('退出后这台手机需要重新扫码。'),
+      content: const Text('退出后这台手机需要重新扫码，其他已配对设备不受影响。'),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context, false),
@@ -11786,7 +11946,10 @@ Future<T?> showAppOptionPicker<T>(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
             child: ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: available),
+              constraints: BoxConstraints(
+                maxHeight: available,
+                maxWidth: adaptiveSheetMaxWidth(sheetContext, wideWidth: 560),
+              ),
               child: AppSheetSurface(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
                 child: scrollContent
@@ -11826,6 +11989,7 @@ class AppDialog extends StatelessWidget {
       elevation: 0,
       insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
       child: Container(
+        constraints: const BoxConstraints(maxWidth: 560),
         decoration: BoxDecoration(
           color: palette.surface,
           borderRadius: BorderRadius.circular(AppRadii.surface),

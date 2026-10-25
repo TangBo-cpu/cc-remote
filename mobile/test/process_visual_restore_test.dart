@@ -70,7 +70,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.byType(SmartIcon), findsWidgets);
-    expect(find.text('README.md'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-detail-read')), findsOneWidget);
     expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
     final materials = tester.widgetList<Material>(
       find.descendant(
@@ -111,10 +111,10 @@ void main() {
     expect(find.byKey(const ValueKey('process-history-surface')), findsNothing);
     expect(find.byType(SmartIcon), findsWidgets);
     expect(find.text('检查完成'), findsOneWidget);
-    expect(find.text('README.md'), findsNothing);
+    expect(find.byKey(const ValueKey('activity-detail-read')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
     await tester.pumpAndSettle();
-    expect(find.text('README.md'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-detail-read')), findsOneWidget);
     expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
   });
 

@@ -66,7 +66,7 @@ class AppPalette {
       _isLight ? const Color(0x0D000000) : const Color(0x12FFFFFF);
   Color get inlineCodeBackground => messageSecondary;
   Color get inlineCodeForeground =>
-      _isLight ? const Color(0xFF107D32) : const Color(0xFF00CA50);
+      _isLight ? const Color(0xFF107B32) : const Color(0xFF00CA50);
   Color get bubbleOutline =>
       _isLight ? const Color(0x14000000) : const Color(0x14FFFFFF);
   Color get composerControlFill => control;

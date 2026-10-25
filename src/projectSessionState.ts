@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { access, copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { createTranscriptState, type TranscriptSnapshot, type TranscriptState } from './transcriptState.js';
+import { createTranscriptState, type TranscriptSummary, type TranscriptState } from './transcriptState.js';
 import { isAgentEngine, type AgentEngine } from './engineBridge.js';
 import { canonicalDirectory } from './directoryService.js';
 
@@ -149,8 +149,8 @@ export async function createProjectSessionState(options: {
     projectId: string,
     title = '新会话',
     engine: AgentEngine = 'claude',
+    next = structuredClone(catalog),
   ): Promise<SessionContext> {
-    const next = structuredClone(catalog);
     const project = next.projects.find(item => item.id === projectId);
     if (!project) throw new Error('project_not_found');
     const now = Date.now();
@@ -228,7 +228,7 @@ export async function createProjectSessionState(options: {
 
   function snapshotCatalog(): ProjectSessionCatalog {
     const sessions = catalog.sessions
-      .map(session => sessionSummary(session, transcripts.get(session.id)?.snapshot()))
+      .map(session => sessionSummary(session, transcripts.get(session.id)?.summary()))
       .sort((a, b) => {
         if (a.archived !== b.archived) return a.archived ? 1 : -1;
         return b.updatedAt - a.updatedAt;
@@ -308,21 +308,24 @@ export async function createProjectSessionState(options: {
     async registerProject(path: string, name?: string): Promise<ProjectSessionCatalog> {
       const canonicalPath = resolve(path);
       if (!(await stat(canonicalPath)).isDirectory()) throw new Error('workspace_not_directory');
-      let project = catalog.projects.find(item => samePath(item.path, canonicalPath));
+      const next = structuredClone(catalog);
+      let project = next.projects.find(item => samePath(item.path, canonicalPath));
       if (!project) {
         project = newProject(canonicalPath, name);
-        catalog.projects.push(project);
-        await createSessionRecord(project.id);
+        next.projects.push(project);
+      }
+      project.name = cleanName(name) || project.name;
+      project.updatedAt = Date.now();
+      next.activeProjectId = project.id;
+      const latest = next.sessions
+        .filter(item => item.projectId === project!.id && !item.archivedAt)
+        .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+      if (latest) {
+        next.activeSessionId = latest.id;
+        await saveCatalog(next);
+        catalog = next;
       } else {
-        project.name = cleanName(name) || project.name;
-        project.updatedAt = Date.now();
-        catalog.activeProjectId = project.id;
-        const latest = catalog.sessions
-          .filter(item => item.projectId === project!.id && !item.archivedAt)
-          .sort((a, b) => b.updatedAt - a.updatedAt)[0];
-        if (latest) catalog.activeSessionId = latest.id;
-        else await createSessionRecord(project.id);
-        await saveCatalog();
+        await createSessionRecord(project.id, undefined, undefined, next);
       }
       return snapshotCatalog();
     },
@@ -373,23 +376,28 @@ export async function createProjectSessionState(options: {
       const context = getSessionContext(sessionId);
       if (!context) throw new Error('session_not_found');
       if (context.session.archivedAt) throw new Error('session_archived');
-      catalog.activeProjectId = context.project.id;
-      catalog.activeSessionId = context.session.id;
-      context.project.updatedAt = Date.now();
-      await saveCatalog();
-      return context;
+      const next = structuredClone(catalog);
+      next.activeProjectId = context.project.id;
+      next.activeSessionId = sessionId;
+      next.projects.find(item => item.id === context.project.id)!.updatedAt = Date.now();
+      await saveCatalog(next);
+      catalog = next;
+      return getSessionContext(sessionId)!;
     },
 
     async setSessionTitleFromPrompt(sessionId: string, prompt: string): Promise<void> {
       const context = getSessionContext(sessionId);
       if (!context) return;
       const now = Date.now();
-      if (isDefaultTitle(context.session.title)) {
-        context.session.title = titleFromPrompt(prompt);
+      const next = structuredClone(catalog);
+      const session = next.sessions.find(item => item.id === sessionId)!;
+      if (isDefaultTitle(session.title)) {
+        session.title = titleFromPrompt(prompt);
       }
-      context.session.updatedAt = now;
-      context.project.updatedAt = now;
-      await saveCatalog();
+      session.updatedAt = now;
+      next.projects.find(item => item.id === context.project.id)!.updatedAt = now;
+      await saveCatalog(next);
+      catalog = next;
     },
 
     async setSessionTitle(sessionId: string, title: string): Promise<SessionContext> {
@@ -398,11 +406,14 @@ export async function createProjectSessionState(options: {
       const cleaned = cleanName(title).slice(0, 48);
       if (!cleaned) throw new Error('title_required');
       const now = Date.now();
-      context.session.title = cleaned;
-      context.session.updatedAt = now;
-      context.project.updatedAt = now;
-      await saveCatalog();
-      return context;
+      const next = structuredClone(catalog);
+      const session = next.sessions.find(item => item.id === sessionId)!;
+      session.title = cleaned;
+      session.updatedAt = now;
+      next.projects.find(item => item.id === context.project.id)!.updatedAt = now;
+      await saveCatalog(next);
+      catalog = next;
+      return getSessionContext(sessionId)!;
     },
 
     async archiveSession(sessionId: string): Promise<SessionContext> {
@@ -507,27 +518,18 @@ function newProject(path: string, name?: string): StoredProject {
   };
 }
 
-function sessionSummary(session: StoredSession, snapshot?: TranscriptSnapshot): SessionSummary {
-  let preview: string | undefined;
-  const messages = snapshot?.messages ?? [];
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if ((message.role === 'user' || message.role === 'assistant') && message.text.trim()) {
-      preview = message.text.replace(/\s+/g, ' ').trim().slice(0, 160);
-      break;
-    }
-  }
+function sessionSummary(session: StoredSession, summary?: TranscriptSummary): SessionSummary {
   return {
     ...session,
-    updatedAt: Math.max(session.updatedAt, snapshot?.updatedAt ?? 0),
-    running: snapshot?.running === true,
-    messageCount: snapshot?.messages.length ?? 0,
-    model: snapshot?.sessionInfo.model,
-    remainingTokens: snapshot?.sessionInfo.remainingTokens,
+    updatedAt: Math.max(session.updatedAt, summary?.updatedAt ?? 0),
+    running: summary?.running === true,
+    messageCount: summary?.messageCount ?? 0,
+    model: summary?.model,
+    remainingTokens: summary?.remainingTokens,
     archived: typeof session.archivedAt === 'number',
     pinned: session.pinned === true,
-    preview,
-    needsAttention: (snapshot?.pendingPermissions.length ?? 0) > 0,
+    preview: summary?.preview,
+    needsAttention: summary?.needsAttention === true,
   };
 }
 
@@ -562,24 +564,25 @@ function escapeSearchPattern(value: string): string {
 async function loadCatalog(path: string): Promise<StoredCatalog> {
   try {
     const parsed = JSON.parse(await readFile(path, 'utf8')) as Partial<StoredCatalog>;
-    if (parsed.version !== SCHEMA_VERSION || !Array.isArray(parsed.projects) || !Array.isArray(parsed.sessions)) {
-      return emptyCatalog();
+    if (!isRecord(parsed) || parsed.version !== SCHEMA_VERSION
+      || !Array.isArray(parsed.projects) || !parsed.projects.every(isProject)
+      || !Array.isArray(parsed.sessions) || !parsed.sessions.every(isSession)) {
+      throw new Error(`Invalid project catalog: ${path}`);
     }
     return {
       version: SCHEMA_VERSION,
       activeProjectId: typeof parsed.activeProjectId === 'string' ? parsed.activeProjectId : undefined,
       activeSessionId: typeof parsed.activeSessionId === 'string' ? parsed.activeSessionId : undefined,
-      projects: parsed.projects.filter(isProject),
-      sessions: parsed.sessions
-        .filter(isSession)
-        .map(session => ({
-          ...session,
-          engine: isAgentEngine(session.engine) ? session.engine : 'claude',
-          pinned: session.pinned === true,
-        })),
+      projects: parsed.projects,
+      sessions: parsed.sessions.map(session => ({
+        ...session,
+        engine: isAgentEngine(session.engine) ? session.engine : 'claude',
+        pinned: session.pinned === true,
+      })),
     };
-  } catch {
-    return emptyCatalog();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return emptyCatalog();
+    throw error;
   }
 }
 

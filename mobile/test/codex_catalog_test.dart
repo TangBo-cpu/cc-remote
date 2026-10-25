@@ -9,6 +9,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('Codex catalog retains provider-qualified model IDs', () {
+    final models = CodexModelOption.fromWire([
+      {'model': 'gpt-test-codex'},
+      {'model': 'workbuddy-ai/deepseek-v4.1-flash'},
+      {'model': 'workbuddy/deepseek-v4.1-flash'},
+      {'model': 'invalid model'},
+    ]);
+    expect(models.map((item) => item.model), [
+      'gpt-test-codex',
+      'workbuddy-ai/deepseek-v4.1-flash',
+      'workbuddy/deepseek-v4.1-flash',
+    ]);
+  });
+
   test(
     'prompt uses the selected model for its engine and preserves defaults',
     () {
@@ -26,6 +40,10 @@ void main() {
       expect(
         payload(SessionEngine.codex, 'gpt-test-codex')['model'],
         'gpt-test-codex',
+      );
+      expect(
+        payload(SessionEngine.codex, 'workbuddy/deepseek-v4.1-flash')['model'],
+        'workbuddy/deepseek-v4.1-flash',
       );
       expect(payload(SessionEngine.claude, 'gpt-test-codex')['model'], 'opus');
       expect(payload(SessionEngine.codex, null).containsKey('model'), isFalse);

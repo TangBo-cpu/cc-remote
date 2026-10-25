@@ -50,17 +50,20 @@ void main() {
     expect(store.saved, [ThemeMode.dark]);
   });
 
-  test('choosing system during initialization overrides a saved mode', () async {
-    final store = _DelayedStore();
-    final controller = AppearanceController(store);
-    addTearDown(controller.dispose);
-    final initialization = controller.initialize();
-    await controller.select(ThemeMode.system);
-    store.loaded.complete(ThemeMode.dark);
-    await initialization;
-    expect(controller.value, ThemeMode.system);
-    expect(store.saved, [ThemeMode.system]);
-  });
+  test(
+    'choosing system during initialization overrides a saved mode',
+    () async {
+      final store = _DelayedStore();
+      final controller = AppearanceController(store);
+      addTearDown(controller.dispose);
+      final initialization = controller.initialize();
+      await controller.select(ThemeMode.system);
+      store.loaded.complete(ThemeMode.dark);
+      await initialization;
+      expect(controller.value, ThemeMode.system);
+      expect(store.saved, [ThemeMode.system]);
+    },
+  );
 
   test('a failed save restores the previous appearance', () async {
     final controller = AppearanceController(_WriteFailureStore());
@@ -82,14 +85,30 @@ void main() {
           greaterThanOrEqualTo(4.5),
         );
       }
-      expect(
-        _contrast(colors.link, colors.inlineCodeBackground),
-        greaterThanOrEqualTo(4.5),
-      );
-      expect(
-        _contrast(colors.ink, colors.inlineCodeBackground),
-        greaterThanOrEqualTo(4.5),
-      );
+      for (final background in [colors.paper, colors.surface]) {
+        for (final foreground in [
+          colors.messageInk,
+          colors.messageMuted,
+          colors.messageLink,
+        ]) {
+          expect(_contrast(foreground, background), greaterThanOrEqualTo(4.5));
+        }
+        final inlineCodeBackground = Color.alphaBlend(
+          colors.inlineCodeBackground,
+          background,
+        );
+        for (final foreground in [
+          colors.inlineCodeForeground,
+          colors.link,
+          colors.ink,
+        ]) {
+          expect(
+            _contrast(foreground, inlineCodeBackground),
+            greaterThanOrEqualTo(4.5),
+            reason: '${colors.brightness.name}: inline code on $background',
+          );
+        }
+      }
       expect(_contrast(colors.onCta, colors.cta), greaterThanOrEqualTo(4.5));
       expect(_contrast(colors.onStop, colors.stop), greaterThanOrEqualTo(4.5));
     }
@@ -223,16 +242,16 @@ void main() {
           .styleSheet!
           .p!
           .color,
-      AppPalette.light.ink,
+      AppPalette.light.messageInk,
     );
     mode.value = ThemeMode.dark;
     await tester.pumpAndSettle();
     final sheet = tester
         .widget<MarkdownBody>(find.bySubtype<MarkdownBody>())
         .styleSheet!;
-    expect(sheet.p!.color, AppPalette.dark.ink);
-    expect(sheet.h1!.color, AppPalette.dark.ink);
-    expect(sheet.tableBody!.color, AppPalette.dark.ink);
+    expect(sheet.p!.color, AppPalette.dark.messageInk);
+    expect(sheet.h1!.color, AppPalette.dark.messageInk);
+    expect(sheet.tableBody!.color, AppPalette.dark.messageInk);
     expect(pathLinkColors(), isNotEmpty);
     expect(pathLinkColors(), everyElement(AppPalette.dark.link));
     expect(tester.takeException(), isNull);

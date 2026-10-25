@@ -5,6 +5,33 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { createProjectSessionState } from '../src/projectSessionState.js';
 
+test('catalog summaries do not clone transcript bodies and stay current', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-catalog-summary-'));
+  try {
+    const state = await createProjectSessionState({ dataDir: join(dir, 'data'), initialWorkspace: dir });
+    const { transcript, session } = state.active();
+    transcript.beginPrompt('x'.repeat(1024 * 1024), 'manual');
+    transcript.appendText('  latest answer\nwith context  ');
+    transcript.setSessionInfo({ model: 'test-model', remainingTokens: 1234 });
+    const clone = t.mock.method(globalThis, 'structuredClone');
+    const summary = state.catalog().sessions.find(item => item.id === session.id)!;
+    assert.equal(clone.mock.callCount(), 0);
+    assert.equal(summary.running, true);
+    assert.equal(summary.messageCount, 2);
+    assert.equal(summary.model, 'test-model');
+    assert.equal(summary.remainingTokens, 1234);
+    assert.equal(summary.preview, 'latest answer with context');
+    summary.preview = 'caller change';
+    transcript.appendText(' updated');
+    assert.equal(state.catalog().sessions[0].preview, 'latest answer with context updated');
+    await transcript.clear();
+    assert.equal(state.catalog().sessions[0].messageCount, 0);
+    assert.equal(state.catalog().sessions[0].preview, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('session metadata survives reload without changing selection or message history', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-remote-session-metadata-'));
   const options = { dataDir: join(dir, 'data'), initialWorkspace: dir };
@@ -87,6 +114,46 @@ test('failed archive, restore and pin writes preserve the catalog and allow retr
       await mutate();
       await state.flush();
       if (action === 'archive') await state.restoreSession(target.session.id);
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('failed title, selection and project writes preserve the catalog and allow retry', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-catalog-write-failure-'));
+  const options = { dataDir: join(dir, 'data'), initialWorkspace: dir };
+  const path = join(options.dataDir, 'projects.json');
+  try {
+    const state = await createProjectSessionState(options);
+    const target = state.active();
+    await target.transcript.clear();
+    await mkdir(join(dir, 'other'));
+    await mkdir(join(dir, 'new'));
+    await state.registerProject(join(dir, 'other'));
+    const actions = [
+      () => state.setSessionTitle(target.session.id, 'saved title'),
+      () => state.setSessionTitleFromPrompt(target.session.id, 'prompt title'),
+      () => state.selectSession(target.session.id),
+      () => state.registerProject(dir, 'saved project'),
+      () => state.registerProject(join(dir, 'new')),
+    ];
+    for (const mutate of actions) {
+      const before = state.catalog();
+      const saved = await readFile(path, 'utf8');
+      await rename(path, path + '.saved');
+      await mkdir(path);
+      await assert.rejects(async () => { await mutate(); });
+      assert.deepEqual(state.catalog(), before);
+      assert.equal(state.active().session.id, before.activeSessionId);
+      await rm(path, { recursive: true });
+      await rename(path + '.saved', path);
+      assert.equal(await readFile(path, 'utf8'), saved);
+      await mutate();
+      await state.active().transcript.clear();
+      await state.flush();
+      const restored = await createProjectSessionState(options);
+      assert.deepEqual(restored.catalog(), state.catalog());
     }
   } finally {
     await rm(dir, { recursive: true, force: true });

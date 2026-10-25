@@ -75,7 +75,13 @@ input.on('line', line => {
     }
     if (message.method === 'model/list') {
       respond(message.id, message.params.cursor ? {
-        data: [{ model: 'gpt-test-fast', displayName: 'Fast', description: 'Fast model', isDefault: false }],
+        data: [
+          { model: 'gpt-test-fast', displayName: 'Fast', description: 'Fast model', isDefault: false },
+          ...(fakeOptions.mode === 'catalog-namespaced' ? [
+            { model: 'workbuddy-ai/deepseek-v4.1-flash' },
+            { model: 'workbuddy/deepseek-v4.1-flash' },
+          ] : []),
+        ],
         nextCursor: null,
       } : {
         data: [

@@ -1,9 +1,50 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 import { createTranscriptState } from '../src/transcriptState.js';
+
+test('background save failure stays recoverable and flush retries unsaved history', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-transcript-save-failure-'));
+  const blocked = join(dir, 'blocked');
+  const path = join(blocked, 'transcript.json');
+  try {
+    const { stderr } = await promisify(execFile)(process.execPath, [
+      '--import', import.meta.resolve('tsx'), '--input-type=module', '-e', `
+        import assert from 'node:assert/strict';
+        import { rm, writeFile } from 'node:fs/promises';
+        import { createTranscriptState } from ${JSON.stringify(new URL('../src/transcriptState.ts', import.meta.url).href)};
+        const state = await createTranscriptState(process.argv[1]);
+        await writeFile(process.argv[2], 'not a directory');
+        const failed = new Promise(resolve => {
+          const warn = console.warn;
+          console.warn = (...args) => { warn(...args); resolve(); };
+        });
+        const timeout = setTimeout(() => { throw new Error('save_failure_timeout'); }, 3000);
+        state.beginPrompt('keep this question', 'manual');
+        state.appendText('keep this answer');
+        await failed;
+        await assert.rejects(state.flush());
+        assert.equal(state.snapshot().messages.at(-1).text, 'keep this answer');
+        await rm(process.argv[2]);
+        await state.flush();
+        await state.finishDone();
+        clearTimeout(timeout);
+      `, path, blocked,
+    ], { windowsHide: true, timeout: 10_000 });
+    assert.match(stderr, /Could not save session history/);
+    const restored = await createTranscriptState(path);
+    assert.equal(restored.snapshot().running, false);
+    assert.deepEqual(restored.snapshot().messages.map(message => message.text), [
+      'keep this question', 'keep this answer',
+    ]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
 
 test('persists the authoritative transcript and restores it after restart', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-remote-transcript-'));

@@ -86,7 +86,7 @@ class CodexModelPreferenceStore {
 String? normalizeCodexModel(String? value) {
   final model = value?.trim();
   if (model == null ||
-      !RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$').hasMatch(model)) {
+      !RegExp(r'^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$').hasMatch(model)) {
     return null;
   }
   return model;

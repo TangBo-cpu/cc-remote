@@ -106,10 +106,13 @@ void main() {
     }
     await tester.pumpAndSettle();
     expect(find.text('任务执行失败'), findsOneWidget);
-    expect(find.text('命令退出码为 1'), findsOneWidget);
+    expect(find.text('命令退出码为 1'), findsNothing);
     expect(find.text('任务已完成'), findsNothing);
     expect(find.text('部分输出'), findsOneWidget);
-    await tester.tap(find.byTooltip('收起失败提示'));
+    await tester.tap(find.byKey(const ValueKey('recovery-state-failed')));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(SelectableText, '命令退出码为 1'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, '收起失败提示'));
     await tester.pumpAndSettle();
     expect(find.text('任务执行失败'), findsNothing);
     expect(hasCurrentFailureEvidence(state.messages), isTrue);
@@ -175,8 +178,10 @@ void main() {
 
     await pumpPanel();
     expect(find.text('任务执行失败'), findsOneWidget);
-    expect(find.byTooltip('收起失败提示'), findsOneWidget);
-    await tester.tap(find.byTooltip('收起失败提示'));
+    await tester.tap(find.byKey(const ValueKey('recovery-state-failed')));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(SelectableText, '本次任务失败'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, '收起失败提示'));
     await tester.pumpAndSettle();
     expect(find.text('任务执行失败'), findsNothing);
 
@@ -187,7 +192,11 @@ void main() {
     await pumpPanel(detail: '下一次任务失败');
     await tester.pumpAndSettle();
     expect(find.text('任务执行失败'), findsOneWidget);
-    expect(find.text('下一次任务失败'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('recovery-state-failed')));
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(SelectableText, '下一次任务失败'), findsOneWidget);
+    await tester.tap(find.byTooltip('关闭状态详情'));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('failure dismiss control fits small screens and has a label', (
@@ -225,13 +234,17 @@ void main() {
               ),
             ),
           );
-          final dismiss = find.byTooltip('收起失败提示');
-          expect(tester.getSize(dismiss).width, greaterThanOrEqualTo(44));
-          expect(tester.getSize(dismiss).height, greaterThanOrEqualTo(44));
-          expect(
-            tester.getSemantics(dismiss).getSemanticsData().tooltip,
-            '收起失败提示',
-          );
+          final status = find.byKey(const ValueKey('recovery-state-failed'));
+          expect(tester.getSize(status).width, greaterThanOrEqualTo(48));
+          expect(tester.getSize(status).height, greaterThanOrEqualTo(48));
+          expect(tester.getSemantics(status).label, '任务执行失败');
+          await tester.tap(status);
+          await tester.pumpAndSettle();
+          final dismiss = find.widgetWithText(TextButton, '收起失败提示');
+          await tester.ensureVisible(dismiss);
+          expect(tester.getSize(dismiss).width, greaterThanOrEqualTo(48));
+          expect(tester.getSize(dismiss).height, greaterThanOrEqualTo(48));
+          expect(tester.getSemantics(dismiss).label, '收起失败提示');
           expect(tester.takeException(), isNull);
           await tester.tap(dismiss);
           await tester.pumpAndSettle();

@@ -616,6 +616,14 @@ export class CodexBridge implements EngineBridge {
         stdio: 'ignore',
         shell: false,
       });
+      // Under heavy system load, spawning taskkill itself can stall for tens
+      // of seconds. Fall back to terminating the child through its existing
+      // handle (TerminateProcess, no new process) so a stop never hangs on
+      // process creation; descendants are still left to the taskkill tree.
+      const killFallback = setTimeout(() => {
+        if (state.child.exitCode === null && !state.child.killed) state.child.kill();
+      }, 1_500);
+      killFallback.unref?.();
     } else {
       state.child.kill();
     }

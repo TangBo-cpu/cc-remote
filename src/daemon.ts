@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { delimiter, extname, join } from 'node:path';
 import qrcode from 'qrcode-terminal';
 import WebSocket, { WebSocketServer } from 'ws';
-import { createAuthState, type PairingPayload } from './authState.js';
+import { createAuthState, DEFAULT_MAX_PAIRED_DEVICES, type PairingPayload } from './authState.js';
 import { createLocalControlState } from './localControlState.js';
 import { createPairingQr } from './pairingQr.js';
 import {
@@ -93,12 +93,18 @@ function readBoundedIntEnv(
 }
 
 const MAX_BODY_BYTES = 64 * 1024;
-// ponytail: single-device product; raise only if multi-device lands
+const MAX_WS_BUFFERED_BYTES = 8 * 1024 * 1024;
 const MAX_WS_CONNECTIONS = readBoundedIntEnv(
   'MAX_WS_CONNECTIONS',
   16,
   1,
   64,
+);
+const MAX_PAIRED_DEVICES = readBoundedIntEnv(
+  'MAX_PAIRED_DEVICES',
+  DEFAULT_MAX_PAIRED_DEVICES,
+  1,
+  16,
 );
 const WS_AUTH_TIMEOUT_MS = readBoundedIntEnv(
   'WS_AUTH_TIMEOUT_MS',
@@ -138,7 +144,7 @@ function defaultCodexCommand(): { bin: string; args: string[] } {
 }
 
 const publicUrl = new URL(PUBLIC_ORIGIN);
-const auth = await createAuthState();
+const auth = await createAuthState(undefined, MAX_PAIRED_DEVICES);
 const localControl = await createLocalControlState();
 const projectSessions = await createProjectSessionState({ initialWorkspace: WORKSPACE_DIR });
 // Align cold start with "cc-remote already running" register path: activate WORKSPACE_DIR.
@@ -160,9 +166,10 @@ let nativeHistoryRefresh: Promise<void> | undefined;
 const runFlight = createRunFlight(() => bridge.isRunning());
 const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_BODY_BYTES });
 const openSockets = new Set<WebSocket>();
-const authedSockets = new Set<WebSocket>();
+const authedSockets = new Map<WebSocket, string>();
 const wsAlive = new WeakMap<WebSocket, boolean>();
 const wsCloseTimers = new WeakMap<WebSocket, NodeJS.Timeout>();
+const wsLargePayloadBytes = new WeakMap<WebSocket, number>();
 const wsHeartbeatTimer = setInterval(() => {
   for (const client of wss.clients) {
     if (client.readyState === WebSocket.CLOSING) {
@@ -216,8 +223,20 @@ const server = createServer(async (req, res) => {
 
 server.on('upgrade', (req, socket, head) => {
   socket.on('error', () => socket.destroy());
-  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-  if (url.pathname !== '/ws' || !isAllowedHost(req) || !isAllowedOrigin(req)) {
+  if (!isAllowedHost(req) || !isAllowedOrigin(req)) {
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  let url: URL;
+  try {
+    url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  } catch {
+    socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  if (url.pathname !== '/ws') {
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     socket.destroy();
     return;
@@ -235,7 +254,7 @@ server.on('upgrade', (req, socket, head) => {
 
 wss.on('connection', ws => {
   let authenticated = false;
-  let authGeneration = -1;
+  let authedDeviceId: string | null = null;
   openSockets.add(ws);
   wsAlive.set(ws, true);
   const authTimer = setTimeout(() => {
@@ -273,20 +292,22 @@ wss.on('connection', ws => {
       ws.close(1001, 'shutting_down');
       return;
     }
-    if (authenticated && authGeneration !== auth.getAuthGeneration()) {
+    if (authenticated && !auth.isDeviceActive(authedDeviceId)) {
       ws.close(1008, 'authorization_expired');
       return;
     }
     void handleWsMessage(ws, data.toString('utf8'), {
       isAuthenticated: () => authenticated,
       authenticate: async token => {
-        if (!auth.verifyToken(token)) return false;
+        const deviceId = auth.verifyToken(token);
+        if (!deviceId) return false;
         authenticated = true;
+        authedDeviceId = deviceId;
         clearAuthTimer();
-        authGeneration = auth.getAuthGeneration();
+        auth.touchDevice(deviceId);
         await refreshNativeHistory(activeContext);
-        if (!auth.verifyToken(token) || ws.readyState !== WebSocket.OPEN) return false;
-        authedSockets.add(ws);
+        if (!auth.isDeviceActive(deviceId) || ws.readyState !== WebSocket.OPEN) return false;
+        authedSockets.set(ws, deviceId);
         sendStatus(ws, true);
         send(ws, { type: 'catalog', ...projectSessions.catalog() });
         const commands = commandCaches.get(commandCacheKey(activeContext)) || [];
@@ -475,19 +496,30 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   }
 
   if (req.method === 'POST' && url.pathname === '/api/pair') {
-    const body = await readJson<{ nonce?: string }>(req);
-    const token = await auth.pair(body.nonce || '');
-    if (!token) return sendJson(res, 401, { ok: false, error: 'invalid_pairing_code' });
-    closeAllSockets();
-    sendJson(res, 200, { ok: true, token, deviceName: DEVICE_NAME });
+    const body = await readJson<{ nonce?: string; deviceName?: string }>(req);
+    const result = await auth.pair(
+      body.nonce || '',
+      typeof body.deviceName === 'string' ? body.deviceName : undefined,
+    );
+    if ('error' in result) {
+      const status = result.error === 'device_limit' ? 409 : 401;
+      return sendJson(res, status, { ok: false, error: result.error });
+    }
+    sendJson(res, 200, {
+      ok: true,
+      token: result.token,
+      deviceId: result.deviceId,
+      deviceName: DEVICE_NAME,
+    });
     return;
   }
 
-  const authorized = auth.verifyBearerToken(req.headers.authorization);
-  if (!authorized) {
+  const callerDeviceId = auth.verifyBearerToken(req.headers.authorization);
+  if (!callerDeviceId) {
     sendJson(res, 401, { authorized: false, ...auth.status() });
     return;
   }
+  auth.touchDevice(callerDeviceId);
 
   if (req.method === 'GET' && url.pathname === '/api/status') {
     sendJson(res, 200, {
@@ -827,8 +859,33 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   }
 
   if (req.method === 'POST' && url.pathname === '/api/logout') {
-    await auth.logout();
-    closeAllSockets();
+    await auth.logout(callerDeviceId);
+    closeSocketsForDevice(callerDeviceId);
+    broadcastDevices();
+    sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/devices') {
+    const devices = auth.listDevices();
+    sendJson(res, 200, {
+      devices: devices.map(device => ({ ...device, current: device.id === callerDeviceId })),
+    });
+    return;
+  }
+
+  const revokeMatch = url.pathname.match(/^\/api\/devices\/([^/]+)\/revoke$/);
+  if (req.method === 'POST' && revokeMatch) {
+    let deviceId: string;
+    try {
+      deviceId = decodeURIComponent(revokeMatch[1]);
+    } catch {
+      return sendJson(res, 400, { ok: false, error: 'bad_device_id' });
+    }
+    const revoked = await auth.logout(deviceId);
+    if (!revoked) return sendJson(res, 404, { ok: false, error: 'device_not_found' });
+    closeSocketsForDevice(deviceId);
+    broadcastDevices();
     sendJson(res, 200, { ok: true });
     return;
   }
@@ -1025,6 +1082,20 @@ async function handleWsMessage(ws: WebSocket, raw: string, session: WsSession): 
       sandboxMode,
     );
   } catch (error) {
+    if (activeRunStartedAt !== undefined) {
+      flushTextDeltaBatch();
+      const message = error instanceof Error ? error.message : String(error);
+      await promptContext.transcript.finishError(message).catch(saveError => {
+        console.warn('[transcript] Could not save failed run:', saveError);
+      });
+      broadcastNativeTranscript(promptContext, runId);
+      broadcast(sessionMessage({
+        type: 'status',
+        authenticated: true,
+        ...taskStatus(promptContext),
+        ...engineSessionStatus(promptContext),
+      }, promptContext, runId));
+    }
     if (promptId && !promptContext.transcript.snapshot().running) {
       promptReceipts.delete(promptId);
     }
@@ -1189,7 +1260,11 @@ async function runPromptFlight(
     },
     onSessionId: sessionId => {
       runContext.transcript.setEngineSessionId(sessionId);
-      if (engine === 'claude') void auth.setClaudeSessionId(sessionId);
+      if (engine === 'claude') {
+        void auth.setClaudeSessionId(sessionId).catch(error => {
+          console.warn('[auth] Could not save Claude session:', error);
+        });
+      }
     },
     onPermissionRequest: request => {
       runContext.transcript.addPermission(request);
@@ -1321,11 +1396,14 @@ function contentType(pathname: string): string {
 }
 
 async function readJson<T>(req: IncomingMessage): Promise<T> {
-  let body = '';
+  const chunks: Buffer[] = [];
+  let size = 0;
   for await (const chunk of req) {
-    body += chunk.toString('utf8');
-    if (body.length > MAX_BODY_BYTES) throw new Error('body_too_large');
+    size += chunk.length;
+    if (size > MAX_BODY_BYTES) throw new Error('body_too_large');
+    chunks.push(chunk);
   }
+  const body = Buffer.concat(chunks, size).toString('utf8');
   return body ? JSON.parse(body) as T : {} as T;
 }
 
@@ -1344,6 +1422,7 @@ function sendStatus(ws: WebSocket, authenticated: boolean): void {
     type: 'status',
     authenticated,
     connectionProbe: true,
+    multiDevice: true,
     ...taskStatus(activeContext),
     ...engineSessionStatus(activeContext),
     workspaceDir: activeContext.project.path,
@@ -1401,7 +1480,8 @@ async function syncNativeClaudeHistory(context: SessionContext): Promise<void> {
   const sessionId = context.transcript.snapshot().engineSessionId;
   if (context.session.engine !== 'claude' || !sessionId) return;
   try {
-    await syncClaudeSessionHistory({ sessionId, title: context.session.title });
+    const title = projectSessions.getSession(context.session.id)?.session.title ?? context.session.title;
+    await syncClaudeSessionHistory({ sessionId, title });
   } catch (error) {
     console.warn('[claude-history] Could not sync the desktop session list:', error);
   }
@@ -1703,12 +1783,39 @@ function flushTextDeltaBatch(): void {
 }
 
 function broadcast(data: unknown): void {
-  for (const client of [...authedSockets]) {
+  for (const client of [...authedSockets.keys()]) {
     try {
       send(client, data);
     } catch {
       if (client.readyState !== WebSocket.CLOSED) client.terminate();
     }
+  }
+}
+
+function broadcastDevices(): void {
+  const devices = auth.listDevices();
+  for (const [client, deviceId] of authedSockets) {
+    send(client, {
+      type: 'devices',
+      devices: devices.map(device => ({ ...device, current: device.id === deviceId })),
+    });
+  }
+}
+
+function closeSocketsForDevice(deviceId: string): void {
+  for (const [client, socketDeviceId] of [...authedSockets]) {
+    if (socketDeviceId !== deviceId) continue;
+    authedSockets.delete(client);
+    if (client.readyState === WebSocket.CLOSED) continue;
+    const previousTimer = wsCloseTimers.get(client);
+    if (previousTimer) clearTimeout(previousTimer);
+    client.close(1008, 'authorization_changed');
+    const closeTimer = setTimeout(() => {
+      if (client.readyState !== WebSocket.CLOSED) client.terminate();
+      wsCloseTimers.delete(client);
+    }, WS_CLOSE_TIMEOUT_MS);
+    closeTimer.unref?.();
+    wsCloseTimers.set(client, closeTimer);
   }
 }
 
@@ -1742,14 +1849,26 @@ function send(ws: WebSocket, data: unknown): void {
   }
   if (payload === undefined) return;
 
+  const payloadBytes = Buffer.byteLength(payload);
+  const oversized = payloadBytes > MAX_WS_BUFFERED_BYTES;
+  const largePayloadBytes = wsLargePayloadBytes.get(ws) ?? 0;
+  if ((oversized && largePayloadBytes > 0)
+    || ws.bufferedAmount + (oversized ? 0 : payloadBytes) > MAX_WS_BUFFERED_BYTES + largePayloadBytes) {
+    ws.terminate();
+    return;
+  }
+  // Allow one large snapshot while limiting the messages queued behind it.
+  if (oversized) wsLargePayloadBytes.set(ws, payloadBytes);
   try {
     ws.send(payload, error => {
+      if (oversized) wsLargePayloadBytes.delete(ws);
       if (error) {
         console.error('WebSocket send failed:', error.message);
         ws.terminate();
       }
     });
   } catch (error) {
+    if (oversized) wsLargePayloadBytes.delete(ws);
     console.error(
       'WebSocket send failed:',
       error instanceof Error ? error.message : String(error),

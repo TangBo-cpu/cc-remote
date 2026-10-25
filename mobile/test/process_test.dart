@@ -236,10 +236,15 @@ void main() {
         ),
       ),
     );
-    expect(find.text('README.md'), findsNothing);
+    final readDetail = find.byKey(const ValueKey('activity-detail-read'));
+    expect(readDetail, findsNothing);
     await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
     await tester.pumpAndSettle();
-    expect(find.text('README.md'), findsOneWidget);
+    expect(readDetail, findsOneWidget);
+    expect(
+      find.descendant(of: readDetail, matching: find.byType(SelectableText)),
+      findsOneWidget,
+    );
     expect(find.text('flutter test'), findsOneWidget);
     expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
     final row = find.byKey(const ValueKey('activity-step-toggle-read'));
@@ -247,7 +252,7 @@ void main() {
     final before = tester.getSize(find.byType(ActivityTimelineCard)).height;
     await tester.tap(row);
     await tester.pumpAndSettle();
-    expect(find.text('README.md'), findsNothing);
+    expect(readDetail, findsNothing);
     expect(find.text('flutter test'), findsOneWidget);
     expect(
       tester.getSize(find.byType(ActivityTimelineCard)).height,
@@ -255,7 +260,7 @@ void main() {
     );
     await tester.tap(row);
     await tester.pumpAndSettle();
-    expect(find.text('README.md'), findsOneWidget);
+    expect(readDetail, findsOneWidget);
     expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
   });
 

@@ -49,6 +49,12 @@ void main() {
     },
   );
 
+  test('Codex model preference preserves provider-qualified IDs', () async {
+    final store = CodexModelPreferenceStore();
+    await store.save('workbuddy-ai/deepseek-v4.1-flash');
+    expect(await store.load(), 'workbuddy-ai/deepseek-v4.1-flash');
+  });
+
   test('invalid stored Codex model follows the computer', () async {
     FlutterSecureStorage.setMockInitialValues({
       CodexModelPreferenceStore.key: 'invalid model\n--flag',

@@ -73,10 +73,10 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.byKey(processToggle), findsOneWidget);
-    expect(find.text('README.md'), findsNothing);
+    expect(find.byKey(const ValueKey('activity-detail-read')), findsNothing);
     await tester.tap(find.byKey(processToggle));
     await tester.pumpAndSettle();
-    expect(find.text('README.md'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-detail-read')), findsOneWidget);
   });
 
   testWidgets('reasoning collapses when running activity completes', (
@@ -106,14 +106,14 @@ void main() {
       ),
     );
     await tester.pumpWidget(chain(true));
-    expect(find.text('README.md'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-detail-read')), findsOneWidget);
     await tester.tap(find.byKey(processToggle));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(processToggle));
     await tester.pumpAndSettle();
     await tester.pumpWidget(chain(false));
     await tester.pumpAndSettle();
-    expect(find.text('README.md'), findsNothing);
+    expect(find.byKey(const ValueKey('activity-detail-read')), findsNothing);
   });
 
   for (final reasoning in [true, false]) {
@@ -139,7 +139,7 @@ void main() {
         final toggle = find.byKey(reasoning ? thinkingToggle : processToggle);
         final content = reasoning
             ? find.byKey(thinkingContent)
-            : find.text('README.md');
+            : find.byKey(const ValueKey('activity-detail-read'));
         await tester.pumpWidget(activity(true));
         await tester.tap(toggle);
         await tester.pumpAndSettle();
@@ -170,19 +170,19 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('检查完成。'), findsOneWidget);
     expect(find.byKey(thinkingToggle), findsNothing);
-    expect(find.text('README.md'), findsNothing);
+    expect(find.byKey(const ValueKey('activity-detail-read')), findsNothing);
     await tester.tap(find.byKey(processToggle));
     await tester.pumpAndSettle();
     expect(find.byKey(thinkingContent), findsNothing);
     await tester.tap(find.byKey(thinkingToggle));
     await tester.pumpAndSettle();
     expect(find.byKey(thinkingContent), findsOneWidget);
-    expect(find.text('README.md'), findsOneWidget);
+    expect(find.byKey(const ValueKey('activity-detail-read')), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await tester.pumpWidget(host(turn()));
     await tester.pumpAndSettle();
     expect(find.text('检查完成。'), findsOneWidget);
     expect(find.byKey(thinkingToggle), findsNothing);
-    expect(find.text('README.md'), findsNothing);
+    expect(find.byKey(const ValueKey('activity-detail-read')), findsNothing);
   });
 }

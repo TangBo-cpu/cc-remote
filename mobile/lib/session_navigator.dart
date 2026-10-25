@@ -126,6 +126,100 @@ Future<void> showSessionNavigator(
 
 enum _SessionAction { details, pin, rename, archive, restore, delete }
 
+/// Persistent left rail for expanded windows (tablets). It reuses the modal
+/// sidebar's page; unlike [showSessionNavigator] nothing pops on selection —
+/// the rail stays mounted beside the chat.
+class SessionRail extends StatelessWidget {
+  const SessionRail({
+    super.key,
+    required this.projects,
+    required this.sessions,
+    required this.activeProjectId,
+    required this.activeSessionId,
+    required this.running,
+    this.onOpenDirectory,
+    this.catalogListenable,
+    this.busyListenable,
+    required this.onSelect,
+    required this.onSearchResult,
+    required this.onCreate,
+    required this.onRename,
+    required this.onArchive,
+    required this.onRestore,
+    required this.onPin,
+    required this.onDelete,
+    required this.onSearch,
+    this.width = kSessionRailWidth,
+  });
+
+  static const double kSessionRailWidth = 360;
+
+  final List<RemoteProjectSummary> projects;
+  final List<RemoteSessionSummary> sessions;
+  final String? activeProjectId;
+  final String? activeSessionId;
+  final bool running;
+  final ValueChanged<SessionEngine>? onOpenDirectory;
+  final ValueListenable<RemoteProjectCatalog?>? catalogListenable;
+  final ValueListenable<bool>? busyListenable;
+  final ValueChanged<String> onSelect;
+  final ValueChanged<RemoteSessionSearchResult> onSearchResult;
+  final FutureOr<void> Function(String projectId, SessionEngine engine)
+  onCreate;
+  final Future<void> Function(String sessionId, String title) onRename;
+  final Future<void> Function(String sessionId) onArchive;
+  final Future<void> Function(String sessionId) onRestore;
+  final Future<void> Function(String sessionId, bool pinned) onPin;
+  final Future<void> Function(String sessionId) onDelete;
+  final SessionSearch onSearch;
+  final double width;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    return Material(
+      color: palette.surface,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          border: Border(
+            right: BorderSide(color: palette.line, width: 1),
+          ),
+        ),
+        child: SizedBox(
+          width: width,
+          child: RepaintBoundary(
+            child: ListenableBuilder(
+              listenable: Listenable.merge([
+                catalogListenable,
+                busyListenable,
+              ]),
+              builder: (_, _) => SessionNavigatorPage(
+                projects: catalogListenable?.value?.projects ?? projects,
+                sessions: catalogListenable?.value?.sessions ?? sessions,
+                activeProjectId:
+                    catalogListenable?.value?.activeProjectId ?? activeProjectId,
+                activeSessionId:
+                    catalogListenable?.value?.activeSessionId ?? activeSessionId,
+                running: busyListenable?.value ?? running,
+                onSelect: onSelect,
+                onSearchResult: onSearchResult,
+                onCreate: onCreate,
+                onOpenDirectory: onOpenDirectory,
+                onRename: onRename,
+                onArchive: onArchive,
+                onRestore: onRestore,
+                onPin: onPin,
+                onDelete: onDelete,
+                onSearch: onSearch,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class SessionNavigatorPage extends StatefulWidget {
   const SessionNavigatorPage({
     super.key,
