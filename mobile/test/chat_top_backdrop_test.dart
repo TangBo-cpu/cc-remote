@@ -100,7 +100,7 @@ void main() {
       final mask = find.byKey(const ValueKey('chat-top-frost-mask'));
       final maskBounds = tester.getRect(mask);
       final headerBottom = tester.getRect(topOverlay).bottom - maskBounds.top;
-      expect(maskBounds.height - headerBottom, closeTo(32, 0.1));
+      expect(maskBounds.height, closeTo(headerBottom / 2 + 14, 0.1));
 
       final decoration =
           tester.widget<DecoratedBox>(mask).decoration as BoxDecoration;
@@ -119,15 +119,7 @@ void main() {
         );
         image.dispose();
 
-        expect(pixels!.getUint8((headerBottom.floor() - 1) * 4 + 3), 255);
-        expect(
-          pixels.getUint8((headerBottom + 16).floor() * 4 + 3),
-          inInclusiveRange(110, 145),
-        );
-        expect(
-          pixels.getUint8((maskBounds.height.floor() - 1) * 4 + 3),
-          lessThan(10),
-        );
+        expect(pixels!.getUint8((maskBounds.height.floor() - 1) * 4 + 3), 255);
       });
 
       final list = tester.widget<ListView>(

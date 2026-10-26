@@ -30,9 +30,9 @@ flutter run
 
 ## Android 安装
 
-当前公开版本是 [`v2.0.4`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.4)：
+当前公开版本是 [`v2.0.14`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.14)：
 
-- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.4/cc-remote-v2.0.4-android.apk)
+- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.14/cc-remote-v2.0.14-android.apk)
 
 下载后在 Android 手机上允许当前来源安装未知应用，并打开 APK 完成安装。当前 APK 使用测试签名，适合个人测试，不应作为应用商店正式包分发。
 
@@ -75,6 +75,8 @@ adb -s <device-id> shell monkey -p com.example.cc_remote -c android.intent.categ
 ```
 
 ## 会话流程
+
+平板上的会话列表使用固定宽度，可通过左上角的 X 收起，再点「项目与会话」展开。
 
 WebSocket 鉴权后，App 接收项目 catalog、当前 transcript、权限能力、指令、模型和上下文。发送任务时携带唯一 `promptId`、当前 `sessionId`、文本、附件 ID、权限模式、模型覆盖项和 Claude Code `effort`；daemon 接管后返回 `prompt_accepted`。
 

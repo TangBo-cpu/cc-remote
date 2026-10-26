@@ -457,8 +457,8 @@ impl App {
         let paired = self.status.as_ref().is_some_and(|s| s.paired);
         SetWindowTextW(
             self.pair,
-            wide(if paired {
-                "重新配对"
+            wide(if paired && self.pairing.is_none() {
+                "添加设备"
             } else {
                 "刷新二维码"
             })
@@ -474,13 +474,13 @@ impl App {
                 "二维码已过期，请刷新。".into()
             } else {
                 format!(
-                    "使用手机 App 扫码\n有效期 {:02}:{:02}",
+                    "使用手机 App 扫码添加设备\n有效期 {:02}:{:02}",
                     left / 60,
                     left % 60
                 )
             }
         } else if paired {
-            "地址变化时，请重新配对。".into()
+            "点击“添加设备”显示二维码。\n已配对设备可继续使用。".into()
         } else if online {
             "点击“刷新二维码”生成配对二维码。".into()
         } else {
@@ -630,16 +630,6 @@ impl App {
                 }
             }
             PAIR => {
-                if self.status.as_ref().is_some_and(|s| s.paired)
-                    && MessageBoxW(
-                        self.window,
-                        wide("新设备扫码成功后会替换原配对。是否显示新的二维码？").as_ptr(),
-                        wide("重新配对").as_ptr(),
-                        MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
-                    ) != IDYES
-                {
-                    return;
-                }
                 self.busy = true;
                 let _ = self.requests.send(Request::Pair);
             }
@@ -1273,18 +1263,40 @@ mod tests {
                 .unwrap();
             app.receive();
             assert_eq!(window_text(app.status_label), "服务运行中 · 已配对");
+            assert_eq!(window_text(app.pair), "添加设备");
             assert_eq!(window_text(app.note_detail), "关闭窗口后继续在托盘运行。");
             assert_ne!(
                 GetWindowLongW(app.note_label, GWL_STYLE) as u32 & SS_ENDELLIPSIS,
                 0
             );
+            app.command(PAIR);
+            assert!(matches!(receiver.try_recv(), Ok(Request::Pair)));
+            let pair = serde_json::json!({"payload": {"type": "cc-remote-pair", "version": 1,
+                "origin": "https://remote.example.com", "nonce": "test-nonce", "deviceName": "Test PC", "expiresAt": now_ms() + 300000},
+                "modules": vec![vec![true; 21]; 21]});
+            event_tx.send(Event::Pair(pair.clone())).unwrap();
+            app.receive();
+            assert!(app.qr.is_some());
+            assert_eq!(window_text(app.pair), "刷新二维码");
+            assert!(window_text(app.pair_label).contains("扫码添加设备"));
+            let mut next_pair = pair.clone();
+            next_pair["payload"]["nonce"] = "next-nonce".into();
+            event_tx
+                .send(Event::Status(Status {
+                    auth_generation: 1,
+                    pairing: Some(next_pair.clone()),
+                    ..app.status.clone().unwrap()
+                }))
+                .unwrap();
+            app.receive();
+            assert_eq!(app.pairing, Some(next_pair));
+            assert!(!app.manual_pair);
+            assert!(app.qr.is_some());
             event_tx.send(Event::Stopped).unwrap();
             app.receive();
             assert!(app.qr.is_none());
             assert_eq!(IsWindowVisible(app.note_detail), 0);
-            app.set_pairing(Some(serde_json::json!({"payload": {"type": "cc-remote-pair", "version": 1,
-                "origin": "https://remote.example.com", "nonce": "test-nonce", "deviceName": "Test PC", "expiresAt": now_ms() + 300000},
-                "modules": vec![vec![true; 21]; 21]})));
+            app.set_pairing(Some(pair));
             assert!(app.qr.is_some());
             SetFocus(app.start);
             SendMessageW(app.start, WM_KEYDOWN, VK_SPACE as usize, 0);

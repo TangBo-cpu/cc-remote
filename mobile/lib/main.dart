@@ -440,6 +440,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (route == ShellRoute.chat) {
+      flushStreamTextBatch();
+      persistTranscriptSnapshotNow();
+    }
     savePromptDraft();
     unawaited(sessionMemoryStore.flush());
     streamTextFlushTimer?.cancel();
@@ -464,6 +468,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           state == AppLifecycleState.paused ||
           state == AppLifecycleState.detached) {
         appBackgroundedAt ??= DateTime.now();
+        if (route == ShellRoute.chat) {
+          flushStreamTextBatch();
+          persistTranscriptSnapshotNow();
+        }
         savePromptDraft();
         unawaited(sessionMemoryStore.flush());
       }
@@ -842,19 +850,6 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     return null;
   }
 
-  Future<void> queueTranscriptWrite(Future<void> Function() write) {
-    final previous = lastTranscriptWrite;
-    lastTranscriptWrite = () async {
-      try {
-        await previous;
-      } catch (_) {}
-      try {
-        await write();
-      } catch (_) {}
-    }();
-    return lastTranscriptWrite;
-  }
-
   Future<void> persistTranscriptSnapshot() {
     final snapshot = TranscriptSnapshot(
       sessionId: activeSessionId,
@@ -864,7 +859,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       contextWindow: contextWindow,
       remainingContext: remainingContext,
     );
-    return queueTranscriptWrite(() => transcriptStore.save(snapshot));
+    return lastTranscriptWrite = transcriptStore
+        .save(snapshot)
+        .catchError((Object _) {});
   }
 
   void persistTranscriptSnapshotLater() {
@@ -900,6 +897,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   Future<void> clearTranscriptStore() async {
+    clearStreamTextBatch(apply: false);
+    streamPersistTimer?.cancel();
+    streamPersistTimer = null;
+    lastStreamPersistAt = null;
     restoringPromptDraft = true;
     try {
       promptController.clear();
@@ -907,7 +908,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       restoringPromptDraft = false;
     }
     await sessionMemoryStore.clear();
-    await queueTranscriptWrite(transcriptStore.clear);
+    await (lastTranscriptWrite = transcriptStore.clear().catchError(
+      (Object _) {},
+    ));
   }
 
   void removeInterruptedRunNotice() {
@@ -1484,14 +1487,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           contextWindow = (decoded['contextWindow'] as num?)?.toInt();
           remainingContext = (decoded['remainingTokens'] as num?)?.toInt();
         });
-        persistTranscriptSnapshotLater();
+        scheduleStreamPersist();
       case 'activity':
         final activity = RemoteActivity.tryParse(decoded);
         if (activity == null) return;
         setState(() {
           mergeRemoteActivity(messages, activity);
         });
-        persistTranscriptSnapshotLater();
+        scheduleStreamPersist();
       case 'done':
         final failed = currentRunFailed;
         final completedRun =
@@ -2495,6 +2498,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   Widget buildSessionRail() {
     return SessionRail(
+      onClose: () => setState(() => sessionRailVisible = false),
       projects: projects,
       sessions: remoteSessions,
       activeProjectId: activeProjectId,
@@ -2509,7 +2513,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       onSearchResult: openRemoteSearchResult,
       onCreate: (projectId, engine) =>
           createRemoteSession(projectId, engine, reportError: false),
-      onRename: (id, title) => renameRemoteSession(id, title, reportError: false),
+      onRename: (id, title) =>
+          renameRemoteSession(id, title, reportError: false),
       onArchive: (id) => archiveRemoteSession(id, reportError: false),
       onDelete: (id) => deleteRemoteSession(id, reportError: false),
       onRestore: (id) => updateSessionMetadata(id, 'restore'),
@@ -4667,9 +4672,13 @@ class ChatScreen extends StatelessWidget {
         onOpenWorkspace: onOpenWorkspace,
       ),
     );
-    Widget buildTranscriptView(double topPadding) => TranscriptView(
+    Widget buildTranscriptView(
+      double topPadding, {
+      bool tailOnlyUpdate = false,
+    }) => TranscriptView(
       topPadding: topPadding,
       messages: peeking ? peek!.messages : messages,
+      tailOnlyUpdate: tailOnlyUpdate,
       motion: peeking ? null : transcriptMotion,
       jumpRequest: transcriptJumpRequest,
       session: session,
@@ -4692,20 +4701,29 @@ class ChatScreen extends StatelessWidget {
       onJumpHandled: onTranscriptJumpHandled,
       onOpenWorkspaceChanges: peeking ? null : onOpenWorkspaceChanges,
     );
-    Widget buildTranscript(double topPadding) => RepaintBoundary(
-      child: WorkspacePortal(
-        workspaceDir: peeking ? null : session?.workspaceDir,
-        onOpenPath: peeking ? null : onOpenWorkspacePath,
-        child: transcriptRevisionListenable == null
-            ? buildTranscriptView(topPadding)
-            : ValueListenableBuilder<int>(
-                valueListenable: transcriptRevisionListenable!,
-                child: peeking ? buildTranscriptView(topPadding) : null,
-                builder: (context, _, child) =>
-                    peeking ? child! : buildTranscriptView(topPadding),
-              ),
-      ),
-    );
+    Widget buildTranscript(double topPadding) {
+      // Text notifications change only the trailing assistant message.
+      final initialRevision = transcriptRevisionListenable?.value;
+      return RepaintBoundary(
+        child: WorkspacePortal(
+          workspaceDir: peeking ? null : session?.workspaceDir,
+          onOpenPath: peeking ? null : onOpenWorkspacePath,
+          child: transcriptRevisionListenable == null
+              ? buildTranscriptView(topPadding)
+              : ValueListenableBuilder<int>(
+                  valueListenable: transcriptRevisionListenable!,
+                  child: peeking ? buildTranscriptView(topPadding) : null,
+                  builder: (context, revision, child) => peeking
+                      ? child!
+                      : buildTranscriptView(
+                          topPadding,
+                          tailOnlyUpdate: revision != initialRevision,
+                        ),
+                ),
+        ),
+      );
+    }
+
     final showComposer =
         peeking || !(offline && messages.isEmpty && pendingPermissions.isEmpty);
 
@@ -4884,7 +4902,7 @@ class _ChatOverlayLayoutState extends State<_ChatOverlayLayout> {
   @override
   Widget build(BuildContext context) {
     final topExtent = _topExtent ?? widget.initialTopExtent;
-    final blurExtent = topExtent + 32;
+    final blurExtent = max(0.0, topExtent / 2 + 14);
     return Stack(
       key: const ValueKey('chat-overlay-layout'),
       clipBehavior: Clip.none,
@@ -4896,7 +4914,7 @@ class _ChatOverlayLayoutState extends State<_ChatOverlayLayout> {
           right: 0,
           height: blurExtent,
           child: RepaintBoundary(
-            child: _ChatTopBackdrop(fadeStart: topExtent / blurExtent),
+            child: const _ChatTopBackdrop(fadeStart: 1),
           ),
         ),
         Positioned(
@@ -4926,7 +4944,7 @@ class _ChatTopBackdrop extends StatelessWidget {
   final double fadeStart;
 
     // Keep the tint light enough to preserve colors behind the glass.
-    static final _filter = ui.ImageFilter.blur(sigmaX: 11, sigmaY: 11);
+    static final _filter = ui.ImageFilter.blur(sigmaX: 6, sigmaY: 6);
 
   @override
   Widget build(BuildContext context) {
@@ -7051,6 +7069,7 @@ class TranscriptView extends StatefulWidget {
   const TranscriptView({
     super.key,
     required this.messages,
+    this.tailOnlyUpdate = false,
     this.jumpRequest,
     this.motion,
     this.session,
@@ -7074,6 +7093,7 @@ class TranscriptView extends StatefulWidget {
   });
 
   final List<TranscriptMessage> messages;
+  final bool tailOnlyUpdate;
   final TranscriptJumpRequest? jumpRequest;
   final TranscriptMotion? motion;
   final SavedSession? session;
@@ -7236,6 +7256,11 @@ class _TranscriptViewState extends State<TranscriptView>
   final Map<int, GlobalKey> rowKeys = {};
   final Map<int, GlobalKey> readingRowKeys = {};
   Map<int, TranscriptMessage> renderedMessages = {};
+  List<_VisibleTranscriptRow> transcriptRows = [];
+  List<Object> groupedRows = [];
+  int rawMessageCount = 0;
+  int lastUserIndex = -1;
+  int lastAssistantIndex = -1;
   SessionMemoryStore? readingMemoryStore;
   SessionMemory? readingMemory;
   String? readingSessionId;
@@ -7265,6 +7290,7 @@ class _TranscriptViewState extends State<TranscriptView>
     resetReadingMemory();
     widget.motion?.discardEntrances();
     scrollController.addListener(updateBottomFollowing);
+    refreshTranscriptRows();
     observeTranscript(reset: true);
     scheduleJump();
   }
@@ -7291,8 +7317,12 @@ class _TranscriptViewState extends State<TranscriptView>
       readingRestoreScheduled = false;
       readingRestoreInFlight = false;
       unreadOutputCount = 0;
+      refreshTranscriptRows();
       observeTranscript(reset: true);
     } else {
+      refreshTranscriptRows(
+        tailOnly: widget.tailOnlyUpdate && oldWidget.running == widget.running,
+      );
       observeTranscript();
     }
     scheduleJump();
@@ -7599,10 +7629,35 @@ class _TranscriptViewState extends State<TranscriptView>
     });
   }
 
-  List<_VisibleTranscriptRow> visibleRows() {
+  List<_VisibleTranscriptRow> visibleRows() => transcriptRows;
+
+  void refreshTranscriptRows({bool tailOnly = false}) {
+    if (tailOnly &&
+        transcriptRows.isNotEmpty &&
+        groupedRows.isNotEmpty &&
+        rawMessageCount == widget.messages.length) {
+      final rawIndex = rawMessageCount - 1;
+      final message = widget.messages[rawIndex];
+      final lastGroup = groupedRows.last;
+      if (message.role == MessageRole.assistant &&
+          !isBlankAssistantMessage(message) &&
+          transcriptRows.last.rawIndex == rawIndex &&
+          lastGroup is _VisibleTranscriptRow &&
+          lastGroup.rawIndex == rawIndex) {
+        final row = _VisibleTranscriptRow(rawIndex, message);
+        transcriptRows[transcriptRows.length - 1] = row;
+        groupedRows[groupedRows.length - 1] = row;
+        renderedMessages[rawIndex] = message;
+        return;
+      }
+    }
     final rows = <_VisibleTranscriptRow>[];
+    lastUserIndex = -1;
+    lastAssistantIndex = -1;
     for (var index = 0; index < widget.messages.length; index++) {
       final message = widget.messages[index];
+      if (message.role == MessageRole.user) lastUserIndex = index;
+      if (message.role == MessageRole.assistant) lastAssistantIndex = index;
       if (isBlankAssistantMessage(message)) continue;
       if (message.activityKind == ActivityKind.thinking &&
           message.activityState != ActivityState.running &&
@@ -7611,7 +7666,16 @@ class _TranscriptViewState extends State<TranscriptView>
       }
       rows.add(_VisibleTranscriptRow(index, message));
     }
-    return rows;
+    rawMessageCount = widget.messages.length;
+    transcriptRows = rows;
+    groupedRows = _groupTranscriptRows(rows, running: widget.running);
+    renderedMessages = {for (final row in rows) row.rawIndex: row.message};
+    rowKeys.removeWhere(
+      (rawIndex, _) => !renderedMessages.containsKey(rawIndex),
+    );
+    readingRowKeys.removeWhere(
+      (rawIndex, _) => !renderedMessages.containsKey(rawIndex),
+    );
   }
 
   Widget messageEntrance(
@@ -7945,35 +8009,27 @@ class _TranscriptViewState extends State<TranscriptView>
       );
     }
 
-    final visibleMessages = visibleRows();
-    renderedMessages = {
-      for (final row in visibleMessages) row.rawIndex: row.message,
-    };
     readingTopPadding = widget.topPadding;
     readingContentLoading = widget.loading;
-    final visibleRawIndices = visibleMessages
-        .map((row) => row.rawIndex)
-        .toSet();
-    rowKeys.removeWhere((rawIndex, _) => !visibleRawIndices.contains(rawIndex));
-    for (final row in visibleMessages) {
-      rowKeys.putIfAbsent(row.rawIndex, GlobalKey.new);
-    }
     scheduleJump();
     scheduleReadingRestore();
     scheduleBottomJump(force: !didInitialBottomJump);
-    final items = <Object>[
-      ..._groupTranscriptRows(visibleMessages, running: widget.running),
-      ...widget.pendingPermissions,
-      if (widget.workspaceChangeEcho != null &&
-          widget.onOpenWorkspaceChanges != null)
-        widget.workspaceChangeEcho!,
-    ];
-    final lastUserIndex = widget.messages.lastIndexWhere(
-      (message) => message.role == MessageRole.user,
-    );
-    final lastAssistantIndex = widget.messages.lastIndexWhere(
-      (message) => message.role == MessageRole.assistant,
-    );
+    final echo = widget.onOpenWorkspaceChanges == null
+        ? null
+        : widget.workspaceChangeEcho;
+    final itemCount =
+        groupedRows.length +
+        widget.pendingPermissions.length +
+        (echo == null ? 0 : 1);
+    Object itemAt(int index) {
+      if (index < groupedRows.length) return groupedRows[index];
+      final permissionIndex = index - groupedRows.length;
+      if (permissionIndex < widget.pendingPermissions.length) {
+        return widget.pendingPermissions[permissionIndex];
+      }
+      return echo!;
+    }
+
     final streamingAssistantIndex =
         widget.running && lastAssistantIndex > lastUserIndex
         ? lastAssistantIndex
@@ -8015,9 +8071,9 @@ class _TranscriptViewState extends State<TranscriptView>
                 cacheExtent: 180,
                 addAutomaticKeepAlives: false,
                 addRepaintBoundaries: true,
-                itemCount: items.length,
+                itemCount: itemCount,
                 itemBuilder: (context, index) {
-                  final item = items[index];
+                  final item = itemAt(index);
                   Widget row;
                   int? rawIndex;
                   if (item is _VisibleTranscriptRow) {
@@ -8032,7 +8088,7 @@ class _TranscriptViewState extends State<TranscriptView>
                       searchHighlighted: highlighted,
                       isStreaming: item.rawIndex == streamingAssistantIndex,
                       followsProcess:
-                          index > 0 && items[index - 1] is _ProcessGroupRow,
+                          index > 0 && itemAt(index - 1) is _ProcessGroupRow,
                     );
                     row = messageEntrance(item.message, rawIndex, row);
                     if (highlighted) {
@@ -8076,7 +8132,10 @@ class _TranscriptViewState extends State<TranscriptView>
                           );
                         }
                         return SizedBox(
-                          key: rowKeys[part.rawIndex],
+                          key: rowKeys.putIfAbsent(
+                            part.rawIndex,
+                            GlobalKey.new,
+                          ),
                           child: child,
                         );
                       },
@@ -8131,8 +8190,8 @@ class _TranscriptViewState extends State<TranscriptView>
                     return value;
                   }
 
-                  final nextItem = index + 1 < items.length
-                      ? items[index + 1]
+                  final nextItem = index + 1 < itemCount
+                      ? itemAt(index + 1)
                       : null;
                   final attachedReply =
                       item is _ProcessGroupRow &&
@@ -8148,7 +8207,10 @@ class _TranscriptViewState extends State<TranscriptView>
                   );
                   final child = rawIndex == null
                       ? paddedRow
-                      : SizedBox(key: rowKeys[rawIndex], child: paddedRow);
+                      : SizedBox(
+                          key: rowKeys.putIfAbsent(rawIndex, GlobalKey.new),
+                          child: paddedRow,
+                        );
                   final readingIndex = item is _ProcessGroupRow
                       ? item.rawIndex
                       : rawIndex;
@@ -9431,7 +9493,10 @@ class _CachedMarkdownBody extends StatefulWidget {
 }
 
 class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
+  static const streamRenderInterval = Duration(milliseconds: 160);
   Widget? cached;
+  Timer? streamRenderTimer;
+  String? renderedMarkdownData;
   String? sourcesData;
   List<MarkdownSourceLink> sources = const [];
   String? cachedWorkspaceDir;
@@ -9443,14 +9508,34 @@ class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
     if (widget.data != oldWidget.data ||
         widget.isStreaming != oldWidget.isStreaming ||
         widget.attachments != oldWidget.attachments) {
-      cached = null;
+      if (widget.data != oldWidget.data &&
+          widget.isStreaming &&
+          oldWidget.isStreaming &&
+          widget.attachments == oldWidget.attachments &&
+          cached != null &&
+          streamRenderTimer != null) {
+        return;
+      }
+      invalidateCache();
     }
+  }
+
+  void invalidateCache() {
+    streamRenderTimer?.cancel();
+    streamRenderTimer = null;
+    cached = null;
+  }
+
+  @override
+  void dispose() {
+    streamRenderTimer?.cancel();
+    super.dispose();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    cached = null;
+    invalidateCache();
   }
 
   @override
@@ -9461,7 +9546,7 @@ class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
         cachedOnOpenPath != portal?.onOpenPath) {
       cachedWorkspaceDir = portal?.workspaceDir;
       cachedOnOpenPath = portal?.onOpenPath;
-      cached = null;
+      invalidateCache();
     }
     if (cached != null) return cached!;
     if (_assistantTextLooksPlainOutsidePaths(
@@ -9481,6 +9566,15 @@ class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
     }
     final preGate = _MarkdownPreGate();
     final pathBuilder = _WorkspacePathMarkdownBuilder(preGate);
+    renderedMarkdownData = widget.data;
+    if (widget.isStreaming) {
+      streamRenderTimer ??= Timer(streamRenderInterval, () {
+        streamRenderTimer = null;
+        if (mounted && widget.data != renderedMarkdownData) {
+          setState(invalidateCache);
+        }
+      });
+    }
     final markdown = MessageMarkdownBody(
       key: const ValueKey('assistant-markdown-body'),
       data: widget.data,
@@ -12380,6 +12474,10 @@ class TranscriptStore {
 
   static const key = 'cc_remote_transcript';
   final FlutterSecureStorage storage;
+  Future<void> _lastWrite = Future<void>.value();
+  TranscriptSnapshot? _pendingSnapshot;
+  bool _snapshotWriteQueued = false;
+  int _generation = 0;
 
   Future<TranscriptSnapshot?> load() async {
     final raw = await storage.read(key: key);
@@ -12395,11 +12493,37 @@ class TranscriptStore {
   }
 
   Future<void> save(TranscriptSnapshot snapshot) {
-    return storage.write(key: key, value: jsonEncode(snapshot.toJson()));
+    _pendingSnapshot = snapshot;
+    if (_snapshotWriteQueued) return _lastWrite;
+    _snapshotWriteQueued = true;
+    final generation = _generation;
+    return _queueWrite(() async {
+      if (generation != _generation) return;
+      final latest = _pendingSnapshot;
+      _pendingSnapshot = null;
+      _snapshotWriteQueued = false;
+      if (latest != null) {
+        await storage.write(key: key, value: jsonEncode(latest.toJson()));
+      }
+    });
   }
 
   Future<void> clear() {
-    return storage.delete(key: key);
+    _generation++;
+    _pendingSnapshot = null;
+    _snapshotWriteQueued = false;
+    return _queueWrite(() => storage.delete(key: key));
+  }
+
+  Future<void> _queueWrite(Future<void> Function() write) {
+    final previous = _lastWrite;
+    _lastWrite = () async {
+      try {
+        await previous;
+      } catch (_) {}
+      await write();
+    }();
+    return _lastWrite;
   }
 }
 

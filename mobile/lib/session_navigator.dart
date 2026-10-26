@@ -137,6 +137,7 @@ class SessionRail extends StatelessWidget {
     required this.activeProjectId,
     required this.activeSessionId,
     required this.running,
+    required this.onClose,
     this.onOpenDirectory,
     this.catalogListenable,
     this.busyListenable,
@@ -173,6 +174,7 @@ class SessionRail extends StatelessWidget {
   final Future<void> Function(String sessionId) onDelete;
   final SessionSearch onSearch;
   final double width;
+  final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) {
@@ -194,6 +196,7 @@ class SessionRail extends StatelessWidget {
                 busyListenable,
               ]),
               builder: (_, _) => SessionNavigatorPage(
+                onClose: onClose,
                 projects: catalogListenable?.value?.projects ?? projects,
                 sessions: catalogListenable?.value?.sessions ?? sessions,
                 activeProjectId:
@@ -239,6 +242,7 @@ class SessionNavigatorPage extends StatefulWidget {
     required this.onSearch,
     this.onOpenDirectory,
     this.busyListenable,
+    this.onClose,
   });
 
   final List<RemoteProjectSummary> projects;
@@ -258,6 +262,7 @@ class SessionNavigatorPage extends StatefulWidget {
   final SessionSearch onSearch;
   final ValueChanged<SessionEngine>? onOpenDirectory;
   final ValueListenable<bool>? busyListenable;
+  final VoidCallback? onClose;
 
   @override
   State<SessionNavigatorPage> createState() => _SessionNavigatorPageState();
@@ -1354,7 +1359,8 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                         key: const ValueKey('session-drawer-close'),
                         tooltip: '收起会话列表',
                         onPressed: mutatingId == null
-                            ? () => Navigator.maybePop(context)
+                            ? widget.onClose ??
+                                  () => Navigator.maybePop(context)
                             : null,
                         icon: const Icon(
                           LucideIcons.x,

@@ -208,12 +208,26 @@ try {
   $window = Wait-LauncherWindow $launcher
   $restored = Wait-LauncherStatus
   Assert-Launcher $restored.paired 'Pairing was lost on restart.'
-  Assert-Launcher ($null -eq $restored.pairing) 'Restart required a new QR pairing.'
+  Assert-Launcher ($restored.pairing.modules.Count -ge 21) 'Restart did not show a QR for additional devices.'
+  $secondBody = @{ nonce = $restored.pairing.payload.nonce; deviceName = 'Test tablet' } | ConvertTo-Json -Compress
+  $secondPaired = Invoke-RestMethod -Uri "$baseUrl/api/pair" -Method Post -ContentType 'application/json' -Body $secondBody
+  Assert-Launcher (-not [string]::IsNullOrEmpty($secondPaired.token)) 'Additional device pairing failed.'
+  $nextStatus = Read-LauncherStatus
+  Assert-Launcher ($nextStatus.deviceCount -eq 2) 'Additional pairing replaced an existing device.'
+  Assert-Launcher ($nextStatus.pairing.modules.Count -ge 21) 'QR disappeared after additional pairing.'
+  Assert-Launcher ($nextStatus.pairing.payload.nonce -ne $restored.pairing.payload.nonce) 'Consumed QR was not replaced.'
   $authorized = Invoke-RestMethod -Uri "$baseUrl/api/status" -Headers @{ Authorization = "Bearer $($paired.token)" }
   Assert-Launcher $authorized.authorized 'Original phone token no longer works.'
   $hashAfter = (Get-Content -LiteralPath (Join-Path $fixture '.data\state.json') -Raw | ConvertFrom-Json).tokenHash
   Assert-Launcher ($hashBefore -eq $hashAfter) 'Restart replaced the phone token.'
-  Start-Sleep -Milliseconds 300
+  $deadline = [datetime]::UtcNow.AddSeconds(5)
+  do {
+    if ((Read-LauncherText $window 205) -eq '服务运行中 · 已配对' -and
+        (Read-LauncherText $window 103) -eq '刷新二维码') { break }
+    Start-Sleep -Milliseconds 100
+  } while ([datetime]::UtcNow -lt $deadline)
+  Assert-Launcher ((Read-LauncherText $window 205) -eq '服务运行中 · 已配对') 'Paired status was not rendered.'
+  Assert-Launcher ((Read-LauncherText $window 103) -eq '刷新二维码') 'Paired launcher did not offer QR refresh.'
   Save-LauncherScreenshot $window 'desktop-launcher-paired.png' | Out-Null
   Exit-Launcher $launcher $window
   [pscustomobject]@{ Result = 'PASS'; WindowWorkingSetMiB = $windowMiB; WindowPrivateMiB = $windowPrivateMiB; TrayWorkingSetMiB = $trayMiB; TrayPrivateMiB = $trayPrivateMiB; WindowGdiObjects = $windowGdi; TrayGdiObjects = $trayGdi; Screenshot = $screenshot } | ConvertTo-Json

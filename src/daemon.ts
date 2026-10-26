@@ -425,7 +425,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       authGeneration: auth.getAuthGeneration(),
       processId: process.pid,
       connectedClients: authedSockets.size,
-      pairing: !auth.status().paired && Date.now() < pairingPayload.expiresAt
+      pairing: Date.now() < pairingPayload.expiresAt
         ? pairingQr ||= createPairingQr(pairingPayload) : null,
     });
     return;
@@ -505,6 +505,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
       const status = result.error === 'device_limit' ? 409 : 401;
       return sendJson(res, status, { ok: false, error: result.error });
     }
+    pairingPayload = auth.createPairingPayload(PUBLIC_ORIGIN, DEVICE_NAME);
+    pairingQr = undefined;
     sendJson(res, 200, {
       ok: true,
       token: result.token,

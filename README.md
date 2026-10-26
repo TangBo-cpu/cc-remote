@@ -4,9 +4,9 @@
 
 扫码配对后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 继续运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v2.0.13](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.13/cc-remote-v2.0.13-android.apk)
+[下载 Android APK · v2.0.14](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.14/cc-remote-v2.0.14-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.13)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.14)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -130,7 +130,7 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v2.0.13 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.13/cc-remote-v2.0.13-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v2.0.14 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.14/cc-remote-v2.0.14-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫启动器窗口或终端中的二维码 → 确认电脑名与服务地址 → 进入控制台
 
@@ -277,7 +277,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v2.0.13](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.13)**
-APK：[`cc-remote-v2.0.13-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.13/cc-remote-v2.0.13-android.apk)
+当前公开版：**[v2.0.14](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.14)**
+APK：[`cc-remote-v2.0.14-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.14/cc-remote-v2.0.14-android.apk)
 
-v2.0.13 加入多设备授权与平板双栏布局：一个 daemon 可同时配对多台手机（默认上限 8 台），手机端可查看已配对设备并逐台撤销，新设备配对不再使旧设备失效；≥840dp 宽时聊天页常驻会话侧栏，弹层与输入框居中限宽。同时修正顶部磨砂与渐隐范围、浅色行内代码对比度，并加固状态文件加载失败、WebSocket 缓冲与 Windows 停止任务的收尾逻辑。Android 版本为 `2.0.13+23`，电脑端 package 版本为 `2.0.13`，安装包沿用旧版测试签名，适合个人使用。
+v2.0.14 优化流式对话：合并聊天快照写入，降低 Markdown 重解析频率，并在尾部文字更新时复用已有历史消息。平板会话侧栏固定宽度，保留收起与展开；顶部模糊范围进一步缩小。桌面端在配对成功和重启后继续显示二维码，方便添加其他设备。Android 版本为 `2.0.14+24`，电脑端 package 版本为 `2.0.14`，安装包沿用旧版测试签名，适合个人使用。

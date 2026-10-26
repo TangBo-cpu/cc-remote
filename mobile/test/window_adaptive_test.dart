@@ -40,6 +40,53 @@ void main() {
     expect(find.byType(SessionRail), findsOneWidget);
   });
 
+  testWidgets(
+    'the session close button hides the tablet rail and can reopen it',
+    (tester) async {
+      await _setWindowSize(tester, const Size(1280, 800));
+      await _pumpDemoChat(tester);
+
+      await tester.tap(find.byKey(const ValueKey('session-drawer-close')));
+      await tester.pumpAndSettle();
+      expect(find.byType(SessionRail), findsNothing);
+      expect(find.byKey(const ValueKey('chat')), findsOneWidget);
+
+      await tester.tap(find.byTooltip('项目与会话'));
+      await tester.pumpAndSettle();
+      expect(find.byType(SessionRail), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'tablet session rail keeps a fixed width without a resize handle',
+    (tester) async {
+      await _setWindowSize(tester, const Size(1280, 800));
+      await _pumpDemoChat(tester);
+      final rail = find.byType(SessionRail);
+      expect(
+        find.byKey(const ValueKey('session-rail-resize-handle')),
+        findsNothing,
+      );
+      expect(tester.getSize(rail).width, SessionRail.kSessionRailWidth);
+      await tester.dragFrom(
+        tester.getTopRight(rail) + const Offset(-1, 100),
+        const Offset(100, 0),
+      );
+      await tester.pumpAndSettle();
+      expect(tester.getSize(rail).width, SessionRail.kSessionRailWidth);
+      tester.view.physicalSize = const Size(840, 800);
+      tester.view.padding = FakeViewPadding(left: 32);
+      addTearDown(tester.view.resetPadding);
+      await tester.pumpAndSettle();
+      expect(tester.getSize(rail).width, SessionRail.kSessionRailWidth);
+      expect(
+        tester.getSize(find.byKey(const ValueKey('chat'))).width,
+        greaterThanOrEqualTo(420),
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('compact window keeps the modal sidebar instead of the rail', (
     tester,
   ) async {
@@ -51,6 +98,10 @@ void main() {
     await tester.tap(find.byTooltip('项目与会话'));
     await tester.pumpAndSettle();
     expect(find.byType(SessionNavigatorPage), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('session-drawer-close')));
+    await tester.pumpAndSettle();
+    expect(find.byType(SessionNavigatorPage), findsNothing);
+    expect(find.byKey(const ValueKey('chat')), findsOneWidget);
   });
 
   testWidgets('the floating composer stays aligned with the transcript column', (
