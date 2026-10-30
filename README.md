@@ -4,9 +4,9 @@
 
 扫码配对后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 继续运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v2.0.15](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.15/cc-remote-v2.0.15-android.apk)
+[下载 Android APK · v2.0.16](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.16/cc-remote-v2.0.16-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.15)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.16)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -131,11 +131,11 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v2.0.15 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.15/cc-remote-v2.0.15-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v2.0.16 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.16/cc-remote-v2.0.16-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫启动器窗口或终端中的二维码 → 确认电脑名与服务地址 → 进入控制台
 
-Android App 版本为 v2.0.15。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
+Android App 版本为 v2.0.16。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
 
 ### 4. 开始对话
 
@@ -279,7 +279,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v2.0.15](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.15)**
-APK：[`cc-remote-v2.0.15-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.15/cc-remote-v2.0.15-android.apk)
+当前公开版：**[v2.0.16](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.16)**
+APK：[`cc-remote-v2.0.16-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.16/cc-remote-v2.0.16-android.apk)
 
-v2.0.15 新增「同步电脑会话」：每次选择一个 Claude / Codex 会话，重复同步会更新已有记录。超过 2 MB 的历史文件只检查大小，不读取正文；同步前再次检查大小。另包含流式活动、会话列表、长代码高亮与 Git diff 的渲染优化。Android 版本为 `2.0.15+25`，电脑端 package 版本为 `2.0.15`，安装包沿用旧版测试签名，适合个人使用。
+v2.0.16 将长工具详情默认收为三行预览，可原地展开，并保留手动展开状态；搜索结果会显示完整详情。功能图标统一使用现有 Noto 彩色字形，模型按钮显示 Claude / OpenAI 标志。错误日志改为紧凑摘要与独立详情，显示和复制时清理终端控制符并隐藏常见凭据。Android 版本为 `2.0.16+26`，电脑端 package 版本为 `2.0.16`，安装包沿用旧版测试签名，适合个人使用。

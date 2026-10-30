@@ -6,6 +6,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'data/native_session_api.dart';
 import 'data/remote_models.dart';
+import 'noto_icon.dart';
 import 'signal_console_theme.dart';
 
 class NativeSessionPickerPage extends StatefulWidget {
@@ -114,7 +115,7 @@ class _NativeSessionPickerPageState extends State<NativeSessionPickerPage> {
             IconButton(
               tooltip: '刷新电脑会话',
               onPressed: syncing || loading ? null : () => unawaited(load()),
-              icon: const Icon(LucideIcons.refreshCw),
+              icon: const SmartIcon(LucideIcons.refreshCw),
             ),
           ],
         ),
@@ -196,7 +197,7 @@ class _NativeSessionPickerPageState extends State<NativeSessionPickerPage> {
                               maxLines: 3,
                               overflow: TextOverflow.ellipsis,
                             ),
-                            trailing: Icon(
+                            trailing: SmartIcon(
                               selected?.sessionId == session.sessionId
                                   ? LucideIcons.circleCheck
                                   : LucideIcons.circle,
@@ -248,7 +249,7 @@ class _NativeSessionPickerPageState extends State<NativeSessionPickerPage> {
                             dimension: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : const Icon(
+                        : const SmartIcon(
                             LucideIcons.refreshCw,
                             size: AppIconSizes.control,
                           ),

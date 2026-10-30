@@ -494,7 +494,7 @@ class _WorkspaceDrawerState extends State<WorkspaceDrawer> {
                   end: selected ? palette.accent : palette.muted,
                 ),
                 builder: (context, color, _) =>
-                    Icon(icon, size: AppIconSizes.inline, color: color),
+                    SmartIcon(icon, size: AppIconSizes.inline, color: color),
               ),
               const SizedBox(width: 6),
               AnimatedDefaultTextStyle(
@@ -1148,7 +1148,7 @@ class _EmptyState extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(icon, size: AppIconSizes.hero, color: palette.muted),
+            SmartIcon(icon, size: AppIconSizes.hero, color: palette.muted),
             const SizedBox(height: 12),
             Text(
               title,

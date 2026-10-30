@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'noto_icon.dart';
 import 'signal_console_theme.dart';
 
 const workspacePathExtensions = <String>{
@@ -515,7 +516,7 @@ class WorkspaceChangeEchoChip extends StatelessWidget {
                 padding: const EdgeInsets.all(AppSpacing.sm),
                 child: Row(
                   children: [
-                    Icon(
+                    SmartIcon(
                       LucideIcons.gitCompare,
                       size: AppIconSizes.inline,
                       color: AppPalette.of(context).accentStrong,
@@ -551,7 +552,7 @@ class WorkspaceChangeEchoChip extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: AppSpacing.sm),
-                    Icon(
+                    SmartIcon(
                       LucideIcons.chevronRight,
                       size: AppIconSizes.inline,
                       color: AppPalette.of(context).muted,

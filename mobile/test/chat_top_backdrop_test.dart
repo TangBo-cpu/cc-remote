@@ -185,10 +185,18 @@ void main() {
             '$blurredEdges with blur, $sharpEdges without blur.',
       );
       final bodyTop = maskBounds.bottom.ceil() + 16;
-      expect(
-        edgeContrast(blurred, bodyTop, bodyTop + 40),
-        edgeContrast(sharp, bodyTop, bodyTop + 40),
-      );
+      // Backdrop repaints can round an unchanged 8-bit channel by one.
+      for (var y = bodyTop; y < bodyTop + 40; y++) {
+        for (var x = 32; x < width - 32; x++) {
+          for (var channel = 0; channel < 3; channel++) {
+            final offset = (y * width + x) * 4 + channel;
+            expect(
+              blurred.getUint8(offset),
+              closeTo(sharp.getUint8(offset), 1),
+            );
+          }
+        }
+      }
 
       await tester.tap(find.byTooltip('项目与会话'));
       expect(sessionOpens, dark ? 2 : 1);

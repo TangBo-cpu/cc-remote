@@ -34,6 +34,7 @@ import 'directory_picker.dart';
 import 'native_session_picker.dart';
 import 'effort_gauge.dart';
 import 'effort_preference.dart';
+import 'failure_log.dart';
 import 'model_preference.dart';
 import 'noto_icon.dart';
 import 'notification_service.dart';
@@ -3515,7 +3516,7 @@ class BootstrapScreen extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
+                SmartIcon(
                   LucideIcons.monitorSmartphone,
                   size: AppIconSizes.hero,
                   color: colors.ink,
@@ -3686,7 +3687,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                         children: [
                           Row(
                             children: [
-                              Icon(
+                              SmartIcon(
                                 LucideIcons.smartphone,
                                 size: AppIconSizes.control,
                                 color: AppPalette.of(context).accentStrong,
@@ -3733,7 +3734,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                         border: Border.all(color: AppPalette.of(context).line),
                       ),
                       alignment: Alignment.center,
-                      child: Icon(
+                      child: SmartIcon(
                         LucideIcons.monitor,
                         size: AppIconSizes.primary,
                         color: AppPalette.of(context).accentStrong,
@@ -3789,7 +3790,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                               ),
                             ),
                             alignment: Alignment.center,
-                            child: Icon(
+                            child: SmartIcon(
                               LucideIcons.scanLine,
                               size: AppIconSizes.control,
                               color: AppPalette.of(context).accentStrong,
@@ -3895,7 +3896,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                         const SizedBox(height: 14),
                         Row(
                           children: [
-                            Icon(
+                            SmartIcon(
                               LucideIcons.scan,
                               size: AppIconSizes.control,
                               color: AppPalette.of(context).muted,
@@ -3977,7 +3978,7 @@ class CameraPermissionPlaceholder extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
+              SmartIcon(
                 LucideIcons.camera,
                 size: compact ? 26 : 34,
                 color: AppPalette.of(context).accentStrong,
@@ -4043,7 +4044,7 @@ class ScanPlaceholder extends StatelessWidget {
             borderRadius: BorderRadius.circular(AppRadii.surface),
             border: Border.all(color: AppPalette.of(context).line),
           ),
-          child: Icon(
+          child: SmartIcon(
             LucideIcons.qrCode,
             size: compact ? 28 : 42,
             color: AppPalette.of(context).accentStrong,
@@ -4108,7 +4109,7 @@ class PairReviewSheet extends StatelessWidget {
                       borderRadius: BorderRadius.circular(AppRadii.control),
                     ),
                     alignment: Alignment.center,
-                    child: Icon(
+                    child: SmartIcon(
                       LucideIcons.monitor,
                       size: AppIconSizes.control,
                       color: AppPalette.of(context).accentStrong,
@@ -4574,7 +4575,7 @@ class SessionPeekDock extends StatelessWidget {
                       shadowColor: Colors.transparent,
                       elevation: 3,
                     ),
-                    icon: const Icon(
+                    icon: const SmartIcon(
                       PhosphorIconsFill.square,
                       size: AppIconSizes.inline,
                     ),
@@ -5273,31 +5274,31 @@ class _HeaderActivityPill extends StatelessWidget {
     if (presentation.phase == ConsolePhase.running) {
       indicator = _ActivityPulseDot(color: toneColor);
     } else if (presentation.phase == ConsolePhase.uploading) {
-      indicator = Icon(
+      indicator = SmartIcon(
         LucideIcons.uploadCloud,
         size: AppIconSizes.badge,
         color: toneColor,
       );
     } else if (presentation.phase == ConsolePhase.stopping) {
-      indicator = Icon(
+      indicator = SmartIcon(
         LucideIcons.square,
         size: AppIconSizes.badge,
         color: toneColor,
       );
     } else if (presentation.phase == ConsolePhase.stopTimedOut) {
-      indicator = Icon(
+      indicator = SmartIcon(
         LucideIcons.circleAlert,
         size: AppIconSizes.badge,
         color: toneColor,
       );
     } else if (presentation.phase == ConsolePhase.awaitingPermission) {
-      indicator = Icon(
+      indicator = SmartIcon(
         LucideIcons.shield,
         size: AppIconSizes.badge,
         color: toneColor,
       );
     } else {
-      indicator = Icon(
+      indicator = SmartIcon(
         LucideIcons.activity,
         size: AppIconSizes.badge,
         color: toneColor,
@@ -5449,7 +5450,7 @@ class ConsoleStatusStrip extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Icon(icon, size: AppIconSizes.inline, color: toneColor),
+            SmartIcon(icon, size: AppIconSizes.inline, color: toneColor),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -5668,29 +5669,37 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      content.title,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w700,
+              if (phase == ConsolePhase.failed)
+                _FailureLogDetails(detail: content.detail)
+              else ...[
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        content.title,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
+                    _HeaderIconButton(
+                      tooltip: '关闭状态详情',
+                      icon: LucideIcons.x,
+                      onPressed: () => Navigator.pop(sheetContext),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.xs),
+                SelectableText(
+                  content.detail,
+                  style: TextStyle(
+                    color: palette.ink,
+                    fontSize: 14,
+                    height: 1.5,
                   ),
-                  _HeaderIconButton(
-                    tooltip: '关闭状态详情',
-                    icon: LucideIcons.x,
-                    onPressed: () => Navigator.pop(sheetContext),
-                  ),
-                ],
-              ),
-              const SizedBox(height: AppSpacing.xs),
-              SelectableText(
-                content.detail,
-                style: TextStyle(color: palette.ink, fontSize: 14, height: 1.5),
-              ),
+                ),
+              ],
               const SizedBox(height: AppSpacing.sm),
               Text(
                 content.evidence,
@@ -5714,7 +5723,7 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
                     minimumSize: const Size.fromHeight(AppSizes.touchTarget),
                     padding: const EdgeInsets.all(AppSpacing.sm),
                   ),
-                  icon: Icon(content.actionIcon, size: AppIconSizes.control),
+                  icon: SmartIcon(content.actionIcon, size: AppIconSizes.control),
                   label: Text(content.actionLabel!),
                 ),
               ],
@@ -5967,7 +5976,7 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
                         size: AppIconSizes.inline,
                       )
                     else
-                      Icon(
+                      SmartIcon(
                         content.icon,
                         size: AppIconSizes.inline,
                         color: toneColor,
@@ -5988,7 +5997,7 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
                     ),
                     if (hasDetails) ...[
                       const SizedBox(width: AppSpacing.xxs),
-                      Icon(
+                      SmartIcon(
                         LucideIcons.chevronDown,
                         size: AppIconSizes.badge,
                         color: toneColor,
@@ -6051,7 +6060,7 @@ class _HeaderIconButton extends StatelessWidget {
         onPressed: onPressed,
         tooltip: tooltip,
         padding: EdgeInsets.zero,
-        icon: Icon(
+        icon: SmartIcon(
           icon,
           size: filled ? 22 : 20,
           color: onPressed == null
@@ -6812,7 +6821,7 @@ class _SettingsIconButton extends StatelessWidget {
           ),
           child: SizedBox.square(
             dimension: AppSizes.iconControl,
-            child: Icon(icon, size: AppIconSizes.control),
+            child: SmartIcon(icon, size: AppIconSizes.control),
           ),
         ),
       ),
@@ -7056,7 +7065,7 @@ class _SettingsActionRow extends StatelessWidget {
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(icon, size: AppIconSizes.inline, color: color),
+                  SmartIcon(icon, size: AppIconSizes.inline, color: color),
                   const SizedBox(width: 8),
                   Text(
                     label,
@@ -8460,7 +8469,7 @@ class _TranscriptViewState extends State<TranscriptView>
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
-                                    Icon(
+                                    SmartIcon(
                                       LucideIcons.arrowDown,
                                       size: AppIconSizes.inline,
                                       color: AppPalette.of(context).onCta,
@@ -8577,7 +8586,7 @@ class PermissionRequestCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(AppRadii.control),
                   ),
                   alignment: Alignment.center,
-                  child: Icon(
+                  child: SmartIcon(
                     LucideIcons.shield,
                     size: AppIconSizes.control,
                     color: riskTone,
@@ -9461,8 +9470,207 @@ Future<void> openSearchSource(BuildContext context, String? href) async {
   }
 }
 
-/// Timeline furniture: a centered muted line between hairlines, so host and
-/// system notices read as events between turns rather than turn content.
+class _FailureNotice extends StatelessWidget {
+  const _FailureNotice({required this.detail});
+
+  final String detail;
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    return Container(
+      key: const ValueKey('transcript-error-card'),
+      padding: const EdgeInsets.all(AppSpacing.sm),
+      decoration: BoxDecoration(
+        color: palette.control,
+        borderRadius: BorderRadius.circular(AppRadii.control),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SmartIcon(
+                LucideIcons.circleAlert,
+                size: AppIconSizes.inline,
+                color: palette.danger,
+              ),
+              const SizedBox(width: AppSpacing.xs),
+              Expanded(
+                child: Text(
+                  '任务执行失败',
+                  style: TextStyle(
+                    color: palette.danger,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: AppSpacing.xs),
+          Text(
+            failureSummary(detail),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(color: palette.ink, fontSize: 14, height: 1.5),
+          ),
+          Align(
+            alignment: AlignmentDirectional.centerStart,
+            child: TextButton(
+              style: TextButton.styleFrom(
+                minimumSize: const Size(0, AppSizes.touchTarget),
+              ),
+              onPressed: () => showAppOptionPicker<void>(
+                context,
+                requestFocus: false,
+                builder: (_) => _FailureLogDetails(detail: detail),
+              ),
+              child: const Text('查看详情'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FailureLogDetails extends StatefulWidget {
+  const _FailureLogDetails({required this.detail});
+
+  final String detail;
+
+  @override
+  State<_FailureLogDetails> createState() => _FailureLogDetailsState();
+}
+
+class _FailureLogDetailsState extends State<_FailureLogDetails> {
+  final scrollController = ScrollController();
+  Timer? copiedResetTimer;
+  bool copied = false;
+
+  Future<void> copyLog() async {
+    try {
+      await Clipboard.setData(
+        ClipboardData(text: safeFailureLog(widget.detail)),
+      );
+    } on PlatformException {
+      if (!mounted) return;
+      copiedResetTimer?.cancel();
+      setState(() => copied = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('复制失败，请重试')));
+      return;
+    }
+    if (!mounted) return;
+    setState(() => copied = true);
+    copiedResetTimer?.cancel();
+    copiedResetTimer = Timer(const Duration(seconds: 2), () {
+      if (mounted) setState(() => copied = false);
+    });
+  }
+
+  @override
+  void dispose() {
+    scrollController.dispose();
+    copiedResetTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '任务执行失败',
+                style: TextStyle(
+                  color: palette.danger,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            _HeaderIconButton(
+              tooltip: '关闭状态详情',
+              icon: LucideIcons.x,
+              onPressed: () => Navigator.pop(context),
+            ),
+          ],
+        ),
+        Text(
+          failureSummary(widget.detail),
+          style: TextStyle(color: palette.ink, fontSize: 14, height: 1.5),
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                '错误日志',
+                style: TextStyle(color: palette.muted, fontSize: 12),
+              ),
+            ),
+            TextButton.icon(
+              key: const ValueKey('failure-log-copy'),
+              onPressed: copyLog,
+              style: TextButton.styleFrom(
+                minimumSize: const Size(0, AppSizes.touchTarget),
+              ),
+              icon: SignalCopyIcon(copied: copied, size: AppIconSizes.inline),
+              label: Text(copied ? '已复制' : '复制日志'),
+            ),
+          ],
+        ),
+        Container(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.sizeOf(context).height * 0.4,
+          ),
+          decoration: BoxDecoration(
+            color: palette.codeBlockBackground,
+            borderRadius: BorderRadius.circular(AppRadii.control),
+          ),
+          child: Scrollbar(
+            controller: scrollController,
+            child: SingleChildScrollView(
+              key: const ValueKey('failure-log-scroll'),
+              controller: scrollController,
+              padding: const EdgeInsets.all(AppSpacing.sm),
+              child: SelectableText(
+                safeFailureLog(widget.detail),
+                key: const ValueKey('failure-log-text'),
+                textAlign: TextAlign.start,
+                style: TextStyle(
+                  fontFamily: AppTypography.codeFontFamily,
+                  fontFamilyFallback: AppTypography.codeFontFamilyFallback,
+                  color: palette.ink,
+                  fontSize: AppTypography.activityBodySize,
+                  height: 1.5,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: AppSpacing.xs),
+        Text(
+          '常见凭据已隐藏，分享前请检查日志。',
+          style: TextStyle(color: palette.muted, fontSize: 12, height: 1.4),
+        ),
+      ],
+    );
+  }
+}
+
+/// Error logs need their own layout instead of the narrow timeline separator.
 class _SystemNotice extends StatelessWidget {
   const _SystemNotice({required this.text});
 
@@ -9470,6 +9678,9 @@ class _SystemNotice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (text.startsWith('错误：')) {
+      return _FailureNotice(detail: text.substring('错误：'.length));
+    }
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
       child: Row(
@@ -10017,7 +10228,7 @@ class AttachmentFileTile extends StatelessWidget {
                 width: 0.5,
               ),
             ),
-            child: Icon(
+            child: SmartIcon(
               mimeType == 'application/pdf'
                   ? LucideIcons.fileText
                   : LucideIcons.file,
@@ -10190,7 +10401,7 @@ Widget buildActivityIcon(TranscriptMessage activity, BuildContext context) {
         shape: BoxShape.circle,
       ),
       child: Center(
-        child: Icon(
+        child: SmartIcon(
           LucideIcons.circleAlert,
           size: AppIconSizes.badge,
           color: AppPalette.of(context).danger,
@@ -10208,7 +10419,7 @@ Widget buildActivityIcon(TranscriptMessage activity, BuildContext context) {
         shape: BoxShape.circle,
       ),
       child: Center(
-        child: Icon(
+        child: SmartIcon(
           LucideIcons.square,
           size: AppIconSizes.badge,
           color: AppPalette.of(context).muted,
@@ -10841,7 +11052,7 @@ class PromptBar extends StatelessWidget {
                         borderRadius: BorderRadius.circular(AppRadii.control),
                       ),
                       alignment: Alignment.center,
-                      child: Icon(
+                      child: SmartIcon(
                         LucideIcons.refreshCw,
                         size: AppIconSizes.control,
                         color: AppPalette.of(context).ink,
@@ -10858,7 +11069,7 @@ class PromptBar extends StatelessWidget {
                         ),
                       ),
                     ),
-                    Icon(
+                    SmartIcon(
                       LucideIcons.chevronRight,
                       size: AppIconSizes.control,
                       color: AppPalette.of(context).muted,
@@ -11117,7 +11328,7 @@ class PromptBar extends StatelessWidget {
                                         ),
                                         dimension: 20,
                                         child: reduceMotion
-                                            ? Icon(
+                                            ? SmartIcon(
                                                 LucideIcons.loader,
                                                 size: AppIconSizes.control,
                                                 color: AppPalette.of(
@@ -11131,7 +11342,7 @@ class PromptBar extends StatelessWidget {
                                                 ).accentStrong,
                                               ),
                                       )
-                                    : Icon(
+                                    : SmartIcon(
                                         stoppingAction
                                             ? PhosphorIconsFill.square
                                             : LucideIcons.arrowUp,
@@ -11185,7 +11396,7 @@ class PromptBar extends StatelessWidget {
                                                 shape: BoxShape.circle,
                                               ),
                                               alignment: Alignment.center,
-                                              child: Icon(
+                                              child: SmartIcon(
                                                 LucideIcons.listPlus,
                                                 size: AppIconSizes.control,
                                                 color: AppPalette.of(
@@ -11345,7 +11556,7 @@ class _QueuedPromptChip extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
         child: Row(
           children: [
-            Icon(
+            SmartIcon(
               LucideIcons.listPlus,
               size: AppIconSizes.inline,
               color: AppPalette.of(context).accentStrong,
@@ -11448,7 +11659,7 @@ class _ComposerIconButton extends StatelessWidget {
       visualKey: const ValueKey('composer-expand-visual'),
       tooltip: tooltip,
       onPressed: onPressed,
-      child: Icon(
+      child: SmartIcon(
         icon,
         size: AppIconSizes.control,
         color: enabled
@@ -11520,7 +11731,18 @@ class _ComposerModelButton extends StatelessWidget {
       onPressed: onPressed,
       child: Opacity(
         opacity: onPressed == null ? 0.4 : 1,
-        child: const SmartIcon(LucideIcons.brain, size: AppIconSizes.primary),
+        child: Image.asset(
+          engine == SessionEngine.codex
+              ? 'assets/brands/openai-mark.png'
+              : 'assets/brands/claude-mark.png',
+          width: AppIconSizes.primary,
+          height: AppIconSizes.primary,
+          color: engine == SessionEngine.codex
+              ? AppPalette.of(context).composerControlInk
+              : null,
+          excludeFromSemantics: true,
+          filterQuality: FilterQuality.high,
+        ),
       ),
     );
   }
@@ -11556,7 +11778,7 @@ class _ComposerPermissionButton extends StatelessWidget {
       visualKey: const ValueKey('permission-mode-visual'),
       tooltip: '访问权限：$label',
       onPressed: enabled ? onPressed : null,
-      child: Icon(icon, size: AppIconSizes.control, color: ink),
+      child: SmartIcon(icon, size: AppIconSizes.control, color: ink),
     );
   }
 }
@@ -11690,7 +11912,7 @@ class PendingAttachmentStrip extends StatelessWidget {
                           )
                         : ColoredBox(
                             color: AppPalette.of(context).surface,
-                            child: Icon(
+                            child: SmartIcon(
                               LucideIcons.file,
                               color: AppPalette.of(context).muted,
                               size: AppIconSizes.control,
@@ -11814,9 +12036,7 @@ Future<void> showPermissionModePicker(
                 item != PermissionMode.bypassPermissions ||
                 allowBypassPermissions,
             danger: item == PermissionMode.bypassPermissions,
-            leading: item == PermissionMode.bypassPermissions
-                ? Icon(item.icon)
-                : SmartIcon(item.icon, size: AppIconSizes.control),
+            leading: SmartIcon(item.icon, size: AppIconSizes.control),
           ),
       ],
     ),
@@ -11877,9 +12097,7 @@ Future<void> showCodexSandboxModePicker(
                 ? '不限制访问'
                 : '限制访问范围',
             danger: item == CodexSandboxMode.dangerFullAccess,
-            leading: item == CodexSandboxMode.dangerFullAccess
-                ? Icon(item.icon)
-                : SmartIcon(item.icon, size: AppIconSizes.control),
+            leading: SmartIcon(item.icon, size: AppIconSizes.control),
           ),
       ],
     ),
@@ -12406,7 +12624,7 @@ class StatusLabel extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: AppIconSizes.inline, color: color),
+        SmartIcon(icon, size: AppIconSizes.inline, color: color),
         const SizedBox(width: 5),
         Text(
           label,
@@ -12440,7 +12658,7 @@ class ActionButton extends StatelessWidget {
       scaleOnPress: false,
       child: FilledButton.icon(
         onPressed: onPressed,
-        icon: Icon(icon),
+        icon: SmartIcon(icon),
         label: Text(label),
         style: FilledButton.styleFrom(
           backgroundColor: AppPalette.of(context).accent,
@@ -12496,13 +12714,13 @@ class PromptChip extends StatelessWidget {
                 Row(
                   children: [
                     if (icon != null)
-                      Icon(
+                      SmartIcon(
                         icon,
                         size: AppIconSizes.control,
                         color: AppPalette.of(context).accentStrong,
                       ),
                     const Spacer(),
-                    Icon(
+                    SmartIcon(
                       LucideIcons.arrowUpRight,
                       size: AppIconSizes.control,
                       color: AppPalette.of(context).inactive,

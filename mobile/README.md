@@ -30,9 +30,9 @@ flutter run
 
 ## Android 安装
 
-当前公开版本是 [`v2.0.15`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.15)：
+当前公开版本是 [`v2.0.16`](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.16)：
 
-- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.15/cc-remote-v2.0.15-android.apk)
+- [直接下载 Android APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.16/cc-remote-v2.0.16-android.apk)
 
 下载后在 Android 手机上允许当前来源安装未知应用，并打开 APK 完成安装。当前 APK 使用测试签名，适合个人测试，不应作为应用商店正式包分发。
 
@@ -121,7 +121,7 @@ App 在后台或锁屏时可以发送任务完成、失败、停止和等待权�
 
 ## 验证与发布状态
 
-v2.0.4 安装包版本为 `2.0.4+13`，电脑端 package 版本为 `2.0.4`。发布包使用 release 模式和旧版签名，覆盖更新保留配对数据；日常调试构建产物为 `app-debug.apk`。
+v2.0.16 安装包版本为 `2.0.16+26`，电脑端 package 版本为 `2.0.16`。发布包使用 release 模式和旧版测试签名；覆盖更新时不要卸载旧版，以保留配对数据。日常调试构建产物为 `app-debug.apk`。
 
 连接恢复回归位于 `test/connection_stability_test.dart`、`test/websocket_client_test.dart` 和 `test/websocket_transport_test.dart`，覆盖启动离线、前后台恢复、HTTP 与 WebSocket 状态竞争、鉴权就绪及真实回环连接。可在 `mobile` 目录运行：
 
@@ -130,6 +130,6 @@ flutter test --no-pub
 flutter analyze --no-pub --no-fatal-infos
 ```
 
-v2.0.4 将文件变更汇总卡片调整为正文等宽，文件工具记录突出文件名、操作标签与路径，执行状态只显示一次。工作区 diff 增加修改前后双列行号、整块横向滚动、自动换行和字号选择。代码字体统一为内置 JetBrains Mono。连接、完成、停止和失败提示集中显示在顶部，恢复操作与错误详情可展开查看。已有 v2.0.0 daemon 可继续使用，本次更新无需重启电脑端。
+v2.0.16 将长工具详情默认收为三行预览，可原地展开，并保留手动展开状态；搜索结果会显示完整详情。功能图标统一使用现有 Noto 彩色字形，模型按钮显示 Claude / OpenAI 标志。错误日志改为紧凑摘要与独立详情，显示和复制时清理终端控制符并隐藏常见凭据。分享日志前仍需自行检查。
 
-本次按要求未运行测试。Flutter 静态分析无错误或警告，保留原有 5 条花括号风格提示；代码格式和差异检查通过。尚未完成本版 release APK 的 Android 真机安装、界面、键盘 / 手势、弱网和性能验收。
+发布前 485 项 Flutter 测试全部通过，静态分析无错误或警告（保留 7 条提示），release APK 构建通过，签名证书与 v2.0.15 一致。Android 真机安装、界面、键盘 / 手势、弱网和性能验收需另行完成。

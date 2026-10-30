@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -10,6 +11,176 @@ import 'package:cc_remote/signal_console_theme.dart';
 
 void main() {
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+
+  testWidgets('long errors stay compact and keep the complete log in details', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final log = List.generate(
+      1000,
+      (index) => '\u001b[33mWARN\u001b[0m plugin diagnostic $index',
+    ).join('\n');
+    final message = TranscriptMessage.system('错误：$log');
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              MessageBlock(message: message),
+              const Text('后续回复'),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    expect(tester.getSize(find.byType(MessageBlock)).height, lessThan(250));
+    expect(find.text('后续回复').hitTestable(), findsOneWidget);
+    expect(find.textContaining('diagnostic'), findsNothing);
+    await tester.tap(find.text('查看详情'));
+    await tester.pumpAndSettle();
+    final details = tester.widget<SelectableText>(
+      find.byKey(const ValueKey('failure-log-text')),
+    );
+    expect(details.data, contains('WARN plugin diagnostic 999'));
+    expect(details.data, isNot(contains('\u001b')));
+    expect(
+      tester.getSize(find.byKey(const ValueKey('failure-log-scroll'))).height,
+      lessThan(350),
+    );
+    expect(message.text, '错误：$log');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('error cards and sheets fit small screens and enlarged text', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 568);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final semantics = tester.ensureSemantics();
+    try {
+      for (final brightness in Brightness.values) {
+        for (final scale in [1.0, 2.0]) {
+          for (final detail in ['连接超时，请检查电脑端网络。', 'path/' * 100, '']) {
+            await tester.pumpWidget(
+              MaterialApp(
+                key: ValueKey((brightness, scale, detail)),
+                theme: buildSignalConsoleTheme(brightness),
+                builder: (context, child) => MediaQuery(
+                  data: MediaQuery.of(
+                    context,
+                  ).copyWith(textScaler: TextScaler.linear(scale)),
+                  child: child!,
+                ),
+                home: Scaffold(
+                  body: ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      MessageBlock(
+                        message: TranscriptMessage.system('错误：$detail'),
+                      ),
+                      const Text('后续回复'),
+                    ],
+                  ),
+                ),
+              ),
+            );
+            final card = find.byKey(const ValueKey('transcript-error-card'));
+            expect(tester.getSize(card).width, 288);
+            expect(tester.getSize(card).height, lessThan(300));
+            expect(find.text('后续回复').hitTestable(), findsOneWidget);
+            final open = find.widgetWithText(TextButton, '查看详情');
+            expect(tester.getSize(open).height, greaterThanOrEqualTo(48));
+            expect(tester.getSemantics(open).label, '查看详情');
+            await tester.tap(open);
+            await tester.pumpAndSettle();
+            final copy = find.byKey(const ValueKey('failure-log-copy'));
+            expect(tester.getSize(copy).height, greaterThanOrEqualTo(48));
+            expect(tester.getSemantics(copy).label, contains('复制日志'));
+            expect(tester.takeException(), isNull);
+            await tester.tap(find.byTooltip('关闭状态详情'));
+            await tester.pumpAndSettle();
+          }
+        }
+      }
+    } finally {
+      semantics.dispose();
+    }
+  });
+
+  testWidgets('log copy masks credentials and reports clipboard failures', (
+    tester,
+  ) async {
+    String? copied;
+    var failCopy = false;
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        if (call.method == 'Clipboard.setData') {
+          if (failCopy) throw PlatformException(code: 'clipboard-unavailable');
+          copied = (call.arguments as Map)['text'] as String;
+        }
+        return null;
+      },
+    );
+    addTearDown(() {
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      );
+    });
+    const raw =
+        '\u001b[31mERROR\u001b[0m engine failed\n'
+        'API_KEY=fake-sensitive-key\nfinal diagnostic';
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Scaffold(
+          body: MessageBlock(message: TranscriptMessage.system('错误：$raw')),
+        ),
+      ),
+    );
+    await tester.tap(find.text('查看详情'));
+    await tester.pumpAndSettle();
+    final log = tester.widget<SelectableText>(
+      find.byKey(const ValueKey('failure-log-text')),
+    );
+    expect(log.data, isNot(contains('fake-sensitive-key')));
+    await tester.tap(find.byKey(const ValueKey('failure-log-copy')));
+    await tester.pump();
+    expect(copied, log.data);
+    expect(copied, contains('final diagnostic'));
+    expect(find.text('已复制'), findsOneWidget);
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.text('复制日志'), findsOneWidget);
+    failCopy = true;
+    await tester.tap(find.byKey(const ValueKey('failure-log-copy')));
+    await tester.pumpAndSettle();
+    expect(find.text('复制失败，请重试'), findsOneWidget);
+    expect(find.text('已复制'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('ordinary system notices keep their existing presentation', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MessageBlock(message: TranscriptMessage.system('已停止')),
+        ),
+      ),
+    );
+    expect(find.widgetWithText(SelectableText, '已停止'), findsOneWidget);
+    expect(find.byKey(const ValueKey('transcript-error-card')), findsNothing);
+  });
 
   testWidgets(
     'successful turn keeps tool errors without a task failure panel',
@@ -105,8 +276,10 @@ void main() {
       );
     }
     await tester.pumpAndSettle();
-    expect(find.text('任务执行失败'), findsOneWidget);
-    expect(find.text('命令退出码为 1'), findsNothing);
+    final failureStatus = find.byKey(const ValueKey('recovery-state-failed'));
+    expect(failureStatus, findsOneWidget);
+    expect(find.byKey(const ValueKey('transcript-error-card')), findsOneWidget);
+    expect(find.text('命令退出码为 1'), findsOneWidget);
     expect(find.text('任务已完成'), findsNothing);
     expect(find.text('部分输出'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('recovery-state-failed')));
@@ -114,7 +287,8 @@ void main() {
     expect(find.widgetWithText(SelectableText, '命令退出码为 1'), findsOneWidget);
     await tester.tap(find.widgetWithText(TextButton, '收起失败提示'));
     await tester.pumpAndSettle();
-    expect(find.text('任务执行失败'), findsNothing);
+    expect(failureStatus, findsNothing);
+    expect(find.byKey(const ValueKey('transcript-error-card')), findsOneWidget);
     expect(hasCurrentFailureEvidence(state.messages), isTrue);
 
     addTearDown(tester.view.resetViewInsets);
@@ -122,7 +296,7 @@ void main() {
     await tester.pumpAndSettle();
     tester.view.resetViewInsets();
     await tester.pumpAndSettle();
-    expect(find.text('任务执行失败'), findsNothing);
+    expect(failureStatus, findsNothing);
 
     state.handleWsMessage(
       jsonEncode({
@@ -138,7 +312,7 @@ void main() {
       }),
     );
     await tester.pumpAndSettle();
-    expect(find.text('任务执行失败'), findsNothing);
+    expect(failureStatus, findsNothing);
 
     beginPrompt(state.messages as List<TranscriptMessage>, '运行任务');
     state.handleWsMessage(
@@ -150,7 +324,7 @@ void main() {
       }),
     );
     await tester.pumpAndSettle();
-    expect(find.text('任务执行失败'), findsOneWidget);
+    expect(failureStatus, findsOneWidget);
     await state.lastTranscriptWrite;
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();
@@ -223,7 +397,10 @@ void main() {
                       presentation: const ConsolePresentation(
                         ConsolePhase.failed,
                       ),
-                      failureDetail: '任务未完成，请检查错误后重新编辑上条指令再试一次。',
+                      failureDetail: List.generate(
+                        100,
+                        (index) => '\u001b[33mWARN\u001b[0m diagnostic $index',
+                      ).join('\n'),
                       onReconnect: () {},
                       onStop: () {},
                       onOpenWorkspace: () {},
@@ -240,6 +417,20 @@ void main() {
           expect(tester.getSemantics(status).label, '任务执行失败');
           await tester.tap(status);
           await tester.pumpAndSettle();
+          expect(
+            tester
+                .widget<SelectableText>(
+                  find.byKey(const ValueKey('failure-log-text')),
+                )
+                .data,
+            endsWith('WARN diagnostic 99'),
+          );
+          expect(
+            tester
+                .getSize(find.byKey(const ValueKey('failure-log-scroll')))
+                .height,
+            lessThanOrEqualTo(280),
+          );
           final dismiss = find.widgetWithText(TextButton, '收起失败提示');
           await tester.ensureVisible(dismiss);
           expect(tester.getSize(dismiss).width, greaterThanOrEqualTo(48));

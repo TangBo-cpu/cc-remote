@@ -662,7 +662,12 @@ void main() {
     final pairDecoration = pairPanel.decoration! as BoxDecoration;
     expect(pairDecoration.color, AppColors.surface);
     expect(pairDecoration.boxShadow, isNull);
-    expect(find.byIcon(LucideIcons.monitor), findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) => widget is NotoIcon && widget.glyph == NotoGlyph.monitor,
+      ),
+      findsOneWidget,
+    );
     expect(find.text('相机已就绪'), findsOneWidget);
   });
 
@@ -875,10 +880,13 @@ void main() {
       find.descendant(of: modelButton, matching: find.byType(Text)),
       findsNothing,
     );
-    final modelIcon = tester.widget<NotoIcon>(
-      find.descendant(of: modelButton, matching: find.byType(NotoIcon)),
+    final modelIcon = tester.widget<Image>(
+      find.descendant(of: modelButton, matching: find.byType(Image)),
     );
-    expect(modelIcon.glyph, NotoGlyph.brain);
+    expect(
+      (modelIcon.image as AssetImage).assetName,
+      'assets/brands/claude-mark.png',
+    );
     final modelSurface = tester.widget<SignalAnimatedSurface>(
       find.byKey(const ValueKey('composer-model-visual')),
     );
@@ -3102,7 +3110,7 @@ void main() {
     expect(stopDecoration.color, AppColors.stop);
     expect(stopDecoration.border, isNotNull);
     expect(stopDecoration.boxShadow, isNotEmpty);
-    final stopIcon = tester.widget<Icon>(
+    final stopIcon = tester.widget<SmartIcon>(
       find.byKey(const ValueKey('composer-primary-stop')),
     );
     expect(stopIcon.icon, PhosphorIconsFill.square);
@@ -4162,7 +4170,9 @@ void main() {
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('activity-step-toggle-skill-1')),
-        matching: find.byType(SmartIcon),
+        matching: find.byWidgetPredicate(
+          (widget) => widget is SmartIcon && widget.icon == LucideIcons.sparkles,
+        ),
       ),
       findsOneWidget,
     );

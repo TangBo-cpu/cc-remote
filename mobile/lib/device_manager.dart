@@ -372,7 +372,7 @@ class _DeviceStatusView extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, size: 30, color: palette.muted),
+          SmartIcon(icon, size: 30, color: palette.muted),
           const SizedBox(height: 10),
           Text(message, style: TextStyle(color: palette.muted, fontSize: 14)),
           if (actionLabel != null && onAction != null) ...[

@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'noto_icon.dart';
 import 'signal_console_theme.dart';
 
 class WorkspaceDiffView extends StatefulWidget {
@@ -167,11 +168,11 @@ class _WorkspaceDiffViewState extends State<WorkspaceDiffView> {
                   tooltip: wrapLines ? '关闭自动换行' : '自动换行',
                   isSelected: wrapLines,
                   onPressed: () => setState(() => wrapLines = !wrapLines),
-                  icon: const Icon(
+                  icon: const SmartIcon(
                     LucideIcons.arrowLeftRight,
                     size: AppIconSizes.control,
                   ),
-                  selectedIcon: const Icon(
+                  selectedIcon: const SmartIcon(
                     LucideIcons.wrapText,
                     size: AppIconSizes.control,
                   ),
@@ -183,7 +184,7 @@ class _WorkspaceDiffViewState extends State<WorkspaceDiffView> {
                 PopupMenuButton<double>(
                   key: const ValueKey('workspace-diff-font-size'),
                   tooltip: '代码字号',
-                  icon: Icon(
+                  icon: SmartIcon(
                     LucideIcons.type,
                     size: AppIconSizes.control,
                     color: palette.ink,

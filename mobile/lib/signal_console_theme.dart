@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'noto_icon.dart';
+
 class AppPalette {
   const AppPalette._(this.brightness);
 
@@ -37,6 +39,7 @@ class AppPalette {
   Color get accentStrong => accent;
   Color get navigatorAccent =>
       _isLight ? const Color(0xFF3877A7) : const Color(0xFF87B7DB);
+  Color get iconAccent => navigatorAccent;
   Color get link =>
       _isLight ? const Color(0xFF2E6A9B) : const Color(0xFF87B7DB);
   Color get success =>
@@ -410,7 +413,7 @@ class AppOptionRow extends StatelessWidget {
                                           ? accent
                                           : palette.muted),
                               ),
-                              child: leading ?? const Icon(LucideIcons.circle),
+                              child: leading ?? const SmartIcon(LucideIcons.circle),
                             ),
                           ),
                         ),
@@ -421,7 +424,7 @@ class AppOptionRow extends StatelessWidget {
                         child: Center(
                           child:
                               leading ??
-                              Icon(
+                              SmartIcon(
                                 LucideIcons.circle,
                                 size: AppMark.size,
                                 color: palette.muted,
@@ -459,9 +462,9 @@ class AppOptionRow extends StatelessWidget {
                       ),
                     ),
                     if (selected)
-                      Icon(LucideIcons.check, size: AppIconSizes.control, color: accent)
+                      SmartIcon(LucideIcons.check, size: AppIconSizes.control, color: accent)
                     else if (showDisclosure)
-                      Icon(
+                      SmartIcon(
                         LucideIcons.chevronRight,
                         size: AppIconSizes.control,
                         color: palette.inactive,
@@ -1636,7 +1639,7 @@ class SignalCopyIcon extends StatelessWidget {
             : AppMotion.micro,
         switchInCurve: AppMotion.enter,
         switchOutCurve: AppMotion.enter,
-        child: Icon(
+        child: SmartIcon(
           copied ? LucideIcons.check : LucideIcons.copy,
           key: ValueKey(copied),
           size: dimension,

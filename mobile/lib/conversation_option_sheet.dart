@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'noto_icon.dart';
 import 'signal_console_theme.dart';
 
 class ConversationPickerOption<T> {
@@ -107,7 +108,7 @@ class _ConversationOptionSheetState<T>
                   IconButton(
                     tooltip: '关闭选择器',
                     onPressed: () => Navigator.pop(context),
-                    icon: Icon(LucideIcons.x, size: AppIconSizes.control, color: palette.muted),
+                    icon: SmartIcon(LucideIcons.x, size: AppIconSizes.control, color: palette.muted),
                   ),
                 ],
               ),
@@ -266,7 +267,7 @@ class _ConversationOptionRow<T> extends StatelessWidget {
                   if (selected) ...[
                     const SizedBox(width: 8),
                     ExcludeSemantics(
-                      child: Icon(
+                      child: SmartIcon(
                         LucideIcons.circleCheck,
                         size: AppIconSizes.control,
                         color: color,
@@ -275,7 +276,7 @@ class _ConversationOptionRow<T> extends StatelessWidget {
                   ] else if (!option.enabled) ...[
                     const SizedBox(width: 8),
                     ExcludeSemantics(
-                      child: Icon(
+                      child: SmartIcon(
                         LucideIcons.lockKeyhole,
                         size: AppIconSizes.control,
                         color: palette.muted,

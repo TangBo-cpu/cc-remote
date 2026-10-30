@@ -1,7 +1,7 @@
 # Engine brand marks
 
-These marks are used only to identify the corresponding session engine in the
-engine picker.
+These marks identify the corresponding session engine in the engine picker and
+the composer's model button.
 
 - `claude-mark.png` is the Claude symbol published by Anthropic and mirrored by
   Wikimedia Commons under CC0:

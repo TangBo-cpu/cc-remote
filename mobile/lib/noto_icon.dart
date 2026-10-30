@@ -5,9 +5,7 @@ import 'signal_console_theme.dart';
 
 /// Noto Emoji 的扁平彩色字形（Apache-2.0，署名见 assets/noto/README.md）。
 ///
-/// 这些图标是多色位图，**无法被 IconTheme 染色**。需要语义着色的位置
-/// （危险红、成功绿、选中态）必须继续用单色图标集——统一走 [SmartIcon]，
-/// 它会自己判断回退。
+/// 保留字形原色，不随选中或语义色切换图标集；禁用态降低透明度。
 enum NotoGlyph {
   archive('archive', 'file-cabinet'),
   arrowLeftRight('arrowLeftRight', 'left-right-arrow'),
@@ -81,11 +79,13 @@ class NotoIcon extends StatelessWidget {
     super.key,
     this.size = AppIconSizes.control,
     this.semanticLabel,
+    this.opacity = 1,
   });
 
   final NotoGlyph glyph;
   final double size;
   final String? semanticLabel;
+  final double opacity;
 
   @override
   Widget build(BuildContext context) {
@@ -97,15 +97,13 @@ class NotoIcon extends StatelessWidget {
       semanticLabel: semanticLabel,
       excludeFromSemantics: semanticLabel == null,
       gaplessPlayback: true,
+      opacity: AlwaysStoppedAnimation(opacity),
     );
   }
 }
 
 /// 查表：Lucide 图标 → Noto 彩色字形。没有对应项时返回 null。
-///
-/// 只在 [SmartIcon] 没收到显式 `color` 时才会用到——有 color 就说明这个位置
-/// 靠颜色表达语义，彩色位图做不到。
-NotoGlyph? notoGlyphFor(IconData icon) => switch (icon) {
+NotoGlyph? notoGlyphFor(IconData? icon) => switch (icon) {
   LucideIcons.archive => NotoGlyph.archive,
   LucideIcons.arrowLeftRight => NotoGlyph.arrowLeftRight,
   LucideIcons.arrowUpRight => NotoGlyph.arrowUpRight,
@@ -161,14 +159,7 @@ NotoGlyph? notoGlyphFor(IconData icon) => switch (icon) {
   _ => null,
 };
 
-/// [Icon] 的直插替代：能彩色就彩色，需要着色就回退成单色。
-///
-/// 回退条件有两个，任一满足就走原来的 [Icon]：
-///
-/// 1. 调用方传了 `color` —— 说明该位置靠颜色表达语义（危险态、成功态、选中态）；
-/// 2. 这个 [IconData] 在 [notoGlyphFor] 里查不到 —— Noto 没有对应概念。
-///    典型是结构性符号：省略号、折叠箭头、终端、刷新、关闭。它们是形状不是实物，
-///    本来就该是单色的。
+/// 优先使用 Noto 彩色字形，其余符号使用主题图标色或调用方的语义色。
 class SmartIcon extends StatelessWidget {
   const SmartIcon(
     this.icon, {
@@ -178,17 +169,42 @@ class SmartIcon extends StatelessWidget {
     this.semanticLabel,
   });
 
-  final IconData icon;
+  final IconData? icon;
   final double? size;
   final Color? color;
   final String? semanticLabel;
 
   @override
   Widget build(BuildContext context) {
-    final NotoGlyph? glyph = color == null ? notoGlyphFor(icon) : null;
-    if (glyph == null) {
-      return Icon(icon, size: size, color: color, semanticLabel: semanticLabel);
+    final palette = AppPalette.of(context);
+    final iconTheme = IconTheme.of(context);
+    final requestedColor = color ?? iconTheme.color;
+    final alpha = requestedColor == palette.inactive
+        ? 0.4
+        : requestedColor?.a ?? 1.0;
+    final glyph = notoGlyphFor(icon);
+    if (glyph != null) {
+      return NotoIcon(
+        glyph,
+        size: size ?? iconTheme.size ?? AppIconSizes.control,
+        semanticLabel: semanticLabel,
+        opacity: alpha * (iconTheme.opacity ?? 1),
+      );
     }
-    return NotoIcon(glyph, size: size ?? 24, semanticLabel: semanticLabel);
+    final neutral =
+        requestedColor == null ||
+        (requestedColor.r == requestedColor.g &&
+            requestedColor.g == requestedColor.b);
+    // 实心按钮仍用配对前景色，避免彩色线条在按钮底色上失去对比。
+    final buttonForeground =
+        requestedColor == palette.onCta || requestedColor == palette.onStop;
+    return Icon(
+      icon,
+      size: size,
+      color: neutral && !buttonForeground
+          ? palette.iconAccent.withValues(alpha: alpha)
+          : requestedColor,
+      semanticLabel: semanticLabel,
+    );
   }
 }

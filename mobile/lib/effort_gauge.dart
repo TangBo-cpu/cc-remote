@@ -361,8 +361,8 @@ class _EffortGaugePainter extends CustomPainter {
               ? palette.inactiveLight
               : Color.lerp(palette.inactiveLight, palette.inactive, 0.22)!
         : palette.line;
-    final activeColor = enabled ? palette.accentStrong : palette.inactiveLight;
-    final inkColor = enabled ? palette.ink : palette.inactive;
+    final activeColor = enabled ? palette.iconAccent : palette.inactiveLight;
+    final inkColor = enabled ? palette.iconAccent : palette.inactive;
     final strokeWidth = compact ? 2.8 : 7.0;
     final dotRadius = compact ? 1.25 : 5.2;
 

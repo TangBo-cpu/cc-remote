@@ -38,6 +38,7 @@ class ToolActivityDetail extends StatefulWidget {
 
 class _ToolActivityDetailState extends State<ToolActivityDetail> {
   bool expanded = true;
+  bool fullDetail = false;
 
   @override
   void initState() {
@@ -49,6 +50,13 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
             )
             as bool? ??
         true;
+    fullDetail =
+        PageStorage.maybeOf(context)?.readState(
+              context,
+              identifier: ('tool-detail-full', widget.activity.activityId),
+            )
+            as bool? ??
+        false;
   }
 
   @override
@@ -56,6 +64,7 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.activity.activityId != widget.activity.activityId) {
       expanded = true;
+      fullDetail = false;
     }
   }
 
@@ -89,6 +98,7 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
     };
     return ActivityDisclosure(
       toggleKey: ValueKey('activity-step-toggle-${message.activityId}'),
+      contentRevision: (fullDetail, widget.reveal),
       title: fileName ?? widget.title,
       titleWidget: fileName == null
           ? widget.titleWidget
@@ -156,25 +166,78 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
             },
       child: Padding(
         padding: const EdgeInsetsDirectional.fromSTEB(24, 0, 8, 2),
-        child: WorkspacePathText(
-          filePath ?? detail,
-          key: ValueKey('activity-detail-${message.activityId}'),
-          selectable: true,
-          style: TextStyle(
-            color: palette.muted,
-            fontSize: AppTypography.activityBodySize,
-            height: 1.6,
-            fontFamily:
-                filePath != null ||
-                    const {'Bash', 'Shell'}.contains(message.activityTool)
-                ? AppTypography.codeFontFamily
-                : null,
-            fontFamilyFallback:
-                filePath != null ||
-                    const {'Bash', 'Shell'}.contains(message.activityTool)
-                ? AppTypography.codeFontFamilyFallback
-                : null,
-          ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final text = filePath ?? detail;
+            final style = DefaultTextStyle.of(context).style.merge(
+              TextStyle(
+                color: palette.muted,
+                fontSize: AppTypography.activityBodySize,
+                height: 1.6,
+                fontFamily:
+                    filePath != null ||
+                        const {'Bash', 'Shell'}.contains(message.activityTool)
+                    ? AppTypography.codeFontFamily
+                    : null,
+                fontFamilyFallback:
+                    filePath != null ||
+                        const {'Bash', 'Shell'}.contains(message.activityTool)
+                    ? AppTypography.codeFontFamilyFallback
+                    : null,
+              ),
+            );
+            final painter = TextPainter(
+              text: TextSpan(text: text, style: style),
+              maxLines: 3,
+              ellipsis: '…',
+              textDirection: Directionality.of(context),
+              textScaler: MediaQuery.textScalerOf(context),
+              locale: Localizations.maybeLocaleOf(context),
+            )..layout(maxWidth: constraints.maxWidth);
+            final overflows = painter.didExceedMaxLines;
+            painter.dispose();
+            final showFull = !overflows || fullDetail || widget.reveal;
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                WorkspacePathText(
+                  text,
+                  key: ValueKey('activity-detail-${message.activityId}'),
+                  selectable: showFull,
+                  maxLines: showFull ? null : 3,
+                  overflow: showFull ? null : TextOverflow.ellipsis,
+                  style: style,
+                ),
+                if (overflows && !widget.reveal)
+                  Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: TextButton(
+                      key: ValueKey(
+                        'activity-detail-more-${message.activityId}',
+                      ),
+                      style: TextButton.styleFrom(
+                        minimumSize: const Size(0, AppSizes.touchTarget),
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        textStyle: const TextStyle(
+                          fontSize: AppTypography.activityBodySize,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      onPressed: () {
+                        setState(() => fullDetail = !fullDetail);
+                        PageStorage.maybeOf(context)?.writeState(
+                          context,
+                          fullDetail,
+                          identifier: ('tool-detail-full', message.activityId),
+                        );
+                      },
+                      child: Text(fullDetail ? '收起详情' : '展开全部'),
+                    ),
+                  ),
+              ],
+            );
+          },
         ),
       ),
     );

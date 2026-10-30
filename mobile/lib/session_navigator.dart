@@ -430,10 +430,10 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
           if (allowAll)
             ListTile(
               key: const ValueKey('project-all'),
-              leading: const Icon(LucideIcons.layers),
+              leading: const SmartIcon(LucideIcons.layers),
               title: const Text('所有项目'),
               selected: selected == null,
-              trailing: selected == null ? const Icon(LucideIcons.check) : null,
+              trailing: selected == null ? const SmartIcon(LucideIcons.check) : null,
               onTap: () => Navigator.pop(sheetContext, ''),
             ),
           for (final project in widget.projects)
@@ -443,7 +443,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                 horizontal: 8,
                 vertical: 4,
               ),
-              leading: Icon(LucideIcons.folder, color: AppMark.of(project.id)),
+              leading: SmartIcon(LucideIcons.folder, color: AppMark.of(project.id)),
               title: Text(project.name),
               subtitle: Text(
                 project.path,
@@ -452,7 +452,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
               ),
               selected: selected == project.id,
               trailing: selected == project.id
-                  ? const Icon(LucideIcons.check)
+                  ? const SmartIcon(LucideIcons.check)
                   : null,
               onTap: () => Navigator.pop(sheetContext, project.id),
             ),
@@ -520,7 +520,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                             onPressed: creating
                                 ? null
                                 : () => Navigator.pop(sheetContext),
-                            icon: const Icon(LucideIcons.x),
+                            icon: const SmartIcon(LucideIcons.x),
                           ),
                         ],
                       ),
@@ -531,7 +531,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                         contentPadding: EdgeInsets.zero,
                         title: Text(project?.name ?? '选择项目'),
                         subtitle: Text(project?.path ?? '', softWrap: true),
-                        trailing: const Icon(LucideIcons.chevronDown),
+                        trailing: const SmartIcon(LucideIcons.chevronDown),
                         onTap: creating
                             ? null
                             : () async {
@@ -555,7 +555,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                                     Navigator.pop(sheetContext);
                                     widget.onOpenDirectory!(engine);
                                   },
-                            icon: const Icon(LucideIcons.folderOpen, size: 18),
+                            icon: const SmartIcon(LucideIcons.folderOpen, size: 18),
                             label: const Text('打开电脑目录'),
                           ),
                         ),
@@ -732,7 +732,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
     final palette = AppPalette.of(context);
     return Row(
       children: [
-        Icon(
+        SmartIcon(
           icon,
           size: AppIconSizes.control,
           color: !enabled
@@ -759,7 +759,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
     return PopupMenuButton<_SessionAction>(
       key: ValueKey('session-menu-${item.id}'),
       tooltip: '${item.title} 的更多操作',
-      icon: Icon(
+      icon: SmartIcon(
         LucideIcons.moreHorizontal,
         size: AppIconSizes.inline,
         color: palette.muted,
@@ -900,7 +900,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                       padding: const EdgeInsets.only(left: 8),
                       child: Tooltip(
                         message: status,
-                        child: Icon(
+                        child: SmartIcon(
                           item.needsAttention
                               ? LucideIcons.shield
                               : LucideIcons.clock,
@@ -916,7 +916,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                       padding: const EdgeInsets.only(left: 8),
                       child: Tooltip(
                         message: '当前会话',
-                        child: Icon(
+                        child: SmartIcon(
                           LucideIcons.check,
                           size: AppIconSizes.inline,
                           color: palette.navigatorAccent,
@@ -940,7 +940,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
     padding: const EdgeInsets.fromLTRB(12, 20, 12, 4),
     child: Row(
       children: [
-        Icon(
+        SmartIcon(
           icon,
           size: AppIconSizes.inline,
           color: AppPalette.of(context).muted,
@@ -964,7 +964,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
         children: [
           const Align(
             alignment: Alignment.centerLeft,
-            child: Icon(LucideIcons.messageSquare, size: AppIconSizes.hero),
+            child: SmartIcon(LucideIcons.messageSquare, size: AppIconSizes.hero),
           ),
           const SizedBox(height: 16),
           Text(
@@ -1141,7 +1141,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     child: Row(
                       children: [
-                        Icon(
+                        SmartIcon(
                           expanded
                               ? LucideIcons.folderOpen
                               : LucideIcons.folder,
@@ -1170,7 +1170,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                               ? Duration.zero
                               : AppMotion.micro,
                           curve: Curves.easeOutCubic,
-                          child: Icon(
+                          child: SmartIcon(
                             LucideIcons.chevronRight,
                             size: AppIconSizes.inline,
                             color: AppPalette.of(context).muted,
@@ -1227,7 +1227,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                   ),
                   child: Row(
                     children: [
-                      Icon(
+                      SmartIcon(
                         LucideIcons.history,
                         size: AppIconSizes.inline,
                         color: AppPalette.of(context).muted,
@@ -1248,7 +1248,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                             ? Duration.zero
                             : AppMotion.micro,
                         curve: Curves.easeOutCubic,
-                        child: Icon(
+                        child: SmartIcon(
                           LucideIcons.chevronRight,
                           size: AppIconSizes.inline,
                           color: AppPalette.of(context).muted,
@@ -1412,7 +1412,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                             ? widget.onClose ??
                                   () => Navigator.maybePop(context)
                             : null,
-                        icon: const Icon(
+                        icon: const SmartIcon(
                           LucideIcons.x,
                           size: AppIconSizes.control,
                         ),
@@ -1438,7 +1438,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                             ? () =>
                                   updateFilters(() => showArchived = !showArchived)
                             : null,
-                        icon: Icon(
+                        icon: SmartIcon(
                           showArchived
                               ? LucideIcons.messagesSquare
                               : LucideIcons.archive,
@@ -1460,7 +1460,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                         OutlinedButton.icon(
                           key: const ValueKey('open-native-session-picker'),
                           onPressed: busy ? null : widget.onSyncDesktop,
-                          icon: const Icon(
+                          icon: const SmartIcon(
                             LucideIcons.refreshCw,
                             size: AppIconSizes.control,
                           ),
@@ -1488,7 +1488,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                               width: 0.75,
                             ),
                           ),
-                          prefixIcon: Icon(
+                          prefixIcon: SmartIcon(
                             LucideIcons.search,
                             size: AppIconSizes.control,
                             color: palette.muted,
@@ -1502,7 +1502,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                                     searchController.clear();
                                     searchChanged('');
                                   },
-                                  icon: Icon(
+                                  icon: SmartIcon(
                                     LucideIcons.x,
                                     size: AppIconSizes.inline,
                                     color: palette.muted,
@@ -1522,7 +1522,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                           children: [
                             ActionChip(
                               key: const ValueKey('open-project-browser'),
-                              avatar: Icon(
+                              avatar: SmartIcon(
                                 LucideIcons.folder,
                                 size: AppIconSizes.inline,
                                 color: palette.muted,
@@ -1658,7 +1658,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                         onPressed: busy || widget.projects.isEmpty
                             ? null
                             : createSession,
-                        icon: const Icon(
+                        icon: const SmartIcon(
                           LucideIcons.plus,
                           size: AppIconSizes.control,
                         ),

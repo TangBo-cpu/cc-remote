@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
+import 'noto_icon.dart';
 import 'signal_console_theme.dart';
 
 // Cherry Studio mobile: text-led status rows, adjacent chevrons, a 2s glyph
@@ -29,6 +30,7 @@ class ActivityDisclosure extends StatefulWidget {
     this.leading,
     this.titleWidget,
     this.compact = false,
+    this.contentRevision,
   });
 
   final bool expanded;
@@ -43,6 +45,7 @@ class ActivityDisclosure extends StatefulWidget {
   final String? semanticLabel;
   final Widget? leading;
   final Widget? titleWidget;
+  final Object? contentRevision;
 
   /// Step-level rows inside a group: a dense visual line whose tap target
   /// still reaches [AppSizes.touchTarget] through an invisible hit area.
@@ -57,7 +60,10 @@ class _ActivityDisclosureState extends State<ActivityDisclosure> {
   @override
   void didUpdateWidget(covariant ActivityDisclosure oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.expanded == widget.expanded) return;
+    if (oldWidget.expanded == widget.expanded &&
+        oldWidget.contentRevision == widget.contentRevision) {
+      return;
+    }
     final box = headerKey.currentContext?.findRenderObject();
     final position = Scrollable.maybeOf(context)?.position;
     if (box is! RenderBox || position == null) return;
@@ -201,7 +207,7 @@ class ActivityStatusRow extends StatelessWidget {
                                   ? Duration.zero
                                   : ActivityMotion.fast,
                               curve: ActivityMotion.settle,
-                              child: Icon(
+                              child: SmartIcon(
                                 LucideIcons.chevronRight,
                                 size: AppIconSizes.badge,
                                 color: color,

@@ -717,6 +717,9 @@ void main() {
       );
       await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
       await tester.pumpAndSettle();
+      expect(find.text('展开全部'), findsOneWidget);
+      await tester.tap(find.text('展开全部'));
+      await tester.pumpAndSettle();
       expect(find.text(detail), findsOneWidget);
       final text = tester.widget<WorkspacePathText>(
         find.byKey(const ValueKey('activity-detail-tool')),
