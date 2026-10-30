@@ -53,6 +53,7 @@ import {
 } from './engineBridge.js';
 import { createRunFlight } from './runFlight.js';
 import { ClaudeHistoryReader, syncClaudeSessionHistory } from './claudeSessionHistory.js';
+import { MAX_NATIVE_SESSION_BYTES } from './nativeHistory.js';
 
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 8787);
@@ -573,6 +574,66 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
 
   if (req.method === 'GET' && url.pathname === '/api/projects') {
     sendJson(res, 200, projectSessions.catalog());
+    return;
+  }
+
+  if (req.method === 'GET' && url.pathname === '/api/native-sessions') {
+    const engine = url.searchParams.get('engine');
+    const cursor = url.searchParams.get('cursor') ?? undefined;
+    if (!isAgentEngine(engine) || (cursor !== undefined && (!cursor || cursor.length > 2048))) {
+      return sendJson(res, 400, { error: 'invalid_session_selection' });
+    }
+    try {
+      const page = engine === 'claude'
+        ? await claudeHistoryReader.listSessions(cursor)
+        : await getHistoryBridge().listSessions(cursor);
+      sendJson(res, 200, { ...page, maxSessionBytes: MAX_NATIVE_SESSION_BYTES });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'invalid_cursor') {
+        return sendJson(res, 400, { error: 'invalid_cursor' });
+      }
+      console.warn('[native-sessions] Could not list desktop sessions:', error);
+      sendJson(res, 502, { error: 'native_session_list_failed' });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/native-sessions/sync') {
+    if (!runFlight.tryBegin('mutate')) return sendJson(res, 409, { error: 'claude_is_busy' });
+    try {
+      const body = await readJson<{ engine?: unknown; sessionId?: unknown }>(req);
+      if (!body || !isAgentEngine(body.engine) || typeof body.sessionId !== 'string'
+          || !/^[a-zA-Z0-9_-]{1,200}$/.test(body.sessionId)) {
+        return sendJson(res, 400, { error: 'invalid_session_selection' });
+      }
+      const native = body.engine === 'claude'
+        ? await claudeHistoryReader.getSessionInfo(body.sessionId)
+        : await getHistoryBridge().getSessionInfo(body.sessionId);
+      if (!native) return sendJson(res, 404, { error: 'native_session_not_found' });
+      const history = body.engine === 'claude'
+        ? await claudeHistoryReader.read(body.sessionId, MAX_NATIVE_SESSION_BYTES)
+        : await getHistoryBridge().readHistory(body.sessionId, MAX_NATIVE_SESSION_BYTES);
+      if (!history) return sendJson(res, 404, { error: 'native_session_not_found' });
+      const context = await projectSessions.importNativeSession(native, history);
+      await selectActiveSession(context);
+      broadcastActiveSession();
+      sendJson(res, 200, {
+        ok: true, catalog: projectSessions.catalog(),
+        transcript: sessionMessage({
+          type: 'transcript_snapshot', ...context.transcript.snapshot(), ...taskStatus(context),
+        }, context),
+      });
+    } catch (error) {
+      if (error instanceof DirectoryError) sendJson(res, error.status, { error: error.code });
+      else if (error instanceof Error && error.message === 'native_session_too_large') {
+        sendJson(res, 413, { error: error.message });
+      } else {
+        console.warn('[native-sessions] Could not sync desktop session:', error);
+        sendJson(res, 502, { error: 'native_history_sync_failed' });
+      }
+    } finally {
+      runFlight.end();
+    }
     return;
   }
 
@@ -1489,6 +1550,12 @@ async function syncNativeClaudeHistory(context: SessionContext): Promise<void> {
   }
 }
 
+function getHistoryBridge(): CodexBridge {
+  return historyBridge ??= new CodexBridge({
+    codexBin: CODEX_BIN, codexArgs: CODEX_ARGS, workspaceDir: WORKSPACE_DIR,
+  });
+}
+
 async function syncNativeMessages(context: SessionContext, required = false): Promise<boolean> {
   const snapshot = context.transcript.snapshot();
   if (snapshot.running) return false;
@@ -1499,10 +1566,7 @@ async function syncNativeMessages(context: SessionContext, required = false): Pr
       history = await claudeHistoryReader.read(snapshot.engineSessionId);
     } else {
       // History is addressed by thread ID, independent of the active folder.
-      historyBridge ??= new CodexBridge({
-        codexBin: CODEX_BIN, codexArgs: CODEX_ARGS, workspaceDir: WORKSPACE_DIR,
-      });
-      history = await historyBridge.readHistory(snapshot.engineSessionId);
+      history = await getHistoryBridge().readHistory(snapshot.engineSessionId);
     }
     if (!history) return syncReplyImages(context);
     const result = await context.transcript.importNativeHistory(history);

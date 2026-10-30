@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer, request } from 'node:http';
-import { appendFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rename, rm, truncate, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
@@ -885,6 +885,109 @@ test('Codex history stays warm when switching conversations across folders', asy
 });
 
 for (const engine of ['claude', 'codex'] as const) {
+  test('desktop session import selects one ' + engine + ' conversation, filters oversized files and resumes it', async () => {
+    const nativeId = engine === 'claude' ? randomUUID() : 'fake-thread-id';
+    const largeId = randomUUID();
+    const limit = 2 * 1024 * 1024;
+    const instance = await startDaemon({
+      claudeBin: process.execPath,
+      claudeArgs: () => [resolve('tests/fixtures/fakeClaude.mjs'), '--fake-session=' + nativeId],
+      codexBin: process.execPath,
+      codexArgs: root => [resolve('tests/fixtures/fakeCodex.mjs'),
+        '--fake-history=' + join(root, 'desktop.json'), '--fake-log=' + join(root, 'codex.jsonl')],
+    });
+    let socket: WebSocket | undefined;
+    try {
+      const directory = join(instance.root, '.claude', 'projects', 'desktop');
+      await mkdir(directory, { recursive: true });
+      const path = join(directory, nativeId + '.jsonl');
+      const largePath = join(directory, largeId + '.jsonl');
+      const userId = randomUUID();
+      const original = [
+        { type: 'user', sessionId: nativeId, cwd: instance.root, uuid: userId, parentUuid: null,
+          message: { role: 'user', content: '电脑问题' } },
+        { type: 'assistant', sessionId: nativeId, uuid: randomUUID(), parentUuid: userId,
+          message: { role: 'assistant', content: '电脑回复' } },
+        { type: 'custom-title', sessionId: nativeId, customTitle: '电脑会话' },
+      ].map(entry => JSON.stringify(entry)).join('\n') + '\n';
+      await writeFile(path, original);
+      await writeFile(largePath, '');
+      await truncate(largePath, limit + 1);
+      if (engine === 'codex') {
+        await writeFile(join(instance.root, 'desktop.json'), JSON.stringify({
+          sessions: [
+            { id: nativeId, cwd: instance.root, name: '电脑会话', path, source: 'appServer', updatedAt: 1000 },
+            { id: largeId, cwd: instance.root, name: '过长会话', path: largePath, source: 'appServer', updatedAt: 999 },
+          ],
+          turns: [{ id: 'desktop-turn', status: 'completed', items: [
+            { id: 'desktop-user', type: 'userMessage', content: [{ type: 'text', text: '电脑问题' }] },
+            { id: 'desktop-reply', type: 'agentMessage', text: '电脑回复' },
+          ] }],
+        }));
+      }
+      assert.equal((await fetch(instance.baseUrl + '/api/native-sessions?engine=' + engine)).status, 401);
+      const paired = await fetch(instance.baseUrl + '/api/pair', {
+        method: 'POST', headers: { Origin: instance.baseUrl, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nonce: instance.nonce }),
+      });
+      const { token } = await paired.json() as { token: string };
+      const headers = { Origin: instance.baseUrl, Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
+      const before = await (await fetch(instance.baseUrl + '/api/projects', { headers })).json() as { activeSessionId: string };
+      const list = await fetch(instance.baseUrl + '/api/native-sessions?engine=' + engine, { headers });
+      assert.equal(list.status, 200, await list.clone().text());
+      const page = await list.json() as { sessions: { sessionId: string; title: string }[]; nextCursor: string; maxSessionBytes: number };
+      assert.equal(page.maxSessionBytes, limit);
+      assert.deepEqual(page.sessions.map(item => item.sessionId), [nativeId]);
+      assert.equal(page.sessions[0].title, '电脑会话');
+      if (engine === 'codex') {
+        const second = await (await fetch(instance.baseUrl + '/api/native-sessions?engine=codex&cursor=' + page.nextCursor, { headers })).json() as { sessions: unknown[] };
+        assert.equal(second.sessions.length, 0);
+      }
+      const sync = (sessionId = nativeId) => fetch(instance.baseUrl + '/api/native-sessions/sync', {
+        method: 'POST', headers, body: JSON.stringify({ engine, sessionId }),
+      });
+      assert.equal((await sync(largeId)).status, engine === 'claude' ? 404 : 413);
+      await truncate(path, limit + 1);
+      assert.equal((await sync()).status, engine === 'claude' ? 404 : 413);
+      assert.equal((await (await fetch(instance.baseUrl + '/api/projects', { headers })).json()).activeSessionId, before.activeSessionId);
+      await writeFile(path, original);
+      const imported = await sync();
+      assert.equal(imported.status, 200, await imported.clone().text());
+      const result = await imported.json() as {
+        catalog: { activeSessionId: string; sessions: { id: string }[] };
+        transcript: { engineSessionId: string; messages: { text: string }[] };
+      };
+      const sessionId = result.catalog.activeSessionId;
+      assert.notEqual(sessionId, before.activeSessionId);
+      assert.equal(result.catalog.sessions.length, 2);
+      assert.equal(result.transcript.engineSessionId, nativeId);
+      assert.deepEqual(result.transcript.messages.map(message => message.text), ['电脑问题', '电脑回复']);
+      await fetch(instance.baseUrl + '/api/sessions/' + sessionId + '/archive', { method: 'POST', headers });
+      const repeated = await sync();
+      assert.equal(repeated.status, 200, await repeated.clone().text());
+      const again = await repeated.json() as typeof result;
+      assert.equal(again.catalog.activeSessionId, sessionId);
+      assert.equal(again.catalog.sessions.length, 2);
+      assert.equal(again.transcript.messages.length, 2);
+      socket = new WebSocket(instance.baseUrl.replace('http:', 'ws:') + '/ws', { headers: { Origin: instance.baseUrl } });
+      await once(socket, 'open');
+      const snapshot = waitForWsMessage(socket, message => message.type === 'transcript_snapshot');
+      socket.send(JSON.stringify({ type: 'auth', token }));
+      await snapshot;
+      const reply = waitForPromptResult(socket, sessionId);
+      socket.send(JSON.stringify({ type: 'prompt', sessionId, engine, text: '手机继续' }));
+      assert.equal((await reply).engineSessionId, nativeId);
+    } finally {
+      socket?.terminate();
+      instance.child.kill();
+      await Promise.race([
+        instance.child.exitCode === null ? once(instance.child, 'exit') : Promise.resolve(),
+        new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
+      ]);
+      await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+    }
+  });
+
   test('native ' + engine + ' history syncs live, reconnects, resumes context and stays deleted', async () => {
     const nativeId = engine === 'claude' ? randomUUID() : 'fake-thread-id';
     const instance = await startDaemon({

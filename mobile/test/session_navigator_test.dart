@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:ui' as ui;
@@ -144,6 +145,47 @@ Future<void> capture(WidgetTester tester, String name) async {
 }
 
 void main() {
+  testWidgets('sidebar expansion reuses catalog sorting', (tester) async {
+    final sessions = CountingSessions([
+      for (var i = 0; i < 400; i++) item('session-$i', updatedAt: 400 - i),
+    ]);
+    await tester.pumpWidget(page(sessions: sessions));
+    await tester.pumpAndSettle();
+    sessions.reads = 0;
+    await tester.tap(find.byKey(const ValueKey('session-project-p1')));
+    await tester.pumpAndSettle();
+    expect(sessions.reads, 0);
+    await tester.tap(find.byKey(const ValueKey('session-project-p1')));
+    await tester.pumpAndSettle();
+    expect(sessions.reads, 0);
+  });
+
+  testWidgets('sidebar creates archived rows only as they enter the viewport', (
+    tester,
+  ) async {
+    var titleReads = 0;
+    final sessions = [
+      for (var i = 0; i < 400; i++)
+        CountedSession('archive-$i', 400 - i, () => titleReads++),
+    ];
+    await tester.pumpWidget(page(sessions: sessions));
+    await tester.pumpAndSettle();
+    titleReads = 0;
+    await tester.tap(find.byKey(const ValueKey('session-archive-toggle')));
+    await tester.pumpAndSettle();
+    expect(titleReads, lessThan(100));
+    await tester.scrollUntilVisible(
+      find.text('archive-399'),
+      1000,
+      scrollable: find.descendant(
+        of: find.byType(ListView).last,
+        matching: find.byType(Scrollable),
+      ),
+      maxScrolls: 80,
+    );
+    expect(find.text('archive-399'), findsOneWidget);
+  });
+
   setUpAll(() async {
     if (const bool.fromEnvironment('CAPTURE_SESSION_CENTER')) {
       final bytes = ByteData.sublistView(
@@ -849,5 +891,47 @@ void main() {
         },
       );
     }
+  }
+}
+
+class CountingSessions extends ListBase<RemoteSessionSummary> {
+  CountingSessions(this.items);
+  final List<RemoteSessionSummary> items;
+  int reads = 0;
+  @override
+  int get length => items.length;
+  @override
+  set length(int value) => items.length = value;
+  @override
+  RemoteSessionSummary operator [](int index) {
+    reads++;
+    return items[index];
+  }
+
+  @override
+  void operator []=(int index, RemoteSessionSummary value) =>
+      items[index] = value;
+}
+
+class CountedSession extends RemoteSessionSummary {
+  CountedSession(String id, int updatedAt, this.onTitle)
+    : super(
+        id: id,
+        projectId: 'p1',
+        title: id,
+        engine: SessionEngine.claude,
+        updatedAt: updatedAt,
+        running: false,
+        messageCount: 1,
+        archived: true,
+        pinned: false,
+        needsAttention: false,
+        preview: '',
+      );
+  final VoidCallback onTitle;
+  @override
+  String get title {
+    onTitle();
+    return id;
   }
 }

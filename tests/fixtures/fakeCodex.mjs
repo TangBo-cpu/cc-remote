@@ -34,9 +34,19 @@ input.on('line', line => {
     process.stdout.write(JSON.stringify({ id: message.id, error: { message: 'not_initialized' } }) + '\n');
     return;
   }
+  if (message.method === 'thread/list') {
+    const sources = message.params.sourceKinds?.length ? message.params.sourceKinds : ['cli', 'vscode'];
+    const sessions = (readHistory().sessions || []).filter(thread => sources.includes(thread.source));
+    const index = Number(message.params.cursor || 0);
+    respond(message.id, { data: sessions.slice(index, index + 1),
+      nextCursor: index + 1 < sessions.length ? String(index + 1) : null });
+    return;
+  }
   if (message.method === 'thread/read') {
     const history = readHistory();
     respond(message.id, { thread: {
+      cwd: process.cwd(), name: '电脑会话', updatedAt: Math.floor(Date.now() / 1000),
+      ...history.sessions?.find(thread => thread.id === message.params.threadId),
       id: fakeOptions.mode === 'history-wrong-thread' ? 'different-thread' : message.params.threadId,
       status: { type: history.running ? 'active' : 'notLoaded' },
       turns: message.params.includeTurns ? history.turns : [],

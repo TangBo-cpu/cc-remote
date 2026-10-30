@@ -46,6 +46,7 @@ export type TranscriptSnapshot = {
 export type TranscriptPermissionRequest = Omit<ClaudePermissionRequest, 'input'>;
 
 export type TranscriptSummary = {
+  engineSessionId?: string;
   updatedAt: number;
   running: boolean;
   messageCount: number;
@@ -177,6 +178,7 @@ export async function createTranscriptState(
         }
       }
       return {
+        engineSessionId: state.engineSessionId,
         updatedAt: state.updatedAt,
         running: state.running,
         messageCount: state.messages.length,

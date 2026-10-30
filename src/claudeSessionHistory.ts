@@ -1,7 +1,7 @@
 import { appendFile, open, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { NativeHistory, NativeMessage } from './nativeHistory.js';
+import { MAX_NATIVE_SESSION_BYTES, type NativeHistory, type NativeMessage, type NativeSessionSummary } from './nativeHistory.js';
 
 export const CLAUDE_APP_ENTRYPOINT = 'cc-app';
 const SDK_ENTRYPOINTS = new Set(['sdk-cli', 'sdk-ts', 'sdk-py']);
@@ -17,7 +17,55 @@ export class ClaudeHistoryReader {
     this.cache.delete(sessionId);
   }
 
-  async read(sessionId: string): Promise<NativeHistory | null> {
+  async listSessions(cursor?: string): Promise<{ sessions: NativeSessionSummary[]; nextCursor: string | null }> {
+    if (cursor !== undefined && !/^(0|[1-9][0-9]{0,8})$/.test(cursor)) throw new Error('invalid_cursor');
+    let projects;
+    try {
+      projects = await readdir(this.projectsDir, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { sessions: [], nextCursor: null };
+      throw error;
+    }
+    const files: { path: string; sessionId: string; updatedAt: number }[] = [];
+    for (const project of projects) {
+      if (!project.isDirectory()) continue;
+      const directory = join(this.projectsDir, project.name);
+      let entries;
+      try { entries = await readdir(directory, { withFileTypes: true }); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
+      }
+      for (const file of entries) {
+        if (!file.isFile() || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.jsonl$/i.test(file.name)) continue;
+        const path = join(directory, file.name);
+        try {
+          const info = await stat(path);
+          if (info.size <= MAX_NATIVE_SESSION_BYTES) {
+            files.push({ path, sessionId: file.name.slice(0, -6), updatedAt: info.mtimeMs });
+          }
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+      }
+    }
+    files.sort((a, b) => b.updatedAt - a.updatedAt || a.sessionId.localeCompare(b.sessionId));
+    const offset = Number(cursor || 0);
+    const sessions: NativeSessionSummary[] = [];
+    for (const file of files.slice(offset, offset + 50)) {
+      const summary = await readClaudeSessionSummary(file.path, file.sessionId);
+      if (summary) sessions.push(summary);
+    }
+    return { sessions, nextCursor: offset + 50 < files.length ? String(offset + 50) : null };
+  }
+
+  async getSessionInfo(sessionId: string): Promise<NativeSessionSummary | null> {
+    if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sessionId)) return null;
+    const path = await findSessionTranscript(this.projectsDir, sessionId + '.jsonl');
+    return path ? readClaudeSessionSummary(path, sessionId) : null;
+  }
+
+  async read(sessionId: string, maxBytes?: number): Promise<NativeHistory | null> {
     if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(sessionId)) return null;
     const cached = this.cache.get(sessionId);
     let path = cached?.path;
@@ -32,15 +80,71 @@ export class ClaudeHistoryReader {
     path ??= await findSessionTranscript(this.projectsDir, sessionId + '.jsonl') ?? undefined;
     if (!path) return null;
     info ??= await stat(path);
+    if (maxBytes !== undefined && info.size > maxBytes) throw new Error('native_session_too_large');
     const stamp = [info.size, info.mtimeMs, info.ctimeMs].join(':');
     // shortcut: JSONL has no process liveness signal; use recent writes until Claude exposes one.
     const withRecentActivity = (history: NativeHistory): NativeHistory => ({
       ...history, running: history.running && Date.now() - info.mtimeMs < 30_000,
     });
     if (cached?.path === path && cached.stamp === stamp) return withRecentActivity(cached.history);
-    const history = parseClaudeHistory(sessionId, await readFile(path, 'utf8'));
+    const source = maxBytes === undefined ? await readFile(path, 'utf8') : await readBoundedTranscript(path, maxBytes);
+    const history = parseClaudeHistory(sessionId, source);
     this.cache.set(sessionId, { path, stamp, history });
     return withRecentActivity(history);
+  }
+}
+
+async function readBoundedTranscript(path: string, limit: number): Promise<string> {
+  const handle = await open(path, 'r');
+  try {
+    if ((await handle.stat()).size > limit) throw new Error('native_session_too_large');
+    const buffer = Buffer.alloc(limit + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, length);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > limit) throw new Error('native_session_too_large');
+    return buffer.subarray(0, length).toString('utf8');
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readClaudeSessionSummary(path: string, sessionId: string): Promise<NativeSessionSummary | null> {
+  try {
+    const info = await stat(path);
+    if (!info.isFile() || info.size > MAX_NATIVE_SESSION_BYTES) return null;
+    const source = await readBoundedTranscript(path, MAX_NATIVE_SESSION_BYTES);
+    let workspaceDir: string | undefined;
+    let title: string | undefined;
+    let customTitle: string | undefined;
+    for (const line of source.slice(0, source.lastIndexOf('\n') + 1).split('\n')) {
+      if (!line.trim()) continue;
+      let entry;
+      try { entry = JSON.parse(line); } catch { continue; }
+      if (!entry || typeof entry !== 'object' || entry.isSidechain === true
+          || entry.sessionId && entry.sessionId !== sessionId) continue;
+      if (typeof entry.cwd === 'string' && entry.cwd.trim()) workspaceDir ??= entry.cwd;
+      if (entry.type === 'custom-title' && typeof entry.customTitle === 'string') customTitle = entry.customTitle;
+      if (!title && entry.type === 'user' && entry.isMeta !== true) {
+        const content = entry.message?.content;
+        const text = typeof content === 'string' ? content : Array.isArray(content)
+          ? content.filter(block => block?.type === 'text' && typeof block.text === 'string')
+            .map(block => block.text).join(' ') : '';
+        if (text.trim()) title = text;
+      }
+    }
+    if (!workspaceDir) return null;
+    return {
+      sessionId, engine: 'claude', workspaceDir, updatedAt: info.mtimeMs,
+      title: (customTitle?.trim() || title || 'Claude 会话').replace(/\s+/g, ' ').slice(0, 96),
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT'
+        || error instanceof Error && error.message === 'native_session_too_large') return null;
+    throw error;
   }
 }
 

@@ -23,6 +23,7 @@ Future<void> showSessionNavigator(
   required String? activeSessionId,
   required bool running,
   ValueChanged<SessionEngine>? onOpenDirectory,
+  VoidCallback? onSyncDesktop,
   ValueListenable<RemoteProjectCatalog?>? catalogListenable,
   ValueListenable<bool>? busyListenable,
   required ValueChanged<String> onSelect,
@@ -103,6 +104,12 @@ Future<void> showSessionNavigator(
                                 onOpenDirectory(engine);
                               },
                         onRename: onRename,
+                        onSyncDesktop: onSyncDesktop == null
+                            ? null
+                            : () {
+                                Navigator.pop(pageContext);
+                                onSyncDesktop();
+                              },
                         onArchive: onArchive,
                         onRestore: onRestore,
                         onPin: onPin,
@@ -139,6 +146,7 @@ class SessionRail extends StatelessWidget {
     required this.running,
     required this.onClose,
     this.onOpenDirectory,
+    this.onSyncDesktop,
     this.catalogListenable,
     this.busyListenable,
     required this.onSelect,
@@ -161,6 +169,7 @@ class SessionRail extends StatelessWidget {
   final String? activeSessionId;
   final bool running;
   final ValueChanged<SessionEngine>? onOpenDirectory;
+  final VoidCallback? onSyncDesktop;
   final ValueListenable<RemoteProjectCatalog?>? catalogListenable;
   final ValueListenable<bool>? busyListenable;
   final ValueChanged<String> onSelect;
@@ -208,6 +217,7 @@ class SessionRail extends StatelessWidget {
                 onSearchResult: onSearchResult,
                 onCreate: onCreate,
                 onOpenDirectory: onOpenDirectory,
+                onSyncDesktop: onSyncDesktop,
                 onRename: onRename,
                 onArchive: onArchive,
                 onRestore: onRestore,
@@ -241,6 +251,7 @@ class SessionNavigatorPage extends StatefulWidget {
     required this.onDelete,
     required this.onSearch,
     this.onOpenDirectory,
+    this.onSyncDesktop,
     this.busyListenable,
     this.onClose,
   });
@@ -261,6 +272,7 @@ class SessionNavigatorPage extends StatefulWidget {
   final Future<void> Function(String sessionId) onDelete;
   final SessionSearch onSearch;
   final ValueChanged<SessionEngine>? onOpenDirectory;
+  final VoidCallback? onSyncDesktop;
   final ValueListenable<bool>? busyListenable;
   final VoidCallback? onClose;
 
@@ -291,6 +303,36 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
   };
   final visibleCounts = <String, int>{};
   bool recentExpanded = false;
+  List<RemoteSessionSummary>? filteredSessions;
+  List<RemoteSessionSummary> pinnedSessions = [];
+  List<RemoteSessionSummary> unpinnedSessions = [];
+  Map<String, List<RemoteSessionSummary>> groupedSessions = {};
+  Set<String> sessionProjects = {};
+  Map<String, RemoteProjectSummary>? projectIndex;
+  Map<String, int>? unarchivedSessionCounts;
+
+  Map<String, RemoteProjectSummary> get projectsById => projectIndex ??= {
+    for (final project in widget.projects) project.id: project,
+  };
+
+  Map<String, int> get activeSessionCounts {
+    if (unarchivedSessionCounts != null) return unarchivedSessionCounts!;
+    final counts = <String, int>{};
+    for (final session in widget.sessions) {
+      if (!session.archived) {
+        counts[session.projectId] = (counts[session.projectId] ?? 0) + 1;
+      }
+    }
+    return unarchivedSessionCounts = counts;
+  }
+
+  @override
+  void didUpdateWidget(covariant SessionNavigatorPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    filteredSessions = null;
+    projectIndex = null;
+    unarchivedSessionCounts = null;
+  }
 
   bool get busy =>
       (widget.busyListenable?.value ?? widget.running) || mutatingId != null;
@@ -311,10 +353,8 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
     super.dispose();
   }
 
-  String projectName(String? id) => id == null
-      ? '所有项目'
-      : widget.projects.where((item) => item.id == id).firstOrNull?.name ??
-            '未知项目';
+  String projectName(String? id) =>
+      id == null ? '所有项目' : projectsById[id]?.name ?? '未知项目';
 
   void searchChanged(String value, {bool immediate = false}) {
     searchDebounce?.cancel();
@@ -363,6 +403,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
     setState(() {
       final previousProject = projectFilter;
       update();
+      filteredSessions = null;
       if (projectFilter != previousProject && projectFilter != null) {
         expandedProjects.add(projectFilter!);
       }
@@ -639,15 +680,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
       if (!mounted || title == null || title.trim().isEmpty) return;
     }
     if (action == _SessionAction.delete) {
-      final last =
-          !item.archived &&
-          widget.sessions
-                  .where(
-                    (other) =>
-                        other.projectId == item.projectId && !other.archived,
-                  )
-                  .length ==
-              1;
+      final last = !item.archived && activeSessionCounts[item.projectId] == 1;
       if (await confirmSessionDelete(context, item.title, lastSession: last) !=
               true ||
           !mounted) {
@@ -722,13 +755,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
   PopupMenuButton<_SessionAction> sessionMenu(RemoteSessionSummary item) {
     final palette = AppPalette.of(context);
     final canMutate = !busy && !item.running;
-    final canArchive =
-        widget.sessions
-            .where(
-              (other) => other.projectId == item.projectId && !other.archived,
-            )
-            .length >
-        1;
+    final canArchive = (activeSessionCounts[item.projectId] ?? 0) > 1;
     return PopupMenuButton<_SessionAction>(
       key: ValueKey('session-menu-${item.id}'),
       tooltip: '${item.title} 的更多操作',
@@ -965,19 +992,37 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
       );
 
   Widget sessionList() {
-    final sessions =
-        widget.sessions
-            .where(
-              (item) =>
-                  item.archived == showArchived &&
-                  (projectFilter == null || item.projectId == projectFilter) &&
-                  (engineFilter == null || item.engine == engineFilter),
-            )
-            .toList()
-          ..sort((a, b) {
-            final order = b.updatedAt.compareTo(a.updatedAt);
-            return order != 0 ? order : a.id.compareTo(b.id);
-          });
+    if (filteredSessions == null) {
+      final sessions =
+          widget.sessions
+              .where(
+                (item) =>
+                    item.archived == showArchived &&
+                    (projectFilter == null ||
+                        item.projectId == projectFilter) &&
+                    (engineFilter == null || item.engine == engineFilter),
+              )
+              .toList()
+            ..sort((a, b) {
+              final order = b.updatedAt.compareTo(a.updatedAt);
+              return order != 0 ? order : a.id.compareTo(b.id);
+            });
+      filteredSessions = sessions;
+      pinnedSessions = [];
+      unpinnedSessions = [];
+      groupedSessions = {};
+      sessionProjects = {};
+      for (final item in sessions) {
+        sessionProjects.add(item.projectId);
+        if (item.pinned) {
+          pinnedSessions.add(item);
+        } else {
+          unpinnedSessions.add(item);
+          (groupedSessions[item.projectId] ??= []).add(item);
+        }
+      }
+    }
+    final sessions = filteredSessions!;
     if (sessions.isEmpty &&
         (showArchived ||
             projectFilter != null ||
@@ -993,26 +1038,32 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
         clear: projectFilter != null || engineFilter != null,
       );
     }
-    final rows = <Widget>[];
+    final rows = <Widget Function()>[];
     if (showArchived) {
-      rows.add(sectionTitle('已归档', icon: LucideIcons.archive));
-      rows.addAll(sessions.map((item) => sessionRow(item)));
+      rows.add(() => sectionTitle('已归档', icon: LucideIcons.archive));
+      rows.addAll(
+        sessions.map(
+          (item) =>
+              () => sessionRow(item),
+        ),
+      );
     } else {
-      final pinned = sessions.where((item) => item.pinned);
+      final pinned = pinnedSessions;
       if (pinned.isNotEmpty) {
-        rows.add(sectionTitle('置顶', icon: LucideIcons.pin));
-        rows.addAll(pinned.map((item) => sessionRow(item)));
+        rows.add(() => sectionTitle('置顶', icon: LucideIcons.pin));
+        rows.addAll(
+          pinned.map(
+            (item) =>
+                () => sessionRow(item),
+          ),
+        );
       }
-      final unpinned = sessions.where((item) => !item.pinned).toList();
-      final grouped = <String, List<RemoteSessionSummary>>{};
-      for (final item in unpinned) {
-        (grouped[item.projectId] ??= []).add(item);
-      }
+      final unpinned = unpinnedSessions;
+      final grouped = groupedSessions;
       final projectIds = {
         for (final project in widget.projects)
           if ((projectFilter == null || project.id == projectFilter) &&
-              (engineFilter == null ||
-                  sessions.any((item) => item.projectId == project.id)))
+              (engineFilter == null || sessionProjects.contains(project.id)))
             project.id,
         for (final item in sessions) item.projectId,
       };
@@ -1026,11 +1077,14 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
         rows.addAll(
           items
               .take(count)
-              .map((item) => sessionRow(item, nested: nested, recent: recent)),
+              .map(
+                (item) =>
+                    () => sessionRow(item, nested: nested, recent: recent),
+              ),
         );
         if (items.length > count) {
           rows.add(
-            Align(
+            () => Align(
               alignment: Alignment.centerLeft,
               child: Padding(
                 padding: EdgeInsets.only(left: nested ? 32 : 0),
@@ -1055,22 +1109,17 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
       }
 
       if (projectIds.isNotEmpty) {
-        rows.add(sectionTitle('项目', icon: LucideIcons.folders));
+        rows.add(() => sectionTitle('项目', icon: LucideIcons.folders));
       }
       for (final id in projectIds) {
         final expanded = expandedProjects.contains(id);
         final items = grouped[id] ?? const <RemoteSessionSummary>[];
         rows.add(
-          Semantics(
+          () => Semantics(
             button: true,
             value: expanded ? '已展开' : '已收起',
             child: Tooltip(
-              message:
-                  widget.projects
-                      .where((project) => project.id == id)
-                      .firstOrNull
-                      ?.path ??
-                  projectName(id),
+              message: projectsById[id]?.path ?? projectName(id),
               child: InkWell(
                 key: ValueKey('session-project-$id'),
                 borderRadius: BorderRadius.circular(AppRadii.control),
@@ -1138,7 +1187,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
         if (expanded) {
           if (items.isEmpty) {
             rows.add(
-              Padding(
+              () => Padding(
                 padding: const EdgeInsets.fromLTRB(44, 8, 12, 12),
                 child: Text(
                   sessions.any((item) => item.projectId == id)
@@ -1157,7 +1206,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
         }
       }
       rows.add(
-        Padding(
+        () => Padding(
           padding: const EdgeInsets.only(top: 16),
           child: Semantics(
             button: true,
@@ -1217,7 +1266,7 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
         addSessions(unpinned, 'recent', recent: true);
         if (unpinned.isEmpty) {
           rows.add(
-            Padding(
+            () => Padding(
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
               child: Text(
                 '暂无未置顶的会话',
@@ -1231,13 +1280,14 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
         }
       }
     }
-    return ListView(
+    return ListView.builder(
       key: PageStorageKey(
         'session-list-$showArchived-$projectFilter-$engineFilter',
       ),
       padding: const EdgeInsets.only(bottom: 20),
       keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
-      children: rows,
+      itemCount: rows.length,
+      itemBuilder: (_, index) => rows[index](),
     );
   }
 
@@ -1406,6 +1456,18 @@ class _SessionNavigatorPageState extends State<SessionNavigatorPage> {
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
                       const SizedBox(height: 8),
+                      if (widget.onSyncDesktop != null) ...[
+                        OutlinedButton.icon(
+                          key: const ValueKey('open-native-session-picker'),
+                          onPressed: busy ? null : widget.onSyncDesktop,
+                          icon: const Icon(
+                            LucideIcons.refreshCw,
+                            size: AppIconSizes.control,
+                          ),
+                          label: const Text('同步电脑会话'),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
                       TextField(
                         key: const ValueKey('session-search-field'),
                         controller: searchController,

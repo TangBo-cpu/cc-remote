@@ -1,5 +1,16 @@
 import { createHash } from 'node:crypto';
 import type { TranscriptMessage } from './transcriptState.js';
+import type { AgentEngine } from './engineBridge.js';
+
+export const MAX_NATIVE_SESSION_BYTES = 2 * 1024 * 1024;
+
+export type NativeSessionSummary = {
+  sessionId: string;
+  engine: AgentEngine;
+  title: string;
+  workspaceDir: string;
+  updatedAt: number;
+};
 
 export type NativeMessage = {
   id: string;

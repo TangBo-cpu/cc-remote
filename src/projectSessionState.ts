@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { createTranscriptState, type TranscriptSummary, type TranscriptState } from './transcriptState.js';
 import { isAgentEngine, type AgentEngine } from './engineBridge.js';
 import { canonicalDirectory } from './directoryService.js';
+import type { NativeHistory, NativeSessionSummary } from './nativeHistory.js';
 
 const SCHEMA_VERSION = 1;
 
@@ -86,6 +87,7 @@ export type ProjectSessionState = {
   registerProject(path: string, name?: string): Promise<ProjectSessionCatalog>;
   createSession(projectId: string, title?: string, engine?: AgentEngine): Promise<SessionContext>;
   createSessionAtDirectory(path: unknown, engine: AgentEngine): Promise<SessionContext>;
+  importNativeSession(session: NativeSessionSummary, history: NativeHistory): Promise<SessionContext>;
   selectSession(sessionId: string): Promise<SessionContext>;
   setSessionTitleFromPrompt(sessionId: string, prompt: string): Promise<void>;
   setSessionTitle(sessionId: string, title: string): Promise<SessionContext>;
@@ -360,6 +362,62 @@ export async function createProjectSessionState(options: {
       const transcriptPath = join(sessionsDir, `${session.id}.json`);
       try {
         const transcript = await createTranscriptState(transcriptPath);
+        await transcript.flush();
+        await saveCatalog(next);
+        transcripts.set(session.id, transcript);
+        catalog = next;
+        return { project, session, transcript };
+      } catch (error) {
+        saveQueue = saveQueue.catch(() => undefined);
+        await rm(transcriptPath, { force: true }).catch(() => undefined);
+        throw error;
+      }
+    },
+
+    async importNativeSession(native, history): Promise<SessionContext> {
+      if (!isAgentEngine(native.engine) || !native.sessionId || native.sessionId !== history.sessionId) {
+        throw new Error('native_history_invalid');
+      }
+      if (current().transcript.summary().running) throw new Error('claude_is_busy');
+      const existing = catalog.sessions.find(session => session.engine === native.engine
+        && transcripts.get(session.id)?.summary().engineSessionId === native.sessionId);
+      if (existing) {
+        const context = getSessionContext(existing.id)!;
+        if (context.transcript.summary().running) throw new Error('claude_is_busy');
+        await context.transcript.importNativeHistory(history);
+        const next = structuredClone(catalog);
+        delete next.sessions.find(session => session.id === existing.id)!.archivedAt;
+        next.activeProjectId = existing.projectId;
+        next.activeSessionId = existing.id;
+        await saveCatalog(next);
+        catalog = next;
+        return getSessionContext(existing.id)!;
+      }
+      const path = await canonicalDirectory(native.workspaceDir);
+      const next = structuredClone(catalog);
+      let project = next.projects.find(project => samePath(project.path, path));
+      if (!project) {
+        for (const candidate of next.projects) {
+          const actual = await realpath(candidate.path).catch(() => undefined);
+          if (actual && samePath(actual, path)) { project = candidate; break; }
+        }
+      }
+      project ??= newProject(path);
+      if (!next.projects.includes(project)) next.projects.push(project);
+      const now = Date.now();
+      const session: StoredSession = {
+        id: randomUUID(), projectId: project.id, engine: native.engine,
+        title: cleanName(native.title) || '电脑会话', createdAt: now, updatedAt: now,
+      };
+      next.sessions.push(session);
+      next.activeProjectId = project.id;
+      next.activeSessionId = session.id;
+      project.updatedAt = now;
+      const transcriptPath = join(sessionsDir, `${session.id}.json`);
+      try {
+        const transcript = await createTranscriptState(transcriptPath);
+        transcript.setEngineSessionId(native.sessionId);
+        await transcript.importNativeHistory(history);
         await transcript.flush();
         await saveCatalog(next);
         transcripts.set(session.id, transcript);

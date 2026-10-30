@@ -23,6 +23,10 @@ class _WorkspaceDiffViewState extends State<WorkspaceDiffView> {
   double fontSize = 13;
   double? contentWidth;
   double? numberWidth;
+  int measurementGeneration = 0;
+  int? scheduledMeasurement;
+  int measuredLines = 0;
+  double widestLine = 0;
 
   @override
   void initState() {
@@ -46,6 +50,10 @@ class _WorkspaceDiffViewState extends State<WorkspaceDiffView> {
   }
 
   void resetMeasurements() {
+    measurementGeneration++;
+    scheduledMeasurement = null;
+    measuredLines = 0;
+    widestLine = 0;
     contentWidth = null;
     numberWidth = null;
   }
@@ -68,32 +76,68 @@ class _WorkspaceDiffViewState extends State<WorkspaceDiffView> {
   );
 
   void measureColumns(TextStyle style, TextScaler scaler) {
-    if (numberWidth != null && (wrapLines || contentWidth != null)) return;
+    if (numberWidth == null) {
+      final painter = TextPainter(
+        textDirection: TextDirection.ltr,
+        textScaler: scaler,
+      );
+      try {
+        final maxNumber = lines.fold<int>(
+          1,
+          (value, line) => math.max(
+            value,
+            math.max(line.oldNumber ?? 0, line.newNumber ?? 0),
+          ),
+        );
+        painter.text = TextSpan(text: maxNumber.toString(), style: style);
+        painter.layout();
+        numberWidth = math.max(24, painter.width.ceilToDouble() + 12);
+      } finally {
+        painter.dispose();
+      }
+    }
+    contentWidth ??= 0;
+    if (wrapLines ||
+        measuredLines == lines.length ||
+        scheduledMeasurement == measurementGeneration) {
+      return;
+    }
+    final generation = measurementGeneration;
+    scheduledMeasurement = generation;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != measurementGeneration) return;
+      scheduledMeasurement = null;
+      if (wrapLines) return;
+      measureNextLines(style, scaler);
+    });
+    WidgetsBinding.instance.scheduleFrame();
+  }
+
+  void measureNextLines(TextStyle style, TextScaler scaler) {
+    final budget = Stopwatch()..start();
     final painter = TextPainter(
       textDirection: TextDirection.ltr,
       textScaler: scaler,
     );
     try {
-      final maxNumber = lines.fold<int>(
-        1,
-        (value, line) =>
-            math.max(value, math.max(line.oldNumber ?? 0, line.newNumber ?? 0)),
-      );
-      painter.text = TextSpan(text: maxNumber.toString(), style: style);
-      painter.layout();
-      numberWidth = math.max(24, painter.width.ceilToDouble() + 12);
-      if (!wrapLines && contentWidth == null) {
-        var widest = 0.0;
-        for (final line in lines) {
-          painter.text = TextSpan(text: line.text, style: style);
-          painter.layout();
-          widest = math.max(widest, painter.width);
-        }
-        contentWidth = widest.ceilToDouble() + 1;
+      var count = 0;
+      while (measuredLines < lines.length &&
+          count < 64 &&
+          (count == 0 || budget.elapsedMicroseconds < 2000)) {
+        painter.text = TextSpan(
+          text: lines[measuredLines++].text,
+          style: style,
+        );
+        painter.layout();
+        widestLine = math.max(widestLine, painter.width);
+        count++;
       }
+      final width = widestLine.ceilToDouble() + 1;
+      if (width != contentWidth) setState(() => contentWidth = width);
     } finally {
       painter.dispose();
     }
+    if (measuredLines < lines.length) measureColumns(style, scaler);
   }
 
   @override

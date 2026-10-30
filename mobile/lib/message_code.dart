@@ -1,7 +1,18 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:highlight/highlight.dart' as hl;
 
 import 'signal_console_theme.dart';
+
+List<hl.Node>? _highlightCode(({String code, String language}) input) {
+  try {
+    return hl.highlight.parse(input.code, language: input.language).nodes;
+  } catch (_) {
+    return null;
+  }
+}
 
 class MessageCodeText extends StatefulWidget {
   const MessageCodeText({
@@ -24,15 +35,57 @@ class MessageCodeText extends StatefulWidget {
 }
 
 class _MessageCodeTextState extends State<MessageCodeText> {
-  late List<hl.Node>? nodes = parseCode();
+  static const backgroundHighlightThreshold = 8000;
+  List<hl.Node>? nodes;
+  List<InlineSpan>? spans;
+  AppPalette? spanPalette;
+  int parseGeneration = 0;
+  bool parsing = false;
 
-  List<hl.Node>? parseCode() {
+  @override
+  void initState() {
+    super.initState();
+    parseCode();
+  }
+
+  void parseCode() {
+    parseGeneration++;
+    nodes = null;
+    spans = null;
     final language = widget.language?.trim().toLowerCase();
-    if (language == null || language.isEmpty) return null;
+    if (language == null || language.isEmpty) return;
+    if (widget.code.length < backgroundHighlightThreshold) {
+      nodes = _highlightCode((code: widget.code, language: language));
+    } else {
+      unawaited(highlightInBackground());
+    }
+  }
+
+  Future<void> highlightInBackground() async {
+    if (parsing) return;
+    parsing = true;
     try {
-      return hl.highlight.parse(widget.code, language: language).nodes;
+      while (mounted && widget.code.length >= backgroundHighlightThreshold) {
+        final language = widget.language?.trim().toLowerCase();
+        if (language == null || language.isEmpty) return;
+        final generation = parseGeneration;
+        final result = await compute(_highlightCode, (
+          code: widget.code,
+          language: language,
+        ), debugLabel: 'code highlighting');
+        if (!mounted) return;
+        // Only the latest text may replace the plain-text fallback.
+        if (generation != parseGeneration) continue;
+        setState(() {
+          nodes = result;
+          spans = null;
+        });
+        return;
+      }
     } catch (_) {
-      return null;
+      // Keep the code readable if the worker cannot finish.
+    } finally {
+      parsing = false;
     }
   }
 
@@ -41,7 +94,7 @@ class _MessageCodeTextState extends State<MessageCodeText> {
     super.didUpdateWidget(oldWidget);
     if (widget.code != oldWidget.code ||
         widget.language != oldWidget.language) {
-      nodes = parseCode();
+      parseCode();
     }
   }
 
@@ -93,13 +146,14 @@ class _MessageCodeTextState extends State<MessageCodeText> {
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
+    if (nodes != null && (spans == null || spanPalette != palette)) {
+      spans = nodes!
+          .map((node) => tokenSpan(node, palette))
+          .toList(growable: false);
+      spanPalette = palette;
+    }
     return Text.rich(
-      TextSpan(
-        text: nodes == null ? widget.code : null,
-        children: nodes
-            ?.map((node) => tokenSpan(node, palette))
-            .toList(growable: false),
-      ),
+      TextSpan(text: nodes == null ? widget.code : null, children: spans),
       key: widget.textKey,
       style: widget.style,
       softWrap: widget.softWrap,

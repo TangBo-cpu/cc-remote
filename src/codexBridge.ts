@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
-import type { NativeHistory, NativeMessage } from './nativeHistory.js';
+import { stat } from 'node:fs/promises';
+import { MAX_NATIVE_SESSION_BYTES, type NativeHistory, type NativeMessage, type NativeSessionSummary } from './nativeHistory.js';
 import {
   normalizeCodexSandboxMode,
   normalizeEngineEffort,
@@ -80,11 +81,45 @@ export class CodexBridge implements EngineBridge {
     return false;
   }
 
-  async readHistory(sessionId: string): Promise<NativeHistory> {
+  async listSessions(cursor?: string): Promise<{ sessions: NativeSessionSummary[]; nextCursor: string | null }> {
+    const state = await this.ensureProcess();
+    const page = await this.request(state, 'thread/list', {
+      limit: 50, sortKey: 'updated_at', sourceKinds: ['cli', 'vscode', 'appServer', 'exec'], archived: false,
+      ...(cursor ? { cursor } : {}),
+    }, 10_000);
+    if (!isRecord(page) || !Array.isArray(page.data)
+        || (page.nextCursor != null && typeof page.nextCursor !== 'string')
+        || (cursor && page.nextCursor === cursor)) throw new Error('native_session_list_invalid');
+    const sessions: NativeSessionSummary[] = [];
+    for (const thread of page.data) {
+      if (isRecord(thread) && isRecord(thread.source) && 'subAgent' in thread.source) continue;
+      try {
+        const summary = await codexSessionSummary(thread);
+        if (summary) sessions.push(summary);
+      } catch (error) {
+        if (!(error instanceof Error && error.message === 'native_session_too_large')) throw error;
+      }
+    }
+    return { sessions, nextCursor: typeof page.nextCursor === 'string' && page.nextCursor ? page.nextCursor : null };
+  }
+
+  async getSessionInfo(sessionId: string): Promise<NativeSessionSummary | null> {
+    const state = await this.ensureProcess();
+    const result = await this.request(state, 'thread/read', { threadId: sessionId }, 5_000);
+    const summary = await codexSessionSummary(isRecord(result) ? result.thread : undefined);
+    if (summary && summary.sessionId !== sessionId) throw new Error('native_history_invalid');
+    return summary;
+  }
+
+  async readHistory(sessionId: string, maxBytes?: number): Promise<NativeHistory> {
     const state = await this.ensureProcess();
     const read = await this.request(state, 'thread/read', { threadId: sessionId }, 5_000);
     const thread = isRecord(read) && isRecord(read.thread) ? read.thread : undefined;
     if (!thread || thread.id !== sessionId) throw new Error('native_history_invalid');
+    if (maxBytes !== undefined) {
+      if (!stringValue(thread.path)) throw new Error('native_session_not_found');
+      if ((await stat(thread.path as string)).size > maxBytes) throw new Error('native_session_too_large');
+    }
     let turns: unknown[];
     try {
       turns = await this.readHistoryPages(state, 'thread/turns/list', {
@@ -790,6 +825,24 @@ function tokenValue(value: unknown): number {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+async function codexSessionSummary(thread: unknown): Promise<NativeSessionSummary | null> {
+  if (!isRecord(thread) || !stringValue(thread.id) || !stringValue(thread.cwd)
+      || !stringValue(thread.path) || typeof thread.updatedAt !== 'number' || !Number.isFinite(thread.updatedAt)) return null;
+  let info;
+  try { info = await stat(thread.path as string); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  if (!info.isFile()) return null;
+  if (info.size > MAX_NATIVE_SESSION_BYTES) throw new Error('native_session_too_large');
+  return {
+    sessionId: thread.id as string, engine: 'codex', workspaceDir: thread.cwd as string,
+    title: (stringValue(thread.name) || stringValue(thread.preview) || 'Codex 会话').replace(/\s+/g, ' ').slice(0, 96),
+    updatedAt: thread.updatedAt * 1000,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

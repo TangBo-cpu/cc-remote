@@ -26,10 +26,12 @@ import 'codex_model_picker.dart';
 import 'appearance_preference.dart';
 import 'data/api_client.dart';
 import 'data/directory_api.dart';
+import 'data/native_session_api.dart';
 import 'data/permission_mode.dart';
 import 'data/remote_models.dart';
 import 'data/websocket_client.dart';
 import 'directory_picker.dart';
+import 'native_session_picker.dart';
 import 'effort_gauge.dart';
 import 'effort_preference.dart';
 import 'model_preference.dart';
@@ -52,6 +54,12 @@ export 'thinking_block.dart';
 
 part 'device_manager.dart';
 part 'session_navigator.dart';
+
+typedef ChatSessionInfo = ({
+  String? modelName,
+  int? contextWindow,
+  int? remainingContext,
+});
 
 void main() {
   const isPreview = bool.fromEnvironment('CC_REMOTE_PREVIEW');
@@ -302,9 +310,29 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       const RemoteConnectionSnapshot.idle();
   String? pausedQrRaw;
   String? pairError;
-  String? modelName;
-  int? contextWindow;
-  int? remainingContext;
+  final sessionInfo = ValueNotifier<ChatSessionInfo>((
+    modelName: null,
+    contextWindow: null,
+    remainingContext: null,
+  ));
+  String? get modelName => sessionInfo.value.modelName;
+  set modelName(String? value) => sessionInfo.value = (
+    modelName: value,
+    contextWindow: contextWindow,
+    remainingContext: remainingContext,
+  );
+  int? get contextWindow => sessionInfo.value.contextWindow;
+  set contextWindow(int? value) => sessionInfo.value = (
+    modelName: modelName,
+    contextWindow: value,
+    remainingContext: remainingContext,
+  );
+  int? get remainingContext => sessionInfo.value.remainingContext;
+  set remainingContext(int? value) => sessionInfo.value = (
+    modelName: modelName,
+    contextWindow: contextWindow,
+    remainingContext: value,
+  );
   String? activeProjectId;
   String? activeSessionId;
   String? activeRunId;
@@ -341,6 +369,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final List<TranscriptMessage> messages = [];
   final TranscriptMotion transcriptMotion = TranscriptMotion();
   final ValueNotifier<int> transcriptRevision = ValueNotifier(0);
+  Timer? activityRefreshTimer;
   final ValueNotifier<bool> directoryBusy = ValueNotifier(false);
   final ValueNotifier<RemoteProjectCatalog?> sessionCatalog = ValueNotifier(
     null,
@@ -452,6 +481,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     apiClient.close();
     promptController.dispose();
     transcriptRevision.dispose();
+    sessionInfo.dispose();
+    activityRefreshTimer?.cancel();
     directoryBusy.dispose();
     sessionCatalog.dispose();
     super.dispose();
@@ -1482,18 +1513,20 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           commandsFailed = decoded['error'] != null;
         });
       case 'session_info':
-        setState(() {
-          modelName = decoded['model'] as String?;
-          contextWindow = (decoded['contextWindow'] as num?)?.toInt();
-          remainingContext = (decoded['remainingTokens'] as num?)?.toInt();
-        });
+        sessionInfo.value = (
+          modelName: decoded['model'] as String?,
+          contextWindow: (decoded['contextWindow'] as num?)?.toInt(),
+          remainingContext: (decoded['remainingTokens'] as num?)?.toInt(),
+        );
         scheduleStreamPersist();
       case 'activity':
         final activity = RemoteActivity.tryParse(decoded);
-        if (activity == null) return;
-        setState(() {
-          mergeRemoteActivity(messages, activity);
-        });
+        if (activity == null || activity.kind == ActivityKind.summary) return;
+        mergeRemoteActivity(messages, activity);
+        activityRefreshTimer ??= Timer(
+          streamTextBatchInterval,
+          notifyTranscriptChanged,
+        );
         scheduleStreamPersist();
       case 'done':
         final failed = currentRunFailed;
@@ -1662,6 +1695,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   void flushStreamTextBatch() {
+    if (activityRefreshTimer != null) notifyTranscriptChanged();
     streamTextFlushTimer?.cancel();
     streamTextFlushTimer = null;
     final text = pendingAssistantText;
@@ -1678,6 +1712,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   void clearStreamTextBatch({required bool apply}) {
+    activityRefreshTimer?.cancel();
+    activityRefreshTimer = null;
     streamTextFlushTimer?.cancel();
     streamTextFlushTimer = null;
     if (apply && pendingAssistantText.isNotEmpty) {
@@ -1749,8 +1785,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       messages.add(message);
       if (canAnimateLiveFeedback) transcriptMotion.recordMessage(message);
     }
-    transcriptRevision.value++;
+    notifyTranscriptChanged();
     if (persist) persistTranscriptSnapshotLater();
+  }
+
+  void notifyTranscriptChanged() {
+    activityRefreshTimer?.cancel();
+    activityRefreshTimer = null;
+    if (mounted) transcriptRevision.value++;
   }
 
   Future<void> sendPrompt() async {
@@ -2428,6 +2470,69 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     sessionCatalog.value = catalog;
   }
 
+  Future<void> openNativeSessionPicker() async {
+    final current = session;
+    if (current == null) return;
+    final api = NativeSessionApi(
+      client: apiClient,
+      origin: current.origin,
+      token: current.token,
+    );
+    Future<T> request<T>(Future<T> Function() operation) async {
+      if (!isCurrentConnection(current)) {
+        throw const NativeSessionException('connection_changed');
+      }
+      try {
+        final result = await operation();
+        if (!isCurrentConnection(current)) {
+          throw const NativeSessionException('connection_changed');
+        }
+        return result;
+      } on NativeSessionException catch (failure) {
+        if (!mounted) rethrow;
+        if (failure.statusCode == 401 && isCurrentConnection(current)) {
+          Navigator.of(context).popUntil((route) => route.isFirst);
+          await recoverUnauthorizedSession();
+        }
+        rethrow;
+      }
+    }
+
+    directoryBusy.value = directorySwitchBlocked;
+    await Navigator.of(context).push<void>(
+      AppMaterialPageRoute<void>(
+        reduceMotion: MediaQuery.disableAnimationsOf(context),
+        builder: (_) => NativeSessionPickerPage(
+          initialEngine: activeSessionEngine,
+          busyListenable: directoryBusy,
+          onList: (engine, cursor) => request(() => api.list(engine, cursor)),
+          onSync: (target) async {
+            if (directorySwitchBlocked) {
+              throw const NativeSessionException('claude_is_busy');
+            }
+            final previousSessionId = activeSessionId;
+            final result = await request(() => api.sync(target));
+            if (activeSessionId != previousSessionId &&
+                activeSessionId != result.catalog.activeSessionId) {
+              throw const NativeSessionException('connection_changed');
+            }
+            setState(() {
+              if (previousSessionId != result.catalog.activeSessionId) {
+                resetSessionOnlyEffort();
+              }
+              clearSessionPeek();
+              transcriptJumpRequest = null;
+              applyCatalog(result.catalog);
+            });
+            handleWsMessage(jsonEncode(result.transcript));
+            if (session != null) await tokenStore.save(session!);
+            persistTranscriptSnapshotLater();
+          },
+        ),
+      ),
+    );
+  }
+
   Future<void> openDirectoryPicker({SessionEngine? initialEngine}) async {
     final current = session;
     if (current == null) return;
@@ -2507,6 +2612,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       catalogListenable: sessionCatalog,
       busyListenable: directoryBusy,
       onSelect: selectRemoteSession,
+      onSyncDesktop: widget.demoMode
+          ? null
+          : () => unawaited(openNativeSessionPicker()),
       onOpenDirectory: widget.demoMode
           ? null
           : (engine) => unawaited(openDirectoryPicker(initialEngine: engine)),
@@ -2540,6 +2648,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       catalogListenable: sessionCatalog,
       busyListenable: directoryBusy,
       onSelect: selectRemoteSession,
+      onSyncDesktop: widget.demoMode
+          ? null
+          : () => unawaited(openNativeSessionPicker()),
       onOpenDirectory: widget.demoMode
           ? null
           : (engine) => unawaited(openDirectoryPicker(initialEngine: engine)),
@@ -3250,6 +3361,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         transcriptMotion: transcriptMotion,
         completionEvent: transcriptMotion.completionEvent,
         transcriptRevisionListenable: transcriptRevision,
+        sessionInfoListenable: sessionInfo,
         transcriptJumpRequest: transcriptJumpRequest,
         readingFontScaleListenable: widget.readingFontScaleListenable,
         commands: commands,
@@ -4501,6 +4613,7 @@ class ChatScreen extends StatelessWidget {
     this.transcriptMotion,
     this.completionEvent,
     this.transcriptRevisionListenable,
+    this.sessionInfoListenable,
     this.transcriptJumpRequest,
     this.readingFontScaleListenable,
     required this.commands,
@@ -4562,6 +4675,7 @@ class ChatScreen extends StatelessWidget {
   final TranscriptMotion? transcriptMotion;
   final Object? completionEvent;
   final ValueListenable<int>? transcriptRevisionListenable;
+  final ValueListenable<ChatSessionInfo>? sessionInfoListenable;
   final ValueListenable<double>? readingFontScaleListenable;
 
   // ponytail: static fallback so tests without a listening shell skip wiring
@@ -4627,49 +4741,65 @@ class ChatScreen extends StatelessWidget {
         promptController.text.trim().isEmpty;
     final media = MediaQuery.of(context);
 
+    Widget withSessionInfo(Widget Function(ChatSessionInfo) builder) {
+      final listenable = sessionInfoListenable;
+      return listenable == null
+          ? builder((
+              modelName: modelName,
+              contextWindow: contextWindow,
+              remainingContext: remainingContext,
+            ))
+          : ValueListenableBuilder<ChatSessionInfo>(
+              valueListenable: listenable,
+              builder: (_, info, _) => builder(info),
+            );
+    }
+
     final header = RepaintBoundary(
-      child: ConnectionHeader(
-        session: session,
-        running: running,
-        stopping: stopping,
-        uploadingAttachments: uploadingAttachments,
-        connected: connected,
-        offline: offline,
-        modelName: modelName,
-        contextWindow: contextWindow,
-        remainingContext: remainingContext,
-        presentation: presentation,
-        notification: peeking
-            ? null
-            : RecoveryStatePanel(
-                key: ValueKey(activeSessionId),
-                presentation: presentation,
-                completionEvent: completionEvent,
-                hostLabel: session?.deviceName,
-                failureDetail: evidence.failureDetail,
-                failureKey: (
-                  activeSessionId,
-                  messages.lastIndexWhere(
-                    (message) => message.role == MessageRole.user,
+      child: withSessionInfo(
+        (info) => ConnectionHeader(
+          session: session,
+          running: running,
+          stopping: stopping,
+          uploadingAttachments: uploadingAttachments,
+          connected: connected,
+          offline: offline,
+          modelName: info.modelName,
+          contextWindow: info.contextWindow,
+          remainingContext: info.remainingContext,
+          presentation: presentation,
+          notification: peeking
+              ? null
+              : RecoveryStatePanel(
+                  key: ValueKey(activeSessionId),
+                  presentation: presentation,
+                  completionEvent: completionEvent,
+                  hostLabel: session?.deviceName,
+                  failureDetail: evidence.failureDetail,
+                  failureKey: (
+                    activeSessionId,
+                    messages.lastIndexWhere(
+                      (message) => message.role == MessageRole.user,
+                    ),
                   ),
+                  reconnectSnapshot: reconnectSnapshot,
+                  hasTranscript: messages.isNotEmpty,
+                  hasDraft:
+                      promptController.text.trim().isNotEmpty ||
+                      pendingAttachments.isNotEmpty,
+                  onReconnect: onReconnect,
+                  onStop: onStop,
+                  onOpenWorkspace: onOpenWorkspace,
+                  onEditPreviousPrompt: canRestorePreviousPrompt
+                      ? () => onFillPrompt(previousPrompt)
+                      : null,
                 ),
-                reconnectSnapshot: reconnectSnapshot,
-                hasTranscript: messages.isNotEmpty,
-                hasDraft:
-                    promptController.text.trim().isNotEmpty ||
-                    pendingAttachments.isNotEmpty,
-                onReconnect: onReconnect,
-                onStop: onStop,
-                onOpenWorkspace: onOpenWorkspace,
-                onEditPreviousPrompt: canRestorePreviousPrompt
-                    ? () => onFillPrompt(previousPrompt)
-                    : null,
-              ),
-        onReconnect: onReconnect,
-        onOpenSettings: onOpenSettings,
-        onNewConversation: onNewConversation,
-        onOpenSessions: onOpenSessions,
-        onOpenWorkspace: onOpenWorkspace,
+          onReconnect: onReconnect,
+          onOpenSettings: onOpenSettings,
+          onNewConversation: onNewConversation,
+          onOpenSessions: onOpenSessions,
+          onOpenWorkspace: onOpenWorkspace,
+        ),
       ),
     );
     Widget buildTranscriptView(
@@ -4702,7 +4832,7 @@ class ChatScreen extends StatelessWidget {
       onOpenWorkspaceChanges: peeking ? null : onOpenWorkspaceChanges,
     );
     Widget buildTranscript(double topPadding) {
-      // Text notifications change only the trailing assistant message.
+      // Stream notifications change only the current turn.
       final initialRevision = transcriptRevisionListenable?.value;
       return RepaintBoundary(
         child: WorkspacePortal(
@@ -4795,54 +4925,57 @@ class ChatScreen extends StatelessWidget {
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 760),
                         child: peeking
-                          ? SessionPeekDock(
-                              peek: peek!,
-                              onReturn: onExitPeek ?? () {},
-                              onStop: peek!.liveRunning ? onStop : null,
-                            )
-                          : PromptBar(
-                              controller: promptController,
-                              attachments: pendingAttachments,
-                              commands: commands,
-                              commandsLoading: commandsLoading,
-                              commandsFailed: commandsFailed,
-                              onRefreshCommands: onRefreshCommands,
-                              running: running,
-                              stopping: stopping,
-                              uploading: uploadingAttachments,
-                              connected: connected,
-                              offline: offline,
-                              permissionMode: permissionMode,
-                              allowBypassPermissions: allowBypassPermissions,
-                              modelName: modelName,
-                              contextWindow: contextWindow,
-                              remainingContext: remainingContext,
-                              engine: engine,
-                              selectedModel: selectedModel,
-                              selectedCodexModel: selectedCodexModel,
-                              selectedEffort: selectedEffort,
-                              codexSandboxMode: codexSandboxMode,
-                              presentation: presentation,
-                              queuedPreview: queuedPreview,
-                              onCancelQueue: onCancelQueue,
-                              onPermissionModeSelected:
-                                  onPermissionModeSelected,
-                              onCodexSandboxModeSelected:
-                                  onCodexSandboxModeSelected,
-                              onCommandSelected: (command) =>
-                                  onFillPrompt('/$command '),
-                              onAddAttachment: onAddAttachment,
-                              onRemoveAttachment: onRemoveAttachment,
-                              onModelPressed: onOpenModelPicker,
-                              onEffortSelected: onEffortSelected,
-                              onReconnect: onReconnect,
-                              onSend: onSend,
-                              onStop: onStop,
-                            ),
-                          ),
-                        ),
+                            ? SessionPeekDock(
+                                peek: peek!,
+                                onReturn: onExitPeek ?? () {},
+                                onStop: peek!.liveRunning ? onStop : null,
+                              )
+                            : withSessionInfo(
+                                (info) => PromptBar(
+                                  controller: promptController,
+                                  attachments: pendingAttachments,
+                                  commands: commands,
+                                  commandsLoading: commandsLoading,
+                                  commandsFailed: commandsFailed,
+                                  onRefreshCommands: onRefreshCommands,
+                                  running: running,
+                                  stopping: stopping,
+                                  uploading: uploadingAttachments,
+                                  connected: connected,
+                                  offline: offline,
+                                  permissionMode: permissionMode,
+                                  allowBypassPermissions:
+                                      allowBypassPermissions,
+                                  modelName: info.modelName,
+                                  contextWindow: info.contextWindow,
+                                  remainingContext: info.remainingContext,
+                                  engine: engine,
+                                  selectedModel: selectedModel,
+                                  selectedCodexModel: selectedCodexModel,
+                                  selectedEffort: selectedEffort,
+                                  codexSandboxMode: codexSandboxMode,
+                                  presentation: presentation,
+                                  queuedPreview: queuedPreview,
+                                  onCancelQueue: onCancelQueue,
+                                  onPermissionModeSelected:
+                                      onPermissionModeSelected,
+                                  onCodexSandboxModeSelected:
+                                      onCodexSandboxModeSelected,
+                                  onCommandSelected: (command) =>
+                                      onFillPrompt('/$command '),
+                                  onAddAttachment: onAddAttachment,
+                                  onRemoveAttachment: onRemoveAttachment,
+                                  onModelPressed: onOpenModelPicker,
+                                  onEffortSelected: onEffortSelected,
+                                  onReconnect: onReconnect,
+                                  onSend: onSend,
+                                  onStop: onStop,
+                                ),
+                              ),
                       ),
-                    )
+                    ),
+                  ),
+                )
               : null,
         ),
       ),
@@ -7261,6 +7394,9 @@ class _TranscriptViewState extends State<TranscriptView>
   int rawMessageCount = 0;
   int lastUserIndex = -1;
   int lastAssistantIndex = -1;
+  int lastHistoryAssistantIndex = -1;
+  int currentTurnRowStart = 0;
+  int currentTurnGroupStart = 0;
   SessionMemoryStore? readingMemoryStore;
   SessionMemory? readingMemory;
   String? readingSessionId;
@@ -7635,7 +7771,8 @@ class _TranscriptViewState extends State<TranscriptView>
     if (tailOnly &&
         transcriptRows.isNotEmpty &&
         groupedRows.isNotEmpty &&
-        rawMessageCount == widget.messages.length) {
+        rawMessageCount == widget.messages.length &&
+        lastUserIndex == rawMessageCount - 2) {
       final rawIndex = rawMessageCount - 1;
       final message = widget.messages[rawIndex];
       final lastGroup = groupedRows.last;
@@ -7651,24 +7788,77 @@ class _TranscriptViewState extends State<TranscriptView>
         return;
       }
     }
+    bool visible(TranscriptMessage message) =>
+        !isBlankAssistantMessage(message) &&
+        !(message.activityKind == ActivityKind.thinking &&
+            message.activityState != ActivityState.running &&
+            (message.activityDetail?.trim().isEmpty ?? true));
+    if (tailOnly &&
+        lastUserIndex >= 0 &&
+        widget.messages.length > lastUserIndex &&
+        identical(
+          widget.messages[lastUserIndex],
+          renderedMessages[lastUserIndex],
+        )) {
+      final rows = <_VisibleTranscriptRow>[];
+      lastAssistantIndex = lastHistoryAssistantIndex;
+      for (
+        var index = lastUserIndex + 1;
+        index < widget.messages.length;
+        index++
+      ) {
+        final message = widget.messages[index];
+        if (message.role == MessageRole.assistant) lastAssistantIndex = index;
+        if (visible(message)) rows.add(_VisibleTranscriptRow(index, message));
+      }
+      transcriptRows.removeRange(currentTurnRowStart, transcriptRows.length);
+      transcriptRows.addAll(rows);
+      groupedRows.removeRange(currentTurnGroupStart, groupedRows.length);
+      groupedRows.addAll(_groupTranscriptRows(rows, running: widget.running));
+      for (var index = lastUserIndex + 1; index < rawMessageCount; index++) {
+        renderedMessages.remove(index);
+      }
+      for (final row in rows) {
+        renderedMessages[row.rawIndex] = row.message;
+      }
+      for (
+        var index = lastUserIndex + 1;
+        index < max(rawMessageCount, widget.messages.length);
+        index++
+      ) {
+        if (!renderedMessages.containsKey(index)) {
+          rowKeys.remove(index);
+          readingRowKeys.remove(index);
+        }
+      }
+      rawMessageCount = widget.messages.length;
+      return;
+    }
     final rows = <_VisibleTranscriptRow>[];
     lastUserIndex = -1;
     lastAssistantIndex = -1;
+    lastHistoryAssistantIndex = -1;
+    currentTurnRowStart = 0;
     for (var index = 0; index < widget.messages.length; index++) {
       final message = widget.messages[index];
-      if (message.role == MessageRole.user) lastUserIndex = index;
-      if (message.role == MessageRole.assistant) lastAssistantIndex = index;
-      if (isBlankAssistantMessage(message)) continue;
-      if (message.activityKind == ActivityKind.thinking &&
-          message.activityState != ActivityState.running &&
-          (message.activityDetail?.trim().isEmpty ?? true)) {
-        continue;
+      if (message.role == MessageRole.user) {
+        lastUserIndex = index;
+        lastHistoryAssistantIndex = lastAssistantIndex;
+        currentTurnRowStart = rows.length + 1;
       }
+      if (message.role == MessageRole.assistant) lastAssistantIndex = index;
+      if (!visible(message)) continue;
       rows.add(_VisibleTranscriptRow(index, message));
     }
     rawMessageCount = widget.messages.length;
     transcriptRows = rows;
     groupedRows = _groupTranscriptRows(rows, running: widget.running);
+    currentTurnGroupStart =
+        groupedRows.lastIndexWhere(
+          (item) =>
+              item is _VisibleTranscriptRow && item.rawIndex == lastUserIndex,
+        ) +
+        1;
     renderedMessages = {for (final row in rows) row.rawIndex: row.message};
     rowKeys.removeWhere(
       (rawIndex, _) => !renderedMessages.containsKey(rawIndex),

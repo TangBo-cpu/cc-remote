@@ -4,9 +4,9 @@
 
 扫码配对后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 继续运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v2.0.14](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.14/cc-remote-v2.0.14-android.apk)
+[下载 Android APK · v2.0.15](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.15/cc-remote-v2.0.15-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.14)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.15)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -28,6 +28,7 @@
 | 想换引擎 | 新建会话时选 Claude 或 Codex；Codex 支持动态模型目录、原生 `/compact` 与 `/review` 命令、已启用 skills，默认完全访问沙箱 |
 | 电脑端免输命令 | Windows 原生启动器选择项目、启动服务、显示配对二维码；关闭窗口后留在托盘 |
 | 想换项目目录 | 手机浏览电脑文件夹或输入完整路径，选择 Claude / Codex 后在该目录新建对话；需更新 App 与 daemon |
+| 想接着电脑聊 | 点击「同步电脑会话」，每次选择一个 Claude / Codex 会话；超过 2 MB 的历史文件自动过滤 |
 | 工具要权限 | 手机弹出决策卡：看命令摘要与工作目录，拒绝或仅本次允许 |
 | 想确认改了什么 | 只读工作区 + Git diff，手机不提交、不改文件 |
 | 断线了 | transcript 与草稿保留，自动重连；回来后从权威快照继续 |
@@ -130,11 +131,11 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v2.0.14 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.14/cc-remote-v2.0.14-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v2.0.15 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.15/cc-remote-v2.0.15-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫启动器窗口或终端中的二维码 → 确认电脑名与服务地址 → 进入控制台
 
-Android App 版本为 v2.0.13。本版加入多设备授权与平板双栏布局，需要同时更新电脑端代码并重启 daemon；旧配对与新配对的手机都保留授权，手机端可直接覆盖安装，保留已有配对与设置。
+Android App 版本为 v2.0.15。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
 
 ### 4. 开始对话
 
@@ -150,6 +151,7 @@ Android App 版本为 v2.0.13。本版加入多设备授权与平板双栏布局
 - 扫码配对 / Secure Storage / 启动恢复；多设备授权（默认上限 8 台），手机端设备列表与逐台撤销
 - WebSocket 鉴权、退避重连、前台存活探测与活动任务状态恢复
 - 多项目、多会话；完整项目路径展示
+- 从电脑端选择并同步单个 Claude / Codex 会话，保留原生会话上下文；重复同步更新已有记录，超过 2 MB 的历史文件自动过滤
 - 平板适配：≥840dp 宽时会话列表常驻左侧双栏，弹层与输入框居中限宽
 - 会话级引擎切换：Claude Code 或 Codex CLI（新建会话时选择）
 - 会话 transcript 持久化与恢复
@@ -277,7 +279,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v2.0.14](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.14)**
-APK：[`cc-remote-v2.0.14-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.14/cc-remote-v2.0.14-android.apk)
+当前公开版：**[v2.0.15](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.15)**
+APK：[`cc-remote-v2.0.15-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.15/cc-remote-v2.0.15-android.apk)
 
-v2.0.14 优化流式对话：合并聊天快照写入，降低 Markdown 重解析频率，并在尾部文字更新时复用已有历史消息。平板会话侧栏固定宽度，保留收起与展开；顶部模糊范围进一步缩小。桌面端在配对成功和重启后继续显示二维码，方便添加其他设备。Android 版本为 `2.0.14+24`，电脑端 package 版本为 `2.0.14`，安装包沿用旧版测试签名，适合个人使用。
+v2.0.15 新增「同步电脑会话」：每次选择一个 Claude / Codex 会话，重复同步会更新已有记录。超过 2 MB 的历史文件只检查大小，不读取正文；同步前再次检查大小。另包含流式活动、会话列表、长代码高亮与 Git diff 的渲染优化。Android 版本为 `2.0.15+25`，电脑端 package 版本为 `2.0.15`，安装包沿用旧版测试签名，适合个人使用。
