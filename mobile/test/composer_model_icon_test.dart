@@ -31,7 +31,7 @@ void main() {
                     permissionMode: PermissionMode.manual,
                     allowBypassPermissions: false,
                     engine: engine,
-                    onModelPressed: enabled ? () => presses++ : null,
+                    onModelPressed: enabled ? (_) => presses++ : null,
                     onPermissionModeSelected: (_) {},
                     onCommandSelected: (_) {},
                     onReconnect: () {},

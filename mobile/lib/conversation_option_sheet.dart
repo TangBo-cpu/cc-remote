@@ -1,8 +1,167 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'noto_icon.dart';
 import 'signal_console_theme.dart';
+
+Future<T?> showConversationLensPicker<T>(
+  BuildContext context, {
+  required WidgetBuilder builder,
+  bool requestFocus = true,
+}) {
+  final navigator = Navigator.of(context);
+  final overlay = navigator.overlay!.context.findRenderObject()!;
+  final trigger = context.findRenderObject();
+  final source =
+      trigger is RenderBox &&
+          trigger.hasSize &&
+          trigger.size.width <= 96 &&
+          trigger.size.height <= 96
+      ? trigger.localToGlobal(Offset.zero, ancestor: overlay) & trigger.size
+      : null;
+  final themes = InheritedTheme.capture(from: context, to: navigator.context);
+  return navigator.push<T>(
+    _ConversationLensRoute<T>(
+      reduceMotion: MediaQuery.disableAnimationsOf(context),
+      requestFocus: requestFocus,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      pageBuilder: (sheetContext, animation, _) {
+        final media = MediaQuery.of(sheetContext);
+        return themes.wrap(
+          Material(
+            type: MaterialType.transparency,
+            child: Stack(
+              children: [
+                SheetScrim(
+                  color: AppPalette.of(sheetContext).scrim,
+                  onTap: () => Navigator.pop(sheetContext),
+                ),
+                Flow(
+                  key: const ValueKey('conversation-lens-transition'),
+                  clipBehavior: Clip.none,
+                  delegate: _ConversationLensFlow(
+                    animation: animation,
+                    source: source,
+                    padding: EdgeInsets.fromLTRB(
+                      16,
+                      media.padding.top + 100,
+                      16,
+                      math.max(media.padding.bottom, media.viewInsets.bottom) +
+                          20,
+                    ),
+                    maxWidth: media.size.width >= 720 ? 560 : 480,
+                  ),
+                  children: [
+                    SnapshotWhileAnimating(
+                      animation: animation,
+                      child: builder(sheetContext),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    ),
+  );
+}
+
+class _ConversationLensRoute<T> extends RawDialogRoute<T> {
+  _ConversationLensRoute({
+    required this.reduceMotion,
+    required super.pageBuilder,
+    required super.barrierLabel,
+    required super.requestFocus,
+  }) : super(
+         barrierColor: Colors.transparent,
+         traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop,
+         transitionDuration: reduceMotion
+             ? Duration.zero
+             : const Duration(milliseconds: 420),
+         transitionBuilder: (context, animation, secondaryAnimation, child) =>
+             child,
+       );
+
+  final bool reduceMotion;
+
+  @override
+  Duration get reverseTransitionDuration =>
+      reduceMotion ? Duration.zero : AppMotion.standard;
+}
+
+class _ConversationLensFlow extends FlowDelegate {
+  _ConversationLensFlow({
+    required this.animation,
+    required this.source,
+    required this.padding,
+    required this.maxWidth,
+  }) : super(repaint: animation);
+
+  final Animation<double> animation;
+  final Rect? source;
+  final EdgeInsets padding;
+  final double maxWidth;
+
+  @override
+  BoxConstraints getConstraintsForChild(int index, BoxConstraints constraints) {
+    final width = math.max(
+      0.0,
+      math.min(maxWidth, constraints.maxWidth - padding.horizontal),
+    );
+    return BoxConstraints(
+      minWidth: width,
+      maxWidth: width,
+      maxHeight: math.max(0, constraints.maxHeight - padding.vertical),
+    );
+  }
+
+  @override
+  void paintChildren(FlowPaintingContext context) {
+    final size = context.getChildSize(0)!;
+    if (size.isEmpty) return;
+    final target = Rect.fromLTWH(
+      (context.size.width - size.width) / 2,
+      context.size.height - padding.bottom - size.height,
+      size.width,
+      size.height,
+    );
+    final origin =
+        source ??
+        Rect.fromCenter(
+          center: target.bottomCenter - const Offset(0, 24),
+          width: 48,
+          height: 48,
+        );
+    final progress = AppMotion.enter.transform(animation.value);
+    final rect = Rect.lerp(origin, target, progress)!;
+    // Paint transforms keep the catalogue laid out once while the lens unfolds.
+    context.paintChild(
+      0,
+      opacity: (animation.value * 5).clamp(0, 1),
+      transform: Matrix4.identity()
+        ..translateByDouble(rect.left, rect.top, 0, 1)
+        ..scaleByDouble(
+          rect.width / size.width,
+          rect.height / size.height,
+          1,
+          1,
+        ),
+    );
+  }
+
+  @override
+  bool shouldRelayout(_ConversationLensFlow oldDelegate) =>
+      padding != oldDelegate.padding || maxWidth != oldDelegate.maxWidth;
+
+  @override
+  bool shouldRepaint(_ConversationLensFlow oldDelegate) =>
+      animation != oldDelegate.animation ||
+      source != oldDelegate.source ||
+      shouldRelayout(oldDelegate);
+}
 
 class ConversationPickerOption<T> {
   const ConversationPickerOption({
@@ -37,6 +196,7 @@ class ConversationOptionSheet<T> extends StatefulWidget {
     required this.options,
     this.headerAction,
     this.status,
+    this.lens = false,
   });
 
   final String title;
@@ -45,6 +205,7 @@ class ConversationOptionSheet<T> extends StatefulWidget {
   final List<ConversationPickerOption<T>> options;
   final Widget? headerAction;
   final Widget? status;
+  final bool lens;
 
   @override
   State<ConversationOptionSheet<T>> createState() =>
@@ -108,7 +269,11 @@ class _ConversationOptionSheetState<T>
                   IconButton(
                     tooltip: '关闭选择器',
                     onPressed: () => Navigator.pop(context),
-                    icon: SmartIcon(LucideIcons.x, size: AppIconSizes.control, color: palette.muted),
+                    icon: SmartIcon(
+                      LucideIcons.x,
+                      size: AppIconSizes.control,
+                      color: palette.muted,
+                    ),
                   ),
                 ],
               ),
@@ -160,6 +325,7 @@ class _ConversationOptionSheetState<T>
                       key: ValueKey(widget.options[index].id),
                       option: widget.options[index],
                       selected: widget.options[index].value == widget.selected,
+                      lens: widget.lens,
                     ),
                   ),
                 ],
@@ -177,10 +343,12 @@ class _ConversationOptionRow<T> extends StatelessWidget {
     super.key,
     required this.option,
     required this.selected,
+    required this.lens,
   });
 
   final ConversationPickerOption<T> option;
   final bool selected;
+  final bool lens;
 
   @override
   Widget build(BuildContext context) {
@@ -194,96 +362,137 @@ class _ConversationOptionRow<T> extends StatelessWidget {
       selected: selected,
       enabled: option.enabled,
       button: true,
-      child: Material(
-        color: selected
-            ? palette.accentSoft
-            : option.danger && option.enabled
-            ? palette.stop.withValues(alpha: 0.06)
-            : Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
-          side: BorderSide(
-            color: selected
-                ? color.withValues(alpha: 0.18)
-                : Colors.transparent,
-          ),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: option.enabled
-              ? () => Navigator.pop(context, option.value)
-              : null,
-          child: ConstrainedBox(
-            // Cherry Studio parity: a 48pt floor and one 32pt avatar keep a long
-            // catalogue scannable without a tall icon seat on every row.
-            constraints: const BoxConstraints(minHeight: 48),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 32,
-                    height: 32,
-                    child: IconTheme(
-                      data: IconThemeData(size: AppIconSizes.control, color: color),
-                      child: Center(child: option.leading),
+      child: DecoratedBox(
+        decoration: lens
+            ? BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    (selected ? palette.control : palette.surface).withValues(
+                      alpha: MediaQuery.highContrastOf(context)
+                          ? 1
+                          : selected
+                          ? 0.72
+                          : 0.32,
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          option.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: color,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            height: 1.25,
-                          ),
+                    (selected ? palette.control : palette.surface).withValues(
+                      alpha: MediaQuery.highContrastOf(context)
+                          ? 1
+                          : selected
+                          ? 0.42
+                          : 0.08,
+                    ),
+                  ],
+                ),
+                border: Border.all(
+                  color: selected
+                      ? color.withValues(alpha: 0.22)
+                      : option.danger && option.enabled
+                      ? palette.stop.withValues(alpha: 0.12)
+                      : palette.glassHighlight.withValues(
+                          alpha: palette.glassHighlight.a * 0.24,
                         ),
-                        if (option.description.isNotEmpty) ...[
-                          const SizedBox(height: 2),
+                ),
+              )
+            : const BoxDecoration(),
+        child: Material(
+          color: lens
+              ? Colors.transparent
+              : selected
+              ? palette.accentSoft
+              : option.danger && option.enabled
+              ? palette.stop.withValues(alpha: 0.06)
+              : Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(
+              color: selected
+                  ? color.withValues(alpha: 0.18)
+                  : Colors.transparent,
+            ),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: option.enabled
+                ? () => Navigator.pop(context, option.value)
+                : null,
+            child: ConstrainedBox(
+              // Cherry Studio parity: a 48pt floor and one 32pt avatar keep a long
+              // catalogue scannable without a tall icon seat on every row.
+              constraints: const BoxConstraints(minHeight: 48),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: IconTheme(
+                        data: IconThemeData(
+                          size: AppIconSizes.control,
+                          color: color,
+                        ),
+                        child: Center(child: option.leading),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
                           Text(
-                            option.description,
+                            option.title,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              color: palette.muted,
-                              fontSize: 12,
-                              height: 1.4,
+                              color: color,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              height: 1.25,
                             ),
                           ),
+                          if (option.description.isNotEmpty) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              option.description,
+                              style: TextStyle(
+                                color: palette.muted,
+                                fontSize: 12,
+                                height: 1.4,
+                              ),
+                            ),
+                          ],
                         ],
-                      ],
-                    ),
-                  ),
-                  if (option.badge != null) ...[
-                    const SizedBox(width: 8),
-                    option.badge!,
-                  ],
-                  if (selected) ...[
-                    const SizedBox(width: 8),
-                    ExcludeSemantics(
-                      child: SmartIcon(
-                        LucideIcons.circleCheck,
-                        size: AppIconSizes.control,
-                        color: color,
                       ),
                     ),
-                  ] else if (!option.enabled) ...[
-                    const SizedBox(width: 8),
-                    ExcludeSemantics(
-                      child: SmartIcon(
-                        LucideIcons.lockKeyhole,
-                        size: AppIconSizes.control,
-                        color: palette.muted,
+                    if (option.badge != null) ...[
+                      const SizedBox(width: 8),
+                      option.badge!,
+                    ],
+                    if (selected) ...[
+                      const SizedBox(width: 8),
+                      ExcludeSemantics(
+                        child: SmartIcon(
+                          LucideIcons.circleCheck,
+                          size: AppIconSizes.control,
+                          color: color,
+                        ),
                       ),
-                    ),
+                    ] else if (!option.enabled) ...[
+                      const SizedBox(width: 8),
+                      ExcludeSemantics(
+                        child: SmartIcon(
+                          LucideIcons.lockKeyhole,
+                          size: AppIconSizes.control,
+                          color: palette.muted,
+                        ),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             ),
           ),

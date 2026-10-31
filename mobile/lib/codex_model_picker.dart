@@ -91,6 +91,7 @@ class _CodexModelPickerState extends State<CodexModelPicker> {
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     return ConversationOptionSheet<String>(
+      lens: true,
       title: '选择 Codex 模型',
       detail: '用于之后发送的消息，当前任务继续使用原模型。',
       selected: widget.selected ?? '',

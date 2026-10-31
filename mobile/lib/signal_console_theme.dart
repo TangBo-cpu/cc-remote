@@ -669,6 +669,53 @@ class AppElevation {
 }
 
 class AppLiquidGlass {
+  static BoxDecoration lens({
+    required BuildContext context,
+    required BorderRadius borderRadius,
+    bool focused = false,
+    bool elevated = true,
+  }) {
+    final palette = AppPalette.of(context);
+    final highContrast = MediaQuery.highContrastOf(context);
+    return BoxDecoration(
+      gradient: LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          palette.surface.withValues(alpha: highContrast ? 1 : 0.94),
+          palette.surface.withValues(alpha: highContrast ? 1 : 0.88),
+          palette.surface.withValues(alpha: highContrast ? 1 : 0.91),
+        ],
+        stops: const [0, 0.55, 1],
+      ),
+      borderRadius: borderRadius,
+      border: Border.all(
+        color: focused ? palette.liquidFocus : palette.glassHighlight,
+        width: focused ? 2 : 0.5,
+      ),
+      boxShadow: elevated ? AppElevation.overlay(context: context) : const [],
+    );
+  }
+
+  static BoxDecoration lensControl({
+    required BuildContext context,
+    bool pressed = false,
+  }) {
+    final palette = AppPalette.of(context);
+    return BoxDecoration(
+      shape: BoxShape.circle,
+      gradient: LinearGradient(
+        begin: pressed ? Alignment.topRight : Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          palette.surface.withValues(alpha: pressed ? 0.95 : 0.8),
+          palette.glassControl.withValues(alpha: pressed ? 0.72 : 0.5),
+        ],
+      ),
+      border: Border.all(color: palette.glassHighlight, width: 0.75),
+    );
+  }
+
   static const thinBackdropGradient = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
@@ -808,17 +855,27 @@ class SignalLiquidGlass extends StatelessWidget {
     required this.decoration,
     required this.child,
     this.blurSigma = 8,
+    this.lens = false,
   });
 
   final BoxDecoration decoration;
   final Widget child;
   final double blurSigma;
+  final bool lens;
 
   @override
   Widget build(BuildContext context) {
-    final surface = DecoratedBox(
-      decoration: decoration.copyWith(boxShadow: const []),
-      child: child,
+    final surface = CustomPaint(
+      foregroundPainter: lens
+          ? _LiquidLensRimPainter(
+              decoration.borderRadius ?? BorderRadius.zero,
+              AppPalette.of(context).brightness,
+            )
+          : null,
+      child: DecoratedBox(
+        decoration: decoration.copyWith(boxShadow: const []),
+        child: child,
+      ),
     );
     final blurred = BackdropFilter.grouped(
       filter: _blurFilterFor(blurSigma),
@@ -841,6 +898,42 @@ class SignalLiquidGlass extends StatelessWidget {
       child: clipped,
     );
   }
+}
+
+class _LiquidLensRimPainter extends CustomPainter {
+  const _LiquidLensRimPainter(this.radius, this.brightness);
+
+  final BorderRadiusGeometry radius;
+  final Brightness brightness;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    final outline = radius
+        .resolve(TextDirection.ltr)
+        .toRRect(rect)
+        .deflate(1.5);
+    final dark = brightness == Brightness.dark;
+    final paint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 0.75
+      ..shader = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          Colors.white.withValues(alpha: dark ? 0.27 : 0.95),
+          Colors.white.withValues(alpha: dark ? 0.02 : 0.1),
+          Colors.black.withValues(alpha: dark ? 0.22 : 0.06),
+          Colors.white.withValues(alpha: dark ? 0.12 : 0.7),
+        ],
+        stops: const [0, 0.4, 0.7, 1],
+      ).createShader(rect);
+    canvas.drawRRect(outline, paint);
+  }
+
+  @override
+  bool shouldRepaint(_LiquidLensRimPainter oldDelegate) =>
+      radius != oldDelegate.radius || brightness != oldDelegate.brightness;
 }
 
 class SignalAnimatedSurface extends StatelessWidget {
@@ -924,10 +1017,8 @@ class SheetScrim extends StatelessWidget {
     final animation = ModalRoute.of(context)?.animation;
     final scrim = color ?? AppPalette.of(context).scrim;
     final Widget layer;
-    if (animation == null || animation.value >= 1) {
+    if (animation == null) {
       layer = ColoredBox(color: scrim);
-    } else if (animation.value <= 0) {
-      layer = const SizedBox.expand();
     } else {
       layer = AnimatedBuilder(
         animation: animation,

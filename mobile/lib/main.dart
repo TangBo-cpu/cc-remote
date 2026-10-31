@@ -3395,7 +3395,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           logoutPairedDevice,
           onOpenDevices: multiDeviceSupported ? openDeviceManager : null,
         ),
-        onOpenModelPicker: () => openModelPicker(context),
+        onOpenModelPicker: openModelPicker,
         onEffortSelected: (effort) => unawaited(setEffortPreference(effort)),
         onNewConversation: beginNewConversation,
         onOpenSessions: openSessions,
@@ -4697,7 +4697,7 @@ class ChatScreen extends StatelessWidget {
   final ValueChanged<String> onFillPrompt;
   final VoidCallback onReconnect;
   final VoidCallback onOpenSettings;
-  final VoidCallback onOpenModelPicker;
+  final ValueChanged<BuildContext> onOpenModelPicker;
   final ValueChanged<ClaudeEffortPreference>? onEffortSelected;
   final VoidCallback onNewConversation;
   final VoidCallback onOpenSessions;
@@ -7091,8 +7091,10 @@ Future<ClaudeModelPreference?> showClaudeModelPicker(
 }) {
   return showAppOptionPicker<ClaudeModelPreference>(
     context,
+    lens: true,
     scrollContent: false,
     builder: (sheetContext) => ConversationOptionSheet<ClaudeModelPreference>(
+      lens: true,
       title: '选择模型',
       detail: '用于之后发送的消息，当前任务继续使用原模型。',
       selected: selected,
@@ -7127,6 +7129,7 @@ Future<String?> showCodexModelPicker(
 }) {
   return showAppOptionPicker<String>(
     context,
+    lens: true,
     scrollContent: false,
     builder: (_) =>
         CodexModelPicker(selected: selected, loadModels: loadModels),
@@ -9802,29 +9805,35 @@ class MessageBlock extends StatelessWidget {
       return Semantics(
         container: true,
         label: '助手回复',
-        child: AssistantBubbleFrame(
-          bubbleKey: const ValueKey('assistant-message'),
-          searchHighlighted: searchHighlighted,
-          topPadding: followsProcess ? 0 : null,
-          child: AssistantSelectionArea(
-            text: text,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (text.trim().isNotEmpty) assistantBody,
-                if (message.attachments.isNotEmpty) ...[
-                  if (text.trim().isNotEmpty) const SizedBox(height: 12),
-                  AttachmentMessageGrid(
-                    attachments: message.attachments,
-                    session: session,
-                    activeSessionId: activeSessionId,
-                    fullImages: true,
-                  ),
-                ],
-              ],
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            AssistantBubbleFrame(
+              bubbleKey: const ValueKey('assistant-message'),
+              searchHighlighted: searchHighlighted,
+              topPadding: followsProcess ? 0 : null,
+              child: AssistantSelectionArea(
+                text: text,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (text.trim().isNotEmpty) assistantBody,
+                    if (message.attachments.isNotEmpty) ...[
+                      if (text.trim().isNotEmpty) const SizedBox(height: 12),
+                      AttachmentMessageGrid(
+                        attachments: message.attachments,
+                        session: session,
+                        activeSessionId: activeSessionId,
+                        fullImages: true,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
             ),
-          ),
+          ],
         ),
       );
     }
@@ -9840,14 +9849,38 @@ class MessageBlock extends StatelessWidget {
           child: DecoratedBox(
             key: const ValueKey('user-message'),
             decoration: BoxDecoration(
-              color: searchHighlighted
-                  ? transcriptSearchHighlightFill(
-                      AppPalette.of(context).userBubble,
-                      accent: AppPalette.of(context).accent,
-                    )
-                  : AppPalette.of(context).userBubble,
-              borderRadius: const BorderRadius.all(
-                Radius.circular(AppRadii.bubble),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  searchHighlighted
+                      ? transcriptSearchHighlightFill(
+                          AppPalette.of(context).userBubble,
+                          accent: AppPalette.of(context).accent,
+                        )
+                      : AppPalette.of(context).userBubble,
+                  Color.alphaBlend(
+                    AppPalette.of(context).glassHighlight.withValues(
+                      alpha: AppPalette.of(context).glassHighlight.a * 0.16,
+                    ),
+                    searchHighlighted
+                        ? transcriptSearchHighlightFill(
+                            AppPalette.of(context).userBubble,
+                            accent: AppPalette.of(context).accent,
+                          )
+                        : AppPalette.of(context).userBubble,
+                  ),
+                ],
+              ),
+              border: Border.all(
+                color: AppPalette.of(context).bubbleOutline,
+                width: 0.6,
+              ),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(AppRadii.bubble),
+                topRight: Radius.circular(AppRadii.bubble),
+                bottomLeft: Radius.circular(AppRadii.bubble),
+                bottomRight: Radius.circular(AppRadii.control),
               ),
             ),
             child: Padding(
@@ -10994,7 +11027,7 @@ class PromptBar extends StatelessWidget {
   final ValueChanged<String> onCommandSelected;
   final VoidCallback? onAddAttachment;
   final ValueChanged<AttachmentDraft>? onRemoveAttachment;
-  final VoidCallback? onModelPressed;
+  final ValueChanged<BuildContext>? onModelPressed;
   final ValueChanged<ClaudeEffortPreference>? onEffortSelected;
   final VoidCallback onReconnect;
   final VoidCallback onSend;
@@ -11026,12 +11059,12 @@ class PromptBar extends StatelessWidget {
         label: '重新连接电脑',
         child: SignalLiquidGlass(
           key: const ValueKey('composer'),
-          blurSigma: 8,
-          decoration: AppLiquidGlass.strong(
+          lens: true,
+          blurSigma: 16,
+          decoration: AppLiquidGlass.lens(
             context: context,
             borderRadius: composerRadius,
             elevated: composerElevated,
-            backdrop: true,
           ),
           child: Material(
             color: Colors.transparent,
@@ -11135,13 +11168,13 @@ class PromptBar extends StatelessWidget {
                 ),
                 SignalLiquidGlass(
                   key: const ValueKey('composer'),
-                  blurSigma: 8,
-                  decoration: AppLiquidGlass.strong(
+                  lens: true,
+                  blurSigma: 16,
+                  decoration: AppLiquidGlass.lens(
                     context: context,
                     borderRadius: composerRadius,
                     focused: composerFocused,
                     elevated: composerElevated,
-                    backdrop: true,
                   ),
                   child: Container(
                     constraints: const BoxConstraints(
@@ -11260,9 +11293,9 @@ class PromptBar extends StatelessWidget {
                                               console.canCompose &&
                                               onCodexSandboxModeSelected !=
                                                   null,
-                                          onPressed: () =>
+                                          onPressed: (anchorContext) =>
                                               showCodexSandboxModePicker(
-                                                context,
+                                                anchorContext,
                                                 selected: codexSandboxMode,
                                                 modes: codexSandboxModes,
                                                 onSelected:
@@ -11273,9 +11306,9 @@ class PromptBar extends StatelessWidget {
                                         _ComposerPermissionButton(
                                           mode: permissionMode,
                                           enabled: console.canCompose,
-                                          onPressed: () =>
+                                          onPressed: (anchorContext) =>
                                               showPermissionModePicker(
-                                                context,
+                                                anchorContext,
                                                 selected: permissionMode,
                                                 allowBypassPermissions:
                                                     allowBypassPermissions,
@@ -11596,6 +11629,7 @@ class _ComposerGlassIconButton extends StatelessWidget {
     required this.onPressed,
     required this.child,
     this.filled = false,
+    this.lens = false,
   });
 
   final Key? buttonKey;
@@ -11604,6 +11638,7 @@ class _ComposerGlassIconButton extends StatelessWidget {
   final VoidCallback? onPressed;
   final Widget child;
   final bool filled;
+  final bool lens;
 
   @override
   Widget build(BuildContext context) {
@@ -11619,16 +11654,18 @@ class _ComposerGlassIconButton extends StatelessWidget {
           icon: SignalAnimatedSurface(
             key: visualKey,
             duration: appPressAnimationDuration(context, pressed),
-            decoration: BoxDecoration(
-              color: pressed
-                  ? AppPalette.of(context).composerControlPressed
-                  : filled
-                  ? AppPalette.of(context).glassControl
-                  : Colors.transparent,
-              shape: BoxShape.circle,
-            ),
+            decoration: lens && (filled || pressed)
+                ? AppLiquidGlass.lensControl(context: context, pressed: pressed)
+                : BoxDecoration(
+                    color: pressed
+                        ? AppPalette.of(context).composerControlPressed
+                        : filled
+                        ? AppPalette.of(context).glassControl
+                        : Colors.transparent,
+                    shape: BoxShape.circle,
+                  ),
             child: SizedBox.square(
-              dimension: filled ? 38 : AppSizes.iconControl,
+              dimension: filled ? 34 : AppSizes.iconControl,
               child: Center(child: child),
             ),
           ),
@@ -11656,12 +11693,13 @@ class _ComposerIconButton extends StatelessWidget {
     final enabled = onPressed != null;
     return _ComposerGlassIconButton(
       filled: true,
+      lens: true,
       visualKey: const ValueKey('composer-expand-visual'),
       tooltip: tooltip,
       onPressed: onPressed,
       child: SmartIcon(
         icon,
-        size: AppIconSizes.control,
+        size: 18,
         color: enabled
             ? AppPalette.of(context).composerControlInk
             : AppPalette.of(context).inactive,
@@ -11709,7 +11747,7 @@ class _ComposerModelButton extends StatelessWidget {
   final String? modelName;
   final ClaudeModelPreference selectedModel;
   final String? selectedCodexModel;
-  final VoidCallback? onPressed;
+  final ValueChanged<BuildContext>? onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -11726,9 +11764,10 @@ class _ComposerModelButton extends StatelessWidget {
         : selectedModel.label;
     return _ComposerGlassIconButton(
       buttonKey: const ValueKey('composer-model-button'),
+      lens: true,
       visualKey: const ValueKey('composer-model-visual'),
       tooltip: '选择模型：$label',
-      onPressed: onPressed,
+      onPressed: onPressed == null ? null : () => onPressed!(context),
       child: Opacity(
         opacity: onPressed == null ? 0.4 : 1,
         child: Image.asset(
@@ -11759,7 +11798,7 @@ class _ComposerPermissionButton extends StatelessWidget {
   final PermissionMode? mode;
   final CodexSandboxMode? sandboxMode;
   final bool enabled;
-  final VoidCallback onPressed;
+  final ValueChanged<BuildContext> onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -11775,9 +11814,10 @@ class _ComposerPermissionButton extends StatelessWidget {
         : AppPalette.of(context).composerControlInk;
     return _ComposerGlassIconButton(
       buttonKey: const ValueKey('permission-mode-chip'),
+      lens: true,
       visualKey: const ValueKey('permission-mode-visual'),
       tooltip: '访问权限：$label',
-      onPressed: enabled ? onPressed : null,
+      onPressed: enabled ? () => onPressed(context) : null,
       child: SmartIcon(icon, size: AppIconSizes.control, color: ink),
     );
   }
@@ -12015,8 +12055,10 @@ Future<void> showPermissionModePicker(
 }) async {
   final mode = await showAppOptionPicker<PermissionMode>(
     context,
+    lens: true,
     scrollContent: false,
     builder: (sheetContext) => ConversationOptionSheet<PermissionMode>(
+      lens: true,
       title: 'Claude Code 权限模式',
       detail: '决定文件修改和命令执行是否需要确认。',
       selected: selected,
@@ -12081,8 +12123,10 @@ Future<void> showCodexSandboxModePicker(
 }) async {
   final mode = await showAppOptionPicker<CodexSandboxMode>(
     context,
+    lens: true,
     scrollContent: false,
     builder: (sheetContext) => ConversationOptionSheet<CodexSandboxMode>(
+      lens: true,
       title: 'Codex 沙箱模式',
       detail: '所选模式在当前对话沿用。Codex 执行中不会弹出权限审批。',
       selected: selected,
@@ -12427,8 +12471,20 @@ Future<T?> showAppOptionPicker<T>(
   BuildContext context, {
   bool requestFocus = true,
   bool scrollContent = true,
+  bool lens = false,
   required Widget Function(BuildContext sheetContext) builder,
 }) {
+  if (lens) {
+    return showConversationLensPicker<T>(
+      context,
+      requestFocus: requestFocus,
+      builder: (sheetContext) => AppSheetSurface(
+        lens: true,
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+        child: builder(sheetContext),
+      ),
+    );
+  }
   return showModalBottomSheet<T>(
     context: context,
     sheetAnimationStyle: appOverlayAnimationStyle(context),
@@ -12555,16 +12611,32 @@ class AppSheetSurface extends StatelessWidget {
     this.padding = const EdgeInsets.all(16),
     this.radius = AppRadii.panel,
     this.borderRadius,
+    this.lens = false,
   });
 
   final Widget child;
   final EdgeInsetsGeometry padding;
   final double radius;
   final BorderRadius? borderRadius;
+  final bool lens;
 
   @override
   Widget build(BuildContext context) {
     final effectiveBorderRadius = borderRadius ?? BorderRadius.circular(radius);
+    if (lens) {
+      return SignalLiquidGlass(
+        lens: true,
+        blurSigma: 20,
+        decoration: AppLiquidGlass.lens(
+          context: context,
+          borderRadius: effectiveBorderRadius,
+        ),
+        child: Padding(
+          padding: padding,
+          child: SizedBox(width: double.infinity, child: child),
+        ),
+      );
+    }
     return Container(
       decoration: AppLiquidGlass.strong(
         context: context,

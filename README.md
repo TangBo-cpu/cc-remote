@@ -4,19 +4,19 @@
 
 扫码配对后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 继续运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v2.0.16](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.16/cc-remote-v2.0.16-android.apk)
+[下载 Android APK · v2.0.17](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.17/cc-remote-v2.0.17-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.16)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.17)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
 ```
 
 <p align="center">
-  <img src="docs/images/cool-glass-chat.jpg" alt="Cool Glass 对话" width="280" />
+  <img src="docs/images/01-chat.png" alt="Android 实机对话界面" width="280" />
 </p>
 
-<p align="center"><sub>v1.4.0 历史截图；v2.0.0 使用跟随系统的浅色 / 深色界面</sub></p>
+<p align="center"><sub>2026-10-31 用户提供的 Android 实机截图；字体与系统栏以设备设置为准</sub></p>
 
 ---
 
@@ -43,25 +43,19 @@
 
 ---
 
-## 外观预览（开发版）
+## 当前界面预览
 
-| 浅色 | 深色 |
-| :---: | :---: |
-| <img src="docs/images/appearance-light.png" width="220" alt="开发版浅色外观" /> | <img src="docs/images/appearance-dark.png" width="220" alt="开发版深色外观" /> |
-
-以上是本地 Flutter Web 演示预览。Android 实机的系统字体、系统栏、键盘与手势仍待验收。
-
-## 界面参考（v1.4.0）
-
-| 对话 | 项目与会话 | 选择模型 |
+| 对话 | 会话中心 | 更多菜单 |
 | :---: | :---: | :---: |
-| <img src="docs/images/cool-glass-chat.jpg" width="220" alt="对话" /> | <img src="docs/images/cool-glass-sessions.png" width="220" alt="项目与会话" /> | <img src="docs/images/cool-glass-models.png" width="220" alt="选择模型" /> |
+| <img src="docs/images/01-chat.png" width="220" alt="对话" /> | <img src="docs/images/02-sessions.png" width="220" alt="会话中心" /> | <img src="docs/images/03-more-menu.png" width="220" alt="更多菜单" /> |
 
-| 主控制台 | 工作区 | 启动 |
+| 设置 | Codex 沙箱模式 | 选择模型 |
 | :---: | :---: | :---: |
-| <img src="docs/images/cool-glass-home.png" width="220" alt="主控制台" /> | <img src="docs/images/cool-glass-workspace.jpg" width="220" alt="工作区" /> | <img src="docs/images/cool-glass-startup.jpg" width="220" alt="启动" /> |
+| <img src="docs/images/04-settings.png" width="220" alt="设置，主机信息已脱敏" /> | <img src="docs/images/05-sandbox-modes.png" width="220" alt="Codex 沙箱模式" /> | <img src="docs/images/06-model-picker.png" width="220" alt="选择 Codex 模型" /> |
 
-当前开发版使用中性背景，助手正文直接排在页面上，用户消息保留浅灰气泡；输入区和浮动控件使用中性玻璃材质与柔和阴影。主要操作采用炭黑，深色模式采用近白；选中态使用灰底与字重，正文链接采用中性色和下划线；会话导航保留彩色身份标识与蓝色上下文提示。设置提供「跟随系统 / 浅色 / 深色」，壁纸与背景预设已移除。阅读字号、模型选择、工具折叠、代码复制和权限决策仍保留。以上截图来自 v1.4.0；当前设计规格见 [`DESIGN.md`](DESIGN.md)。
+以上 6 张由用户于 2026-10-31 提供，作为当前 UI 的评审依据，不对应指定发布版本。设置截图中的主机名称、服务地址和本机目录已遮盖；系统字体、系统栏及顶部系统提示不属于 App 自绘界面。当前没有同批次的深色、键盘展开、工作区或 diff 截图，不能据此确认这些状态的效果。截图索引见 [`docs/images/README.md`](docs/images/README.md)。
+
+当前开发版使用中性背景，助手正文直接排在页面上，用户消息保留浅灰气泡；输入区和浮动控件使用中性玻璃材质与柔和阴影。主要操作采用炭黑，深色模式采用近白；选中态使用灰底与字重，正文链接采用中性色和下划线；会话导航保留彩色身份标识与蓝色上下文提示。设置提供「跟随系统 / 浅色 / 深色」，壁纸与背景预设已移除。阅读字号、模型选择、工具折叠、代码复制和权限决策仍保留。当前设计规格见 [`DESIGN.md`](DESIGN.md)。
 
 ---
 
@@ -131,11 +125,11 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v2.0.16 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.16/cc-remote-v2.0.16-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v2.0.17 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.17/cc-remote-v2.0.17-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫启动器窗口或终端中的二维码 → 确认电脑名与服务地址 → 进入控制台
 
-Android App 版本为 v2.0.16。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
+Android App 版本为 v2.0.17。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
 
 ### 4. 开始对话
 
@@ -279,7 +273,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v2.0.16](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.16)**
-APK：[`cc-remote-v2.0.16-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.16/cc-remote-v2.0.16-android.apk)
+当前公开版：**[v2.0.17](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.17)**
+APK：[`cc-remote-v2.0.17-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.17/cc-remote-v2.0.17-android.apk)
 
-v2.0.16 将长工具详情默认收为三行预览，可原地展开，并保留手动展开状态；搜索结果会显示完整详情。功能图标统一使用现有 Noto 彩色字形，模型按钮显示 Claude / OpenAI 标志。错误日志改为紧凑摘要与独立详情，显示和复制时清理终端控制符并隐藏常见凭据。Android 版本为 `2.0.16+26`，电脑端 package 版本为 `2.0.16`，安装包沿用旧版测试签名，适合个人使用。
+v2.0.17 将长工具详情默认收为三行预览，可原地展开，并保留手动展开状态；搜索结果会显示完整详情。功能图标统一使用现有 Noto 彩色字形，模型按钮显示 Claude / OpenAI 标志。错误日志改为紧凑摘要与独立详情，显示和复制时清理终端控制符并隐藏常见凭据。Android 版本为 `2.0.17+27`，电脑端 package 版本为 `2.0.17`，安装包沿用旧版测试签名，适合个人使用。

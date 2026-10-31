@@ -190,7 +190,7 @@ void main() {
                 engine: SessionEngine.codex,
                 selectedCodexModel: 'gpt-test-codex',
                 modelName: 'previous-model',
-                onModelPressed: () => opened = true,
+                onModelPressed: (_) => opened = true,
                 onRefreshCommands: () => refreshed = true,
                 onPermissionModeSelected: (_) {},
                 onCommandSelected: (command) => controller.text = '/$command ',

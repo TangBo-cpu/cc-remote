@@ -953,7 +953,19 @@ void main() {
           )
           .first,
     );
-    expect(selectedOption.color, AppPalette.light.accentSoft);
+    expect(selectedOption.color, Colors.transparent);
+    final selectedCard = tester.widget<DecoratedBox>(
+      find.descendant(
+        of: find.byKey(const ValueKey('model-option-opus')),
+        matching: find.byType(DecoratedBox),
+      ).first,
+    );
+    expect(
+      (selectedCard.decoration as BoxDecoration).gradient!.colors.every(
+        (color) => color.a > 0 && color.a < 1,
+      ),
+      isTrue,
+    );
 
     final unselectedOption = tester.widget<Material>(
       find
@@ -1582,7 +1594,7 @@ void main() {
               onFillPrompt: (_) {},
               onReconnect: () {},
               onOpenSettings: () {},
-              onOpenModelPicker: () {},
+              onOpenModelPicker: (_) {},
               onNewConversation: () =>
                   unawaited(showSessionEnginePicker(context)),
               onOpenSessions: () => unawaited(
@@ -2768,7 +2780,7 @@ void main() {
             onFillPrompt: (_) {},
             onReconnect: () {},
             onOpenSettings: () {},
-            onOpenModelPicker: () {},
+            onOpenModelPicker: (_) {},
             onNewConversation: () {},
             onOpenSessions: () {},
             onOpenWorkspace: () {},
@@ -2839,7 +2851,7 @@ void main() {
               onFillPrompt: (text) => controller.text = text,
               onReconnect: () {},
               onOpenSettings: () {},
-              onOpenModelPicker: () {},
+              onOpenModelPicker: (_) {},
               onNewConversation: () {},
               onOpenSessions: () {},
               onOpenWorkspace: () {},
@@ -2898,7 +2910,7 @@ void main() {
             onFillPrompt: (_) {},
             onReconnect: () {},
             onOpenSettings: () {},
-            onOpenModelPicker: () {},
+            onOpenModelPicker: (_) {},
             onNewConversation: () {},
             onOpenSessions: () {},
             onOpenWorkspace: () {},
@@ -3240,7 +3252,7 @@ void main() {
               onFillPrompt: (_) {},
               onReconnect: () {},
               onOpenSettings: () {},
-              onOpenModelPicker: () {},
+              onOpenModelPicker: (_) {},
               onNewConversation: () {},
               onOpenSessions: () {},
               onOpenWorkspace: () {},
@@ -3396,7 +3408,7 @@ void main() {
             onFillPrompt: (_) {},
             onReconnect: () {},
             onOpenSettings: () {},
-            onOpenModelPicker: () {},
+            onOpenModelPicker: (_) {},
             onNewConversation: () => createdConversation = true,
             onOpenSessions: () => openedSessions = true,
             onOpenWorkspace: () {},
@@ -3483,7 +3495,7 @@ void main() {
             onFillPrompt: (_) {},
             onReconnect: () {},
             onOpenSettings: () {},
-            onOpenModelPicker: () {},
+            onOpenModelPicker: (_) {},
             onNewConversation: () {},
             onOpenSessions: () {},
             onOpenWorkspace: () {},
@@ -3579,14 +3591,25 @@ void main() {
       decoration.boxShadow == null || decoration.boxShadow!.isEmpty,
       isTrue,
     );
-    expect(find.byType(Image), findsNothing);
+    expect(
+      find.descendant(of: assistant, matching: find.byType(Image)),
+      findsNothing,
+    );
     final user = tester.widget<DecoratedBox>(
       find.byKey(const ValueKey('user-message')),
     );
     final userDecoration = user.decoration as BoxDecoration;
-    expect(userDecoration.color, AppColors.userBubble);
-    expect(userDecoration.border, isNull);
-    expect(userDecoration.borderRadius, BorderRadius.circular(AppRadii.bubble));
+    expect(userDecoration.gradient, isA<LinearGradient>());
+    expect(userDecoration.border, isNotNull);
+    expect(
+      userDecoration.borderRadius,
+      const BorderRadius.only(
+        topLeft: Radius.circular(AppRadii.bubble),
+        topRight: Radius.circular(AppRadii.bubble),
+        bottomLeft: Radius.circular(AppRadii.bubble),
+        bottomRight: Radius.circular(AppRadii.control),
+      ),
+    );
     expect(AppColors.assistantBubble.a, 1.0);
     expect(AppColors.userBubble.a, 1.0);
   });
@@ -3650,7 +3673,7 @@ void main() {
                     onFillPrompt: (_) {},
                     onReconnect: () {},
                     onOpenSettings: () {},
-                    onOpenModelPicker: () {},
+                    onOpenModelPicker: (_) {},
                     onNewConversation: () {},
                     onOpenSessions: () {},
                     onOpenWorkspace: () {},
@@ -3781,7 +3804,7 @@ void main() {
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('composer-expand-visual'))),
-      const Size.square(38),
+      const Size.square(34),
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('composer-primary-action'))),
@@ -3830,7 +3853,7 @@ void main() {
       find.byKey(const ValueKey('composer-expand-visual')),
     );
     final expandDecoration = expandSurface.decoration as BoxDecoration;
-    expect(expandDecoration.color, AppColors.glassControl);
+    expect(expandDecoration.gradient, isNotNull);
     expect(expandDecoration.boxShadow, isNull);
 
     final modelSurface = tester.widget<SignalAnimatedSurface>(
@@ -3851,8 +3874,8 @@ void main() {
                   )
                   .decoration
               as BoxDecoration)
-          .color,
-      AppColors.composerControlPressed,
+          .gradient,
+      isNotNull,
     );
     await press.up();
     await tester.pump();
@@ -3860,7 +3883,8 @@ void main() {
       find.byKey(const ValueKey('composer')),
     );
     final decoration = composer.decoration;
-    expect(decoration.gradient, AppLiquidGlass.strongBackdropGradient);
+    expect(composer.lens, isTrue);
+    expect(decoration.gradient, isNotNull);
     expect(decoration.border, isNotNull);
     expect(
       decoration.borderRadius,
@@ -4711,7 +4735,7 @@ void main() {
             onFillPrompt: (_) {},
             onReconnect: () {},
             onOpenSettings: () {},
-            onOpenModelPicker: () {},
+            onOpenModelPicker: (_) {},
             onNewConversation: () {},
             onOpenSessions: () {},
             onOpenWorkspace: () {},
@@ -5083,7 +5107,7 @@ void main() {
             onFillPrompt: (_) {},
             onReconnect: () {},
             onOpenSettings: () {},
-            onOpenModelPicker: () {},
+            onOpenModelPicker: (_) {},
             onNewConversation: () {},
             onOpenSessions: () {},
             onOpenWorkspace: () {},
@@ -5149,7 +5173,7 @@ void main() {
               onFillPrompt: (_) {},
               onReconnect: () {},
               onOpenSettings: () {},
-              onOpenModelPicker: () {},
+              onOpenModelPicker: (_) {},
               onNewConversation: () {},
               onOpenSessions: () {},
               onOpenWorkspace: () {},

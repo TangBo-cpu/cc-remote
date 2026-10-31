@@ -131,7 +131,7 @@ class _ProcessPreviewState extends State<ProcessPreview> {
                   onFillPrompt: (text) => prompt.text = text,
                   onReconnect: () {},
                   onOpenSettings: () {},
-                  onOpenModelPicker: () {},
+                  onOpenModelPicker: (_) {},
                   onNewConversation: () {},
                   onOpenSessions: () {},
                   onOpenWorkspace: () {},

@@ -350,7 +350,7 @@ void main() {
                 onFillPrompt: (_) {},
                 onReconnect: () {},
                 onOpenSettings: () {},
-                onOpenModelPicker: () {},
+                onOpenModelPicker: (_) {},
                 onNewConversation: () {},
                 onOpenSessions: () {},
                 onOpenWorkspace: () {},
