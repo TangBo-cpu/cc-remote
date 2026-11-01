@@ -1337,7 +1337,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   void handleWsMessage(dynamic data) {
-    final decoded = jsonDecode(data.toString());
+    final decoded = data is Map<String, dynamic>
+        ? data
+        : data is Map
+        ? Map<String, dynamic>.from(data)
+        : jsonDecode(data.toString());
     if (decoded is! Map<String, dynamic>) return;
 
     if (decoded['authenticated'] == false) {
@@ -5005,6 +5009,9 @@ class _ChatOverlayLayoutState extends State<_ChatOverlayLayout> {
   final _topOverlayKey = GlobalKey();
   double? _topExtent;
   bool _measurementScheduled = false;
+  bool _scrolling = false;
+  bool _scrollingUpdateScheduled = false;
+  bool? _pendingScrolling;
 
   @override
   void initState() {
@@ -5033,22 +5040,49 @@ class _ChatOverlayLayoutState extends State<_ChatOverlayLayout> {
     });
   }
 
+  bool _handleScrollNotification(ScrollNotification notification) {
+    final next = switch (notification) {
+      ScrollStartNotification() => true,
+      ScrollEndNotification() => false,
+      _ => _scrolling,
+    };
+    if (next == _scrolling && _pendingScrolling == null) return false;
+    _pendingScrolling = next;
+    if (_scrollingUpdateScheduled) return false;
+    _scrollingUpdateScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollingUpdateScheduled = false;
+      final pending = _pendingScrolling;
+      _pendingScrolling = null;
+      if (!mounted || pending == null || pending == _scrolling) return;
+      setState(() => _scrolling = pending);
+    });
+    return false;
+  }
+
   @override
   Widget build(BuildContext context) {
     final topExtent = _topExtent ?? widget.initialTopExtent;
     final blurExtent = max(0.0, topExtent / 2 + 14);
+    final body = NotificationListener<ScrollNotification>(
+      onNotification: _handleScrollNotification,
+      child: widget.bodyBuilder(topExtent + 8),
+    );
     return Stack(
       key: const ValueKey('chat-overlay-layout'),
       clipBehavior: Clip.none,
       children: [
-        Positioned.fill(child: widget.bodyBuilder(topExtent + 8)),
+        Positioned.fill(child: body),
         Positioned(
           top: 0,
           left: 0,
           right: 0,
           height: blurExtent,
           child: RepaintBoundary(
-            child: const _ChatTopBackdrop(fadeStart: 1),
+            child: SignalScrollBlurState(
+              scrolling: _scrolling,
+              child: const _ChatTopBackdrop(fadeStart: 1),
+            ),
           ),
         ),
         Positioned(
@@ -5062,11 +5096,18 @@ class _ChatOverlayLayoutState extends State<_ChatOverlayLayout> {
             },
             child: SizeChangedLayoutNotifier(
               key: _topOverlayKey,
-              child: widget.topOverlay,
+              child: SignalScrollBlurState(
+                scrolling: _scrolling,
+                child: widget.topOverlay,
+              ),
             ),
           ),
         ),
-        if (widget.floatingOverlay != null) widget.floatingOverlay!,
+        if (widget.floatingOverlay != null)
+          SignalScrollBlurState(
+            scrolling: _scrolling,
+            child: widget.floatingOverlay!,
+          ),
       ],
     );
   }
@@ -5084,33 +5125,29 @@ class _ChatTopBackdrop extends StatelessWidget {
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     final dark = palette.brightness == Brightness.dark;
+    final surface = ColoredBox(
+      color: palette.paper.withValues(alpha: dark ? 0.20 : 0.10),
+      // Paint into the backdrop layer; ShaderMask isolates its input.
+      child: DecoratedBox(
+        key: const ValueKey('chat-top-frost-mask'),
+        decoration: BoxDecoration(
+          backgroundBlendMode: BlendMode.dstIn,
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: const [Colors.white, Colors.white, Colors.transparent],
+            stops: [0, fadeStart, 1],
+          ),
+        ),
+        child: const SizedBox.expand(),
+      ),
+    );
     return ExcludeSemantics(
       child: IgnorePointer(
         child: ClipRect(
-          child: BackdropFilter(
-            filter: _filter,
-            child: ColoredBox(
-              color: palette.paper.withValues(alpha: dark ? 0.20 : 0.10),
-              // Paint into the backdrop layer; ShaderMask isolates its input.
-              child: DecoratedBox(
-                key: const ValueKey('chat-top-frost-mask'),
-                decoration: BoxDecoration(
-                  backgroundBlendMode: BlendMode.dstIn,
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: const [
-                      Colors.white,
-                      Colors.white,
-                      Colors.transparent,
-                    ],
-                    stops: [0, fadeStart, 1],
-                  ),
-                ),
-                child: const SizedBox.expand(),
-              ),
-            ),
-          ),
+          child: SignalScrollBlurState.isScrolling(context)
+              ? surface
+              : BackdropFilter(filter: _filter, child: surface),
         ),
       ),
     );
@@ -7428,7 +7465,7 @@ class _TranscriptViewState extends State<TranscriptView>
   bool didInitialBottomJump = false;
   bool followingBottom = true;
   int observedVisibleMessageCount = 0;
-  int observedTailSignature = 0;
+  TranscriptMessage? observedTailMessage;
   int unreadOutputCount = 0;
 
   @override
@@ -7543,6 +7580,8 @@ class _TranscriptViewState extends State<TranscriptView>
       return;
     }
     final position = scrollController.position;
+    rowKeys.removeWhere((_, key) => key.currentContext == null);
+    readingRowKeys.removeWhere((_, key) => key.currentContext == null);
     int? anchorIndex;
     double? anchorTop;
     if (!followingBottom) {
@@ -7680,24 +7719,11 @@ class _TranscriptViewState extends State<TranscriptView>
     final rows = visibleRows();
     final visibleCount = rows.length;
     final last = rows.isEmpty ? null : rows.last.message;
-    final tailSignature = last == null
-        ? 0
-        : Object.hash(
-            last.role,
-            last.text,
-            last.attachments.length,
-            last.activityId,
-            last.activityKind,
-            last.activityState,
-            last.activityTool,
-            last.activityDetail,
-            last.activityDurationMs,
-          );
     if (!reset &&
         !followingBottom &&
         widget.jumpRequest == null &&
         (visibleCount != observedVisibleMessageCount ||
-            tailSignature != observedTailSignature)) {
+            !identical(last, observedTailMessage))) {
       final added = max(0, visibleCount - observedVisibleMessageCount);
       unreadOutputCount += added > 0
           ? added
@@ -7706,7 +7732,7 @@ class _TranscriptViewState extends State<TranscriptView>
           : 0;
     }
     observedVisibleMessageCount = visibleCount;
-    observedTailSignature = tailSignature;
+    observedTailMessage = last;
     if (!followingBottom || widget.jumpRequest != null) {
       widget.motion?.discardEntrances();
     }
@@ -7770,7 +7796,11 @@ class _TranscriptViewState extends State<TranscriptView>
           (!force && !followingBottom)) {
         return;
       }
-      scrollController.jumpTo(scrollController.position.maxScrollExtent);
+      final position = scrollController.position;
+      final target = position.maxScrollExtent;
+      if ((target - position.pixels).abs() > 0.5) {
+        scrollController.jumpTo(target);
+      }
       didInitialBottomJump = true;
       followingBottom = true;
       captureReadingPosition();
@@ -9086,6 +9116,7 @@ class _WorkspacePathMarkdownBuilder extends MarkdownElementBuilder {
         style: style,
         linkColor: AppPalette.of(context).link,
         workspaceDir: portal?.workspaceDir,
+        matches: matches,
         onOpenPath: (path) => WorkspacePortal.openPath(context, path),
       ),
     );
@@ -10929,15 +10960,17 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
               )?.writeState(context, next, identifier: expansionStorageId);
               widget.onExpandedChanged?.call(next);
             },
-            child:
-                widget.contentBuilder?.call(context, buildToolRow) ??
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    for (final activity in activities) buildToolRow(activity),
-                  ],
-                ),
+            child: isExpanded
+                ? widget.contentBuilder?.call(context, buildToolRow) ??
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        for (final activity in activities)
+                          buildToolRow(activity),
+                      ],
+                    )
+                : const SizedBox.shrink(),
           ),
           if (running && !isExpanded)
             for (final activity in activities.skip(

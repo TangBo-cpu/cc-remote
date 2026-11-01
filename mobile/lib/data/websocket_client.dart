@@ -193,8 +193,10 @@ class RemoteWebSocketClient {
     _subscription = channel.stream.listen(
       (data) {
         if (!_isCurrent(channel, generation)) return;
-        final authenticated = _handlePromptProtocolMessage(data);
-        _onMessage?.call(data);
+        final decoded = _decodeMessage(data);
+        final authenticated =
+            decoded != null && _handlePromptProtocolMessage(decoded);
+        _onMessage?.call(decoded ?? data);
         if (authenticated && !_isCurrent(channel, generation)) return;
         if (authenticated) {
           final wasAuthenticated = _authenticated;
@@ -323,37 +325,42 @@ class RemoteWebSocketClient {
     _closeCurrentConnection();
   }
 
-  bool _handlePromptProtocolMessage(dynamic data) {
+  Map<String, dynamic>? _decodeMessage(dynamic data) {
     try {
+      if (data is Map<String, dynamic>) return data;
+      if (data is Map) return Map<String, dynamic>.from(data);
       final decoded = jsonDecode(data.toString());
-      if (decoded is! Map<String, dynamic>) return false;
-      if (decoded['type'] == 'pong' &&
-          _probeId != null &&
-          decoded['probeId'] == _probeId) {
-        _finishProbe();
-      }
-      if (decoded['type'] == 'status' &&
-          decoded['authenticated'] == true &&
-          decoded.containsKey('connectionProbe')) {
-        _supportsConnectionProbe = decoded['connectionProbe'] == true;
-      }
-      if (decoded['type'] == 'status' &&
-          decoded['authenticated'] == true &&
-          decoded.containsKey('multiDevice')) {
-        _supportsMultiDevice = decoded['multiDevice'] == true;
-      }
-      final pendingPromptId = _pendingPrompt?['promptId'];
-      final messagePromptId = decoded['promptId'];
-      if (pendingPromptId is String && messagePromptId == pendingPromptId) {
-        if (decoded['type'] == 'prompt_accepted' ||
-            decoded['type'] == 'error') {
-          _pendingPrompt = null;
-        }
-      }
-      return decoded['type'] == 'status' && decoded['authenticated'] == true;
+      if (decoded is! Map) return null;
+      return Map<String, dynamic>.from(decoded);
     } catch (_) {
-      return false;
+      return null;
     }
+  }
+
+  bool _handlePromptProtocolMessage(Map<String, dynamic> decoded) {
+    if (decoded['type'] == 'pong' &&
+        _probeId != null &&
+        decoded['probeId'] == _probeId) {
+      _finishProbe();
+    }
+    if (decoded['type'] == 'status' &&
+        decoded['authenticated'] == true &&
+        decoded.containsKey('connectionProbe')) {
+      _supportsConnectionProbe = decoded['connectionProbe'] == true;
+    }
+    if (decoded['type'] == 'status' &&
+        decoded['authenticated'] == true &&
+        decoded.containsKey('multiDevice')) {
+      _supportsMultiDevice = decoded['multiDevice'] == true;
+    }
+    final pendingPromptId = _pendingPrompt?['promptId'];
+    final messagePromptId = decoded['promptId'];
+    if (pendingPromptId is String && messagePromptId == pendingPromptId) {
+      if (decoded['type'] == 'prompt_accepted' || decoded['type'] == 'error') {
+        _pendingPrompt = null;
+      }
+    }
+    return decoded['type'] == 'status' && decoded['authenticated'] == true;
   }
 
   void _retryPendingPrompt(WebSocketChannel channel, int generation) {

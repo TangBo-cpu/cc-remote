@@ -1308,6 +1308,7 @@ async function runPromptFlight(
       const activities = engine === 'claude'
         ? extractClaudeActivities(event)
         : extractCodexActivities(event);
+      if (activities.length) flushTextDeltaBatch();
       for (const activity of activities) {
         const publicActivity = redactAttachmentPaths(
           activity,
@@ -1812,7 +1813,6 @@ let textBatchTimer: NodeJS.Timeout | undefined;
 
 function enqueueTextDelta(context: SessionContext, text: string, runId: string): void {
   if (!text) return;
-  context.transcript.appendText(text);
   if (textBatchContext && textBatchContext.session.id !== context.session.id) {
     flushTextDeltaBatch();
   }
@@ -1845,13 +1845,16 @@ function flushTextDeltaBatch(): void {
   textBatch = '';
   textBatchContext = undefined;
   textBatchRunId = undefined;
+  context.transcript.appendText(text);
   broadcast(sessionMessage({ type: 'text', text }, context, runId));
 }
 
 function broadcast(data: unknown): void {
+  const payload = serializePayload(data);
+  if (payload === undefined) return;
   for (const client of [...authedSockets.keys()]) {
     try {
-      send(client, data);
+      sendPayload(client, payload);
     } catch {
       if (client.readyState !== WebSocket.CLOSED) client.terminate();
     }
@@ -1903,17 +1906,25 @@ function closeAllSockets(): void {
 function send(ws: WebSocket, data: unknown): void {
   if (ws.readyState !== WebSocket.OPEN) return;
 
-  let payload: string | undefined;
+  const payload = serializePayload(data);
+  if (payload === undefined) return;
+  sendPayload(ws, payload);
+}
+
+function serializePayload(data: unknown): string | undefined {
   try {
-    payload = JSON.stringify(data);
+    return JSON.stringify(data);
   } catch (error) {
     console.error(
       'WebSocket payload serialization failed:',
       error instanceof Error ? error.message : String(error),
     );
-    return;
+    return undefined;
   }
-  if (payload === undefined) return;
+}
+
+function sendPayload(ws: WebSocket, payload: string): void {
+  if (ws.readyState !== WebSocket.OPEN) return;
 
   const payloadBytes = Buffer.byteLength(payload);
   const oversized = payloadBytes > MAX_WS_BUFFERED_BYTES;

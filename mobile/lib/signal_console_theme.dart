@@ -849,6 +849,26 @@ ui.ImageFilter _blurFilterFor(double sigma) => _blurFiltersBySigma.putIfAbsent(
   () => ui.ImageFilter.blur(sigmaX: sigma, sigmaY: sigma),
 );
 
+class SignalScrollBlurState extends InheritedWidget {
+  const SignalScrollBlurState({
+    super.key,
+    required this.scrolling,
+    required super.child,
+  });
+
+  final bool scrolling;
+
+  static bool isScrolling(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<SignalScrollBlurState>()
+          ?.scrolling ??
+      false;
+
+  @override
+  bool updateShouldNotify(SignalScrollBlurState oldWidget) =>
+      oldWidget.scrolling != scrolling;
+}
+
 class SignalLiquidGlass extends StatelessWidget {
   const SignalLiquidGlass({
     super.key,
@@ -865,6 +885,7 @@ class SignalLiquidGlass extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scrolling = SignalScrollBlurState.isScrolling(context);
     final surface = CustomPaint(
       foregroundPainter: lens
           ? _LiquidLensRimPainter(
@@ -877,10 +898,12 @@ class SignalLiquidGlass extends StatelessWidget {
         child: child,
       ),
     );
-    final blurred = BackdropFilter.grouped(
-      filter: _blurFilterFor(blurSigma),
-      child: surface,
-    );
+    final blurred = scrolling
+        ? surface
+        : BackdropFilter.grouped(
+            filter: _blurFilterFor(blurSigma),
+            child: surface,
+          );
     final clipped = decoration.shape == BoxShape.circle
         ? ClipOval(child: blurred)
         : ClipRRect(

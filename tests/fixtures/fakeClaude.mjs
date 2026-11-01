@@ -97,6 +97,21 @@ if (options.mode === 'stale-resume' && resumeIndex >= 0) {
       return;
     }
 
+    if (options.mode === 'text-activity') {
+      process.stdout.write([
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'before tool' }] } },
+        { type: 'assistant', message: { content: [
+          { type: 'tool_use', id: 'read-order', name: 'Read', input: { file_path: 'README.md' } },
+        ] } },
+        { type: 'user', message: { content: [
+          { type: 'tool_result', tool_use_id: 'read-order', content: 'fixture' },
+        ] } },
+        { type: 'assistant', message: { content: [{ type: 'text', text: 'after tool' }] } },
+        { type: 'result', is_error: false, result: 'after tool' },
+      ].map(event => JSON.stringify(event)).join('\n') + '\n');
+      return;
+    }
+
     process.stdout.write(JSON.stringify({
       type: 'assistant',
       message: { content: [{ type: 'text', text: 'fake reply' }] },

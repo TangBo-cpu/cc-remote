@@ -31,6 +31,54 @@ after(async () => {
   await rm(daemon.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 });
 
+test('batched text keeps tool activity ordering in live events and saved transcripts', async () => {
+  const instance = await startDaemon({
+    claudeBin: process.execPath,
+    claudeArgs: () => [resolve('tests/fixtures/fakeClaude.mjs'), '--fake-mode=text-activity'],
+  });
+  let socket: WebSocket | undefined;
+  try {
+    const paired = await fetch(instance.baseUrl + '/api/pair', {
+      method: 'POST', headers: { Origin: instance.baseUrl },
+      body: JSON.stringify({ nonce: instance.nonce }),
+    });
+    assert.equal(paired.status, 200);
+    const { token } = await paired.json() as { token: string };
+    const headers = { Authorization: 'Bearer ' + token };
+    const { activeSessionId: sessionId } = await (await fetch(
+      instance.baseUrl + '/api/status', { headers },
+    )).json() as { activeSessionId: string };
+    socket = new WebSocket(instance.baseUrl.replace('http:', 'ws:') + '/ws', {
+      headers: { Origin: instance.baseUrl },
+    });
+    await once(socket, 'open');
+    const snapshot = waitForWsMessage(socket, message => message.type === 'transcript_snapshot');
+    socket.send(JSON.stringify({ type: 'auth', token }));
+    await snapshot;
+    const events: string[] = [];
+    socket.on('message', data => {
+      const message = JSON.parse(data.toString());
+      if (message.type === 'text') events.push(message.text);
+      if (message.type === 'activity' && message.id === 'read-order') events.push('tool');
+    });
+    const result = waitForPromptResult(socket, sessionId);
+    socket.send(JSON.stringify({ type: 'prompt', sessionId, text: 'check ordering' }));
+    await result;
+    assert.deepEqual(events, ['before tool', 'tool', 'tool', 'after tool']);
+    const { transcript } = await (await fetch(
+      instance.baseUrl + '/api/sessions/' + sessionId, { headers },
+    )).json() as { transcript: { messages: Array<{ role: string; text: string }> } };
+    assert.deepEqual(transcript.messages.map(message => message.role), ['user', 'assistant', 'activity', 'assistant']);
+    assert.equal(transcript.messages[1].text, 'before tool');
+    assert.equal(transcript.messages[3].text, 'after tool');
+  } finally {
+    socket?.terminate();
+    instance.child.kill();
+    if (instance.child.exitCode === null) await once(instance.child, 'exit');
+    await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
 test('daemon rejects an untrusted Host before routing the request', async () => {
   const url = new URL(daemon.baseUrl);
   const response = await rawRequest({

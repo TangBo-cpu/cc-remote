@@ -4,9 +4,9 @@
 
 扫码配对后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 继续运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v2.0.17](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.17/cc-remote-v2.0.17-android.apk)
+[下载 Android APK · v2.0.18](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.18/cc-remote-v2.0.18-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.17)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.18)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -125,11 +125,11 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v2.0.17 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.17/cc-remote-v2.0.17-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v2.0.18 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.18/cc-remote-v2.0.18-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫启动器窗口或终端中的二维码 → 确认电脑名与服务地址 → 进入控制台
 
-Android App 版本为 v2.0.17。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
+Android App 版本为 v2.0.18。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
 
 ### 4. 开始对话
 
@@ -273,7 +273,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v2.0.17](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.17)**
-APK：[`cc-remote-v2.0.17-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.17/cc-remote-v2.0.17-android.apk)
+当前公开版：**[v2.0.18](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.18)**
+APK：[`cc-remote-v2.0.18-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.18/cc-remote-v2.0.18-android.apk)
 
-v2.0.17 将长工具详情默认收为三行预览，可原地展开，并保留手动展开状态；搜索结果会显示完整详情。功能图标统一使用现有 Noto 彩色字形，模型按钮显示 Claude / OpenAI 标志。错误日志改为紧凑摘要与独立详情，显示和复制时清理终端控制符并隐藏常见凭据。Android 版本为 `2.0.17+27`，电脑端 package 版本为 `2.0.17`，安装包沿用旧版测试签名，适合个人使用。
+v2.0.18 优化长对话与流式输出：减少重复解析和滚动定位开销，滚动时暂时停用覆盖层背景模糊，工具时间线折叠时不再构建全部详情。Markdown 文件路径复用匹配结果；电脑端复用 WebSocket 广播序列化结果，并批量更新文本记录，保持文本与工具活动的先后顺序。Android 版本为 `2.0.18+28`，电脑端 package 版本为 `2.0.18`，安装包沿用旧版测试签名，适合个人使用。

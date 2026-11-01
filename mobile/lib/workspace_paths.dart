@@ -309,18 +309,20 @@ TextSpan workspacePathInlineSpan(
   String text, {
   TextStyle? style,
   String? workspaceDir,
+  List<WorkspacePathMatch>? matches,
   ValueChanged<String>? onOpenPath,
   List<TapGestureRecognizer>? recognizers,
   Color linkColor = AppColors.link,
 }) {
-  final matches = findWorkspacePaths(text, workspaceDir: workspaceDir);
+  final resolvedMatches =
+      matches ?? findWorkspacePaths(text, workspaceDir: workspaceDir);
   final base = style ?? const TextStyle();
-  if (onOpenPath == null || matches.isEmpty) {
+  if (onOpenPath == null || resolvedMatches.isEmpty) {
     return TextSpan(text: text, style: base);
   }
   final spans = <InlineSpan>[];
   var cursor = 0;
-  for (final match in matches) {
+  for (final match in resolvedMatches) {
     if (match.start < cursor) continue;
     if (match.start > cursor) {
       spans.add(TextSpan(text: text.substring(cursor, match.start)));
