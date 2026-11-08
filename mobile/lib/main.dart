@@ -10491,7 +10491,7 @@ String createPromptId() {
 IconData activityToolIconData(String? toolName, {bool isSkill = false}) {
   return switch (toolName) {
     'Skill' => LucideIcons.sparkles,
-    'Bash' => LucideIcons.terminal,
+    'Bash' || 'Shell' => LucideIcons.terminal,
     'Read' || 'Write' || 'Edit' || 'FileChange' => LucideIcons.fileCode,
     'WebSearch' || 'WebFetch' => LucideIcons.globe,
     'Grep' || 'Glob' => LucideIcons.search,
@@ -10501,6 +10501,7 @@ IconData activityToolIconData(String? toolName, {bool isSkill = false}) {
 }
 
 Widget buildActivityIcon(TranscriptMessage activity, BuildContext context) {
+  final palette = AppPalette.of(context);
   final state = activity.activityState;
   final tool = activity.activityTool;
   final isSkill =
@@ -10509,78 +10510,29 @@ Widget buildActivityIcon(TranscriptMessage activity, BuildContext context) {
       activity.text.contains('技能');
 
   if (state == ActivityState.running) {
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        color: AppPalette.of(context).accentSoft,
-        shape: BoxShape.circle,
-      ),
-      child: Center(
-        child: SizedBox.square(
-          dimension: AppIconSizes.badge,
-          child: CircularProgressIndicator(
-            strokeWidth: 1.8,
-            value: MediaQuery.disableAnimationsOf(context) ? 0.65 : null,
-            color: AppPalette.of(context).accent,
-          ),
+    return ActivityIconBadge(
+      child: SizedBox.square(
+        dimension: AppIconSizes.control,
+        child: CircularProgressIndicator(
+          strokeWidth: 1.8,
+          value: MediaQuery.disableAnimationsOf(context) ? 0.65 : null,
+          color: palette.iconAccent,
         ),
       ),
     );
   }
 
-  if (state == ActivityState.error) {
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        color: AppPalette.of(context).danger.withValues(alpha: 0.12),
-        shape: BoxShape.circle,
-      ),
-      child: Center(
-        child: SmartIcon(
-          LucideIcons.circleAlert,
-          size: AppIconSizes.badge,
-          color: AppPalette.of(context).danger,
-        ),
-      ),
-    );
-  }
-
-  if (state == ActivityState.stopped) {
-    return Container(
-      width: 20,
-      height: 20,
-      decoration: BoxDecoration(
-        color: AppPalette.of(context).control,
-        shape: BoxShape.circle,
-      ),
-      child: Center(
-        child: SmartIcon(
-          LucideIcons.square,
-          size: AppIconSizes.badge,
-          color: AppPalette.of(context).muted,
-        ),
-      ),
-    );
-  }
-
-  final iconData = activityToolIconData(tool, isSkill: isSkill);
-  final badgeColor = AppPalette.of(context).control;
-  final iconColor = AppPalette.of(context).muted;
-
-  return Container(
-    width: 20,
-    height: 20,
-    decoration: BoxDecoration(color: badgeColor, shape: BoxShape.circle),
-    child: Center(
-      child: SmartIcon(
-        iconData,
-        size: AppIconSizes.badge,
-        color: iconColor,
-      ),
-    ),
-  );
+  final icon = switch (state) {
+    ActivityState.error => LucideIcons.circleAlert,
+    ActivityState.stopped => LucideIcons.square,
+    _ => activityToolIconData(tool, isSkill: isSkill),
+  };
+  final color = switch (state) {
+    ActivityState.error => palette.danger,
+    ActivityState.stopped => palette.warning,
+    _ => isSkill ? palette.warning : palette.iconAccent,
+  };
+  return ActivityIconBadge(color: color, child: Icon(icon));
 }
 
 Widget buildActivityTitle(TranscriptMessage activity, BuildContext context) {
@@ -10607,7 +10559,7 @@ Widget buildActivityTitle(TranscriptMessage activity, BuildContext context) {
           style: TextStyle(
             color: isError
                 ? AppPalette.of(context).danger
-                : AppPalette.of(context).muted,
+                : AppPalette.of(context).messageMuted,
             fontSize: AppTypography.activityBodySize,
             fontWeight: FontWeight.w400,
             height: 1.35,
@@ -10632,7 +10584,7 @@ Widget buildActivityTitle(TranscriptMessage activity, BuildContext context) {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 11,
+                fontSize: 13,
                 fontFamily: AppTypography.codeFontFamily,
                 fontFamilyFallback: AppTypography.codeFontFamilyFallback,
                 fontWeight: FontWeight.w600,
@@ -10729,7 +10681,10 @@ class ActivityBlock extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(4, 5, 5, 5),
           child: Row(
             children: [
-              SizedBox(width: 22, child: Center(child: icon)),
+              SizedBox(
+                width: ActivityIconBadge.size,
+                child: Center(child: icon),
+              ),
               const SizedBox(width: 6),
               Expanded(child: title),
             ],
@@ -10755,7 +10710,10 @@ class ActivityBlock extends StatelessWidget {
             visualDensity: VisualDensity.compact,
             tilePadding: const EdgeInsets.symmetric(horizontal: 12),
             childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-            leading: SizedBox(width: 20, child: Center(child: icon)),
+            leading: SizedBox(
+              width: ActivityIconBadge.size,
+              child: Center(child: icon),
+            ),
             title: title,
             subtitle: Text(
               detail,
@@ -10963,22 +10921,11 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
           (activity) => activity.activityState == ActivityState.running,
         );
     final isExpanded = widget.expanded ?? expanded;
-    final failedCount = activities
-        .where((activity) => activity.activityState == ActivityState.error)
-        .length;
     final stoppedCount = activities
         .where((activity) => activity.activityState == ActivityState.stopped)
         .length;
-    final status = failedCount > 0
-        ? '$failedCount 个失败'
-        : stoppedCount > 0
-        ? '$stoppedCount 个已停止'
-        : null;
-    final tone = failedCount > 0
-        ? palette.danger
-        : stoppedCount > 0
-        ? palette.warning
-        : null;
+    final status = stoppedCount > 0 ? '$stoppedCount 个已停止' : null;
+    final tone = stoppedCount > 0 ? palette.warning : null;
     Widget buildToolRow(TranscriptMessage activity) => ToolActivityDetail(
       key: ValueKey('tool-inline-${activity.activityId}'),
       activity: activity,
@@ -10999,9 +10946,9 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
           ActivityDisclosure(
             expanded: isExpanded,
             title: displayedTitle,
-            leading: const SmartIcon(
-              LucideIcons.wrench,
-              size: AppIconSizes.inline,
+            leading: ActivityIconBadge(
+              color: tone,
+              child: const Icon(LucideIcons.wrench),
             ),
             compact: true,
             running: running,

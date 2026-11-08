@@ -225,8 +225,8 @@ void main() {
     );
     final first = find.byKey(const ValueKey('activity-step-toggle-first'));
     final second = find.byKey(const ValueKey('activity-step-toggle-second'));
-    expect(tester.getSize(first).height, 32);
-    expect(tester.getSize(second).height, 32);
+    expect(tester.getSize(first).height, 40);
+    expect(tester.getSize(second).height, 40);
     expect(
       tester.getTopLeft(second).dy - tester.getBottomLeft(first).dy,
       inInclusiveRange(0, 2),
@@ -644,7 +644,8 @@ void main() {
     expect(find.text('flutter test --no-pub'), findsNothing);
     await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
     await tester.pumpAndSettle();
-    expect(find.text('已完成 · 4 秒'), findsOneWidget);
+    expect(find.text('4 秒'), findsOneWidget);
+    expect(find.text('已完成 · 4 秒'), findsNothing);
     expect(find.text('flutter test --no-pub'), findsOneWidget);
     expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
     expect(tester.takeException(), isNull);
@@ -731,25 +732,31 @@ void main() {
     expect(find.text('搜索代码'), findsNothing);
   });
 
-  testWidgets('tool errors and stops expose state in text and semantics', (
+  testWidgets('tool errors stay in details while stops remain in the summary', (
     tester,
   ) async {
     for (final state in [ActivityState.error, ActivityState.stopped]) {
-      final status = state == ActivityState.error ? '1 个失败' : '1 个已停止';
+      final stopped = state == ActivityState.stopped;
       await tester.pumpWidget(
         host(ActivityTimelineCard(activities: [tool(state)])),
       );
-      expect(find.text(status), findsOneWidget);
+      expect(find.text('1 个失败'), findsNothing);
+      expect(find.text('1 个已停止'), stopped ? findsOneWidget : findsNothing);
       expect(find.text('flutter test'), findsNothing);
       final semantics = tester
           .getSemantics(find.byKey(const ValueKey('activity-process-toggle')))
           .getSemanticsData();
-      expect(semantics.label, '运行命令，1 次操作，$status');
+      expect(semantics.label, '运行命令，1 次操作${stopped ? '，1 个已停止' : ''}');
       expect(semantics.flagsCollection.isButton, isTrue);
       expect(semantics.flagsCollection.isExpanded, Tristate.isFalse);
       await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
       await tester.pumpAndSettle();
       expect(find.text('flutter test'), findsOneWidget);
+      expect(find.text(stopped ? '已停止' : '执行失败'), findsOneWidget);
+      final detailSemantics = tester.getSemantics(
+        find.byKey(const ValueKey('activity-step-toggle-tool')),
+      );
+      expect(detailSemantics.label, contains(stopped ? '已停止' : '执行失败'));
       await tester.pumpWidget(const SizedBox());
     }
   });

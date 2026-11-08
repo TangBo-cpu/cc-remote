@@ -83,6 +83,25 @@ void main() {
     expect(find.text('运行中 · 3 秒'), findsOneWidget);
   });
 
+  testWidgets('completion stays accessible without a repeated status label', (
+    tester,
+  ) async {
+    final semantics = tester.ensureSemantics();
+    await tester.pumpWidget(
+      host(toolDetail('flutter test', state: ActivityState.done)),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('3 秒'), findsOneWidget);
+    expect(find.textContaining('已完成'), findsNothing);
+    expect(
+      tester.getSemantics(
+        find.byKey(const ValueKey('activity-step-toggle-tool')),
+      ).label,
+      '运行命令，已完成，3 秒',
+    );
+    semantics.dispose();
+  });
+
   for (final brightness in Brightness.values) {
     for (final scale in [1.0, 2.0]) {
       testWidgets(

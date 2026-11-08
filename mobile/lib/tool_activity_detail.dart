@@ -94,7 +94,7 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
     final tone = switch (message.activityState) {
       ActivityState.error => palette.danger,
       ActivityState.stopped => palette.warning,
-      _ => palette.muted,
+      _ => palette.messageMuted,
     };
     return ActivityDisclosure(
       toggleKey: ValueKey('activity-step-toggle-${message.activityId}'),
@@ -149,7 +149,9 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
       running: widget.running,
       compact: true,
       expanded: (expanded || widget.reveal) && detail.isNotEmpty,
-      statusText: '$status${duration.isEmpty ? '' : ' · $duration'}',
+      statusText: message.activityState == ActivityState.done
+          ? (duration.isEmpty ? null : duration)
+          : '$status${duration.isEmpty ? '' : ' · $duration'}',
       tone: tone,
       semanticLabel:
           '${filePath == null ? widget.title : '$fileAction $filePath'}，$status'
@@ -165,7 +167,12 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
               );
             },
       child: Padding(
-        padding: const EdgeInsetsDirectional.fromSTEB(32, 0, 8, 2),
+        padding: const EdgeInsetsDirectional.fromSTEB(
+          ActivityIconBadge.contentInset,
+          0,
+          8,
+          2,
+        ),
         child: LayoutBuilder(
           builder: (context, constraints) {
             final text = filePath ?? detail;

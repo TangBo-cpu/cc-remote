@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:cc_remote/main.dart';
 import 'package:cc_remote/data/remote_models.dart';
-import 'package:cc_remote/noto_icon.dart';
+import 'package:cc_remote/activity_disclosure.dart';
 import 'package:cc_remote/signal_console_theme.dart';
 
 TranscriptMessage tool(ActivityState state) => TranscriptMessage.activity(
@@ -69,7 +69,7 @@ void main() {
       find.byKey(const ValueKey('activity-step-toggle-read')),
       findsOneWidget,
     );
-    expect(find.byType(NotoIcon), findsWidgets);
+    expect(find.byType(ActivityIconBadge), findsWidgets);
     expect(find.byType(Icon), findsWidgets);
     expect(find.byKey(const ValueKey('activity-detail-read')), findsOneWidget);
     expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
@@ -110,7 +110,7 @@ void main() {
     await tester.pumpWidget(host(turn(running: false), reduceMotion: true));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('process-history-surface')), findsNothing);
-    expect(find.byType(NotoIcon), findsWidgets);
+    expect(find.byType(ActivityIconBadge), findsWidgets);
     expect(find.text('检查完成'), findsOneWidget);
     expect(find.byKey(const ValueKey('activity-detail-read')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));

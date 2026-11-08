@@ -4198,7 +4198,7 @@ void main() {
       find.descendant(
         of: find.byKey(const ValueKey('activity-step-toggle-skill-1')),
         matching: find.byWidgetPredicate(
-          (widget) => widget is SmartIcon && widget.icon == LucideIcons.sparkles,
+          (widget) => widget is Icon && widget.icon == LucideIcons.sparkles,
         ),
       ),
       findsOneWidget,
