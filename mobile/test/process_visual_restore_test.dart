@@ -69,7 +69,8 @@ void main() {
       find.byKey(const ValueKey('activity-step-toggle-read')),
       findsOneWidget,
     );
-    expect(find.byType(SmartIcon), findsWidgets);
+    expect(find.byType(NotoIcon), findsWidgets);
+    expect(find.byType(Icon), findsWidgets);
     expect(find.byKey(const ValueKey('activity-detail-read')), findsOneWidget);
     expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
     final materials = tester.widgetList<Material>(
@@ -109,7 +110,7 @@ void main() {
     await tester.pumpWidget(host(turn(running: false), reduceMotion: true));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('process-history-surface')), findsNothing);
-    expect(find.byType(SmartIcon), findsWidgets);
+    expect(find.byType(NotoIcon), findsWidgets);
     expect(find.text('检查完成'), findsOneWidget);
     expect(find.byKey(const ValueKey('activity-detail-read')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));

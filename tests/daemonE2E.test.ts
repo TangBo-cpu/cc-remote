@@ -936,7 +936,7 @@ for (const engine of ['claude', 'codex'] as const) {
   test('desktop session import selects one ' + engine + ' conversation, filters oversized files and resumes it', async () => {
     const nativeId = engine === 'claude' ? randomUUID() : 'fake-thread-id';
     const largeId = randomUUID();
-    const limit = 2 * 1024 * 1024;
+    const limit = 20 * 1024 * 1024;
     const instance = await startDaemon({
       claudeBin: process.execPath,
       claudeArgs: () => [resolve('tests/fixtures/fakeClaude.mjs'), '--fake-session=' + nativeId],
@@ -951,13 +951,14 @@ for (const engine of ['claude', 'codex'] as const) {
       const path = join(directory, nativeId + '.jsonl');
       const largePath = join(directory, largeId + '.jsonl');
       const userId = randomUUID();
-      const original = [
+      let original = [
         { type: 'user', sessionId: nativeId, cwd: instance.root, uuid: userId, parentUuid: null,
           message: { role: 'user', content: '电脑问题' } },
         { type: 'assistant', sessionId: nativeId, uuid: randomUUID(), parentUuid: userId,
           message: { role: 'assistant', content: '电脑回复' } },
         { type: 'custom-title', sessionId: nativeId, customTitle: '电脑会话' },
       ].map(entry => JSON.stringify(entry)).join('\n') + '\n';
+      original += ' '.repeat(limit - Buffer.byteLength(original) - 1) + '\n';
       await writeFile(path, original);
       await writeFile(largePath, '');
       await truncate(largePath, limit + 1);

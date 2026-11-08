@@ -118,39 +118,120 @@ void main() {
     );
   });
 
-  testWidgets('reasoning is inline and retains manual state on completion', (
+  testWidgets(
+    'live reasoning toggles between preview and full text, then folds',
+    (tester) async {
+      await tester.pumpWidget(
+        host(ThinkingHistoryBlock(message: thought(ActivityState.running))),
+      );
+      expect(find.text('思考中'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('thinking-history-content')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('thinking-preview')), findsOneWidget);
+      final toggle = find.byKey(const ValueKey('thinking-history-toggle'));
+      expect(
+        tester
+            .getSemantics(toggle)
+            .getSemanticsData()
+            .flagsCollection
+            .isExpanded,
+        Tristate.isFalse,
+      );
+      await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+      await tester.pump(const Duration(milliseconds: 220));
+      expect(find.byType(MarkdownBody), findsOneWidget);
+      expect(find.byKey(const ValueKey('thinking-preview')), findsNothing);
+      expect(
+        tester
+            .getSemantics(toggle)
+            .getSemanticsData()
+            .flagsCollection
+            .isExpanded,
+        Tristate.isTrue,
+      );
+      await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+      await tester.pump(const Duration(milliseconds: 220));
+      expect(find.byKey(const ValueKey('thinking-preview')), findsOneWidget);
+      await tester.pumpWidget(
+        host(ThinkingHistoryBlock(message: thought(ActivityState.done))),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('已深度思考'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('thinking-history-content')),
+        findsNothing,
+      );
+      await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('thinking-history-content')),
+        findsOneWidget,
+      );
+      expect(find.byType(AnimatedSize), findsNothing);
+    },
+  );
+
+  testWidgets('thinking preview stays three lines high and follows the tail', (
+    tester,
+  ) async {
+    final detail = List.generate(40, (i) => '检查步骤 $i，确认连接和会话状态。').join(' ');
+    for (final scale in [1.0, 2.0]) {
+      Widget reasoning(String text) => host(
+        ThinkingHistoryBlock(
+          message: thought(ActivityState.running, detail: text),
+        ),
+        scale: scale,
+        reduceMotion: true,
+      );
+      await tester.pumpWidget(reasoning('开始检查。'));
+      final preview = find.byKey(const ValueKey('thinking-preview'));
+      final size = tester.getSize(preview);
+      final text = tester.widget<Text>(find.text('开始检查。'));
+      final painter = TextPainter(
+        text: TextSpan(text: ' ', style: text.style),
+        textDirection: TextDirection.ltr,
+        textScaler: TextScaler.linear(scale),
+      );
+      expect(size.height, painter.preferredLineHeight * 3);
+      painter.dispose();
+      await tester.pumpWidget(reasoning(detail));
+      await tester.pumpAndSettle();
+      expect(tester.getSize(preview), size);
+      expect(
+        tester.getBottomLeft(find.text(detail)).dy,
+        closeTo(tester.getBottomLeft(preview).dy, 1),
+      );
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+    }
+  });
+
+  testWidgets('compact process rows stay dense and have separate tap targets', (
     tester,
   ) async {
     await tester.pumpWidget(
-      host(ThinkingHistoryBlock(message: thought(ActivityState.running))),
+      host(
+        ActivityTimelineCard(
+          activities: [
+            tool(ActivityState.done, id: 'first', detail: ''),
+            tool(ActivityState.done, id: 'second', detail: ''),
+          ],
+          expanded: true,
+        ),
+        reduceMotion: true,
+      ),
     );
-    expect(find.text('思考中'), findsOneWidget);
+    final first = find.byKey(const ValueKey('activity-step-toggle-first'));
+    final second = find.byKey(const ValueKey('activity-step-toggle-second'));
+    expect(tester.getSize(first).height, 32);
+    expect(tester.getSize(second).height, 32);
     expect(
-      find.byKey(const ValueKey('thinking-history-content')),
-      findsOneWidget,
+      tester.getTopLeft(second).dy - tester.getBottomLeft(first).dy,
+      inInclusiveRange(0, 2),
     );
-    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
-    await tester.pump(const Duration(milliseconds: 220));
-    expect(
-      find.byKey(const ValueKey('thinking-history-content')),
-      findsNothing,
-    );
-    await tester.pumpWidget(
-      host(ThinkingHistoryBlock(message: thought(ActivityState.done))),
-    );
-    await tester.pumpAndSettle();
-    expect(find.text('已深度思考'), findsOneWidget);
-    expect(
-      find.byKey(const ValueKey('thinking-history-content')),
-      findsNothing,
-    );
-    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
-    await tester.pumpAndSettle();
-    expect(
-      find.byKey(const ValueKey('thinking-history-content')),
-      findsOneWidget,
-    );
-    expect(find.byType(AnimatedSize), findsNothing);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('empty reasoning shows only its live indicator', (tester) async {
@@ -248,7 +329,7 @@ void main() {
     expect(find.text('flutter test'), findsOneWidget);
     expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
     final row = find.byKey(const ValueKey('activity-step-toggle-read'));
-    expect(tester.getSize(row).height, greaterThanOrEqualTo(48));
+    expect(tester.getSize(row).height, greaterThanOrEqualTo(32));
     final before = tester.getSize(find.byType(ActivityTimelineCard)).height;
     await tester.tap(row);
     await tester.pumpAndSettle();

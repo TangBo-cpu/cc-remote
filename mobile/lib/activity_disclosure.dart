@@ -3,11 +3,10 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
-import 'noto_icon.dart';
 import 'signal_console_theme.dart';
 
 // Cherry Studio mobile: text-led status rows, adjacent chevrons, a 2s glyph
-// sweep, and natural disclosure layout. Touch targets retain the app's 48dp.
+// sweep, and natural disclosure layout.
 class ActivityMotion {
   static const fast = Duration(milliseconds: 200);
   static const shimmer = Duration(milliseconds: 2000);
@@ -20,6 +19,7 @@ class ActivityDisclosure extends StatefulWidget {
     required this.expanded,
     required this.title,
     required this.child,
+    this.preview = false,
     this.running = false,
     this.statusText,
     this.tone,
@@ -36,6 +36,7 @@ class ActivityDisclosure extends StatefulWidget {
   final bool expanded;
   final String title;
   final Widget child;
+  final bool preview;
   final bool running;
   final String? statusText;
   final Color? tone;
@@ -47,8 +48,7 @@ class ActivityDisclosure extends StatefulWidget {
   final Widget? titleWidget;
   final Object? contentRevision;
 
-  /// Step-level rows inside a group: a dense visual line whose tap target
-  /// still reaches [AppSizes.touchTarget] through an invisible hit area.
+  /// Dense process rows grow with text instead of reserving a full button row.
   final bool compact;
   @override
   State<ActivityDisclosure> createState() => _ActivityDisclosureState();
@@ -112,7 +112,7 @@ class _ActivityDisclosureState extends State<ActivityDisclosure> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         header,
-        if (widget.expanded) ...[
+        if (widget.expanded || widget.preview) ...[
           SizedBox(height: widget.compact ? 2 : 6),
           widget.child,
         ],
@@ -150,8 +150,7 @@ class ActivityStatusRow extends StatelessWidget {
   final VoidCallback? onTap;
   final String? semanticLabel;
 
-  /// Step-level rows inside a group. They keep the full [AppSizes.touchTarget]
-  /// height; only the spacing around them tightens.
+  /// Full-width process targets use a 32dp minimum and grow with large text.
   final bool compact;
 
   @override
@@ -176,15 +175,20 @@ class ActivityStatusRow extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(AppRadii.compact),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: AppSizes.touchTarget),
+            constraints: BoxConstraints(
+              minHeight: compact ? 32 : AppSizes.touchTarget,
+            ),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: LayoutBuilder(
                 builder: (context, constraints) => Row(
                   children: [
                     if (leading != null) ...[
-                      leading!,
-                      const SizedBox(width: 6),
+                      SizedBox.square(
+                        dimension: 24,
+                        child: Center(child: leading),
+                      ),
+                      const SizedBox(width: 8),
                     ],
                     Expanded(
                       child: Row(
@@ -207,7 +211,7 @@ class ActivityStatusRow extends StatelessWidget {
                                   ? Duration.zero
                                   : ActivityMotion.fast,
                               curve: ActivityMotion.settle,
-                              child: SmartIcon(
+                              child: Icon(
                                 LucideIcons.chevronRight,
                                 size: AppIconSizes.badge,
                                 color: color,

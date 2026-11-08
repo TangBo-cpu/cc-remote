@@ -102,7 +102,7 @@ void main() {
                 .getSize(find.byKey(const ValueKey('activity-detail-tool')))
                 .height,
             lessThanOrEqualTo(
-              3 * (AppTypography.activityBodySize * 1.6 * scale).ceilToDouble(),
+              3 * (AppTypography.activityBodySize * 1.4 * scale).ceilToDouble(),
             ),
           );
           final more = find.byKey(const ValueKey('activity-detail-more-tool'));

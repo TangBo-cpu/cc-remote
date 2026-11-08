@@ -1,9 +1,28 @@
 import { open, realpath } from 'node:fs/promises';
-import { basename, isAbsolute, relative, resolve, sep } from 'node:path';
+import { basename, extname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { AttachmentStore, attachmentDescriptor, MAX_ATTACHMENT_BYTES, type AttachmentDescriptor } from './attachmentStore.js';
 
-export function replyImageSources(text: string): string[] {
+const deliveryTypes: Record<string, string> = {
+  '.pdf': 'application/pdf',
+  '.doc': 'application/msword',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.xls': 'application/vnd.ms-excel',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.ppt': 'application/vnd.ms-powerpoint',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.csv': 'text/csv', '.tsv': 'text/tab-separated-values',
+  '.md': 'text/markdown', '.markdown': 'text/markdown', '.txt': 'text/plain',
+  '.html': 'text/html', '.htm': 'text/html', '.svg': 'image/svg+xml',
+  '.zip': 'application/zip', '.7z': 'application/x-7z-compressed',
+  '.tar': 'application/x-tar', '.gz': 'application/gzip',
+  '.apk': 'application/vnd.android.package-archive',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4',
+  '.mp4': 'video/mp4', '.webm': 'video/webm',
+};
+const bitmapExtension = /\.(png|jpe?g|gif|webp)$/i;
+
+export function replyFileSources(text: string): string[] {
   let fence = '';
   const prose = text.split(/\r?\n/).filter(line => {
     const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
@@ -20,11 +39,18 @@ export function replyImageSources(text: string): string[] {
   // shortcut: inline Markdown links only; add reference-style links when replies use them.
   const links = /!?\[[^\]\r\n]*\]\(\s*(?:<([^>\r\n]+)>|((?:\\.|[^()\s\\]|\([^()\r\n]*\))+))(?:\s+(?:"[^"\r\n]*"|'[^'\r\n]*'))?\s*\)/g;
   return [...new Set([...prose.matchAll(links)].map(match => match[1] ?? match[2])
-    .filter(source => /\.(png|jpe?g|gif|webp)(?:[?#].*)?$/i.test(source)
-      && !/^(https?:|data:|\/\/|\\\\)/i.test(source)))];
+    .filter(source => {
+      if (/^(https?:|data:|\/\/|\\\\)/i.test(source)) return false;
+      try {
+        const path = decodeURIComponent(source.split(/[?#]/)[0]);
+        return bitmapExtension.test(path) || Object.hasOwn(deliveryTypes, extname(path).toLowerCase());
+      } catch {
+        return false;
+      }
+    }))];
 }
 
-export async function collectReplyImages(options: {
+export async function collectReplyFiles(options: {
   store: AttachmentStore;
   projectId: string;
   sessionId: string;
@@ -32,13 +58,10 @@ export async function collectReplyImages(options: {
   text: string;
   existing?: AttachmentDescriptor[];
 }): Promise<AttachmentDescriptor[]> {
-  const images: AttachmentDescriptor[] = (options.existing ?? []).filter(image => !image.source);
-  for (const source of replyImageSources(options.text)) {
-    const existing = options.existing?.find(image => image.source === source);
-    if (existing) {
-      images.push(existing);
-      continue;
-    }
+  const files: AttachmentDescriptor[] = (options.existing ?? []).filter(file => !file.source);
+  const seenPaths = new Set<string>();
+  for (const source of replyFileSources(options.text)) {
+    const existing = options.existing?.find(file => file.source === source);
     let path: string;
     let roots: string[];
     try {
@@ -59,6 +82,14 @@ export async function collectReplyImages(options: {
         options.store.sessionDirectory(options.projectId, options.sessionId),
       ].map(root => realpath(root).catch(() => resolve(root))));
     } catch {
+      if (existing && !files.some(file => file.id === existing.id)) files.push(existing);
+      continue;
+    }
+    const key = process.platform === 'win32' ? path.toLowerCase() : path;
+    if (seenPaths.has(key)) continue;
+    seenPaths.add(key);
+    if (existing) {
+      if (!files.some(file => file.id === existing.id)) files.push(existing);
       continue;
     }
     const inside = (root: string) => {
@@ -75,7 +106,9 @@ export async function collectReplyImages(options: {
       if (!stat.isFile() || stat.size === 0 || stat.size > MAX_ATTACHMENT_BYTES) continue;
       const header = Buffer.alloc(12);
       await file.read(header, 0, header.length, 0);
-      const mimeType = imageMimeType(header);
+      const mimeType = bitmapExtension.test(path)
+        ? imageMimeType(header)
+        : deliveryTypes[extname(path).toLowerCase()];
       if (!mimeType) continue;
       const saved = await options.store.save({
         projectId: options.projectId,
@@ -84,12 +117,15 @@ export async function collectReplyImages(options: {
         mimeType,
         input: file.createReadStream({ start: 0, autoClose: false }),
       });
-      images.push({ ...attachmentDescriptor(saved), source });
+      files.push({ ...attachmentDescriptor(saved), source });
+    } catch {
+      // A file removed or changed during collection must not hide other deliveries.
+      continue;
     } finally {
       await file.close();
     }
   }
-  return images;
+  return files;
 }
 
 function imageMimeType(header: Buffer): string | undefined {

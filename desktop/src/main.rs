@@ -365,8 +365,8 @@ impl App {
         self.stop = self.control("BUTTON", "停止服务", WS_TABSTOP, STOP, 276, 480, 110, 40);
         self.control("BUTTON", "查看日志", WS_TABSTOP, LOGS, 398, 480, 112, 40);
         self.text("手机配对", [584, 148, 260, 28], 2, SS_CENTER, 0);
-        self.pair_label = self.text("", [584, 444, 260, 44], 3, SS_CENTER, 0);
-        self.pair = self.control("BUTTON", "刷新二维码", WS_TABSTOP, PAIR, 584, 496, 260, 36);
+        self.pair_label = self.text("", [584, 444, 260, 44], 0, SS_CENTER, 0);
+        self.pair = self.control("BUTTON", "刷新配对", WS_TABSTOP, PAIR, 584, 496, 260, 36);
         self.note_label = self.text("", [32, 564, 708, 44], 3, 0, 207);
         self.note_detail = self.text("", [32, 588, 708, 22], 3, 0, 208);
         self.control("BUTTON", "退出", WS_TABSTOP, EXIT, 780, 568, 88, 36);
@@ -452,7 +452,13 @@ impl App {
         EnableWindow(self.start, (!self.busy && !running) as i32);
         EnableWindow(self.stop, (online && owned && !self.busy) as i32);
         EnableWindow(self.pair, (online && !self.busy) as i32);
-        EnableWindow(self.origin, (!online && !self.busy) as i32);
+        EnableWindow(self.origin, (!self.busy) as i32);
+        SendMessageW(self.origin, EM_SETREADONLY, online as usize, 0);
+        if let Some(status) = &self.status {
+            if window_text(self.origin) != status.public_origin {
+                SetWindowTextW(self.origin, wide(&status.public_origin).as_ptr());
+            }
+        }
         EnableWindow(self.local, (!online && !self.busy) as i32);
         let paired = self.status.as_ref().is_some_and(|s| s.paired);
         SetWindowTextW(
@@ -460,7 +466,7 @@ impl App {
             wide(if paired && self.pairing.is_none() {
                 "添加设备"
             } else {
-                "刷新二维码"
+                "刷新配对"
             })
             .as_ptr(),
         );
@@ -471,7 +477,18 @@ impl App {
                 .saturating_sub(now_ms())
                 / 1000;
             if left == 0 {
-                "二维码已过期，请刷新。".into()
+                "配对已过期，请刷新。".into()
+            } else if let Some(code) = pair["payload"]["code"]
+                .as_str()
+                .filter(|code| code.len() == 8 && code.bytes().all(|byte| byte.is_ascii_digit()))
+            {
+                format!(
+                    "配对码 {} {}\n扫码或输码 · 有效期 {:02}:{:02}",
+                    &code[..4],
+                    &code[4..],
+                    left / 60,
+                    left % 60
+                )
             } else {
                 format!(
                     "使用手机 App 扫码添加设备\n有效期 {:02}:{:02}",
@@ -480,11 +497,11 @@ impl App {
                 )
             }
         } else if paired {
-            "点击“添加设备”显示二维码。\n已配对设备可继续使用。".into()
+            "点击“添加设备”显示配对信息。\n已配对设备可继续使用。".into()
         } else if online {
-            "点击“刷新二维码”生成配对二维码。".into()
+            "点击“刷新配对”生成二维码和配对码。".into()
         } else {
-            "启动服务后，用手机 App 扫码。".into()
+            "启动服务后，用手机 App 扫码或输码。".into()
         };
         SetWindowTextW(self.pair_label, wide(&hint).as_ptr());
     }
@@ -561,6 +578,7 @@ impl App {
                     self.busy = false;
                     self.error_note = false;
                     self.status = None;
+                    SetWindowTextW(self.origin, wide(&self.settings.public_origin).as_ptr());
                     self.manual_pair = false;
                     self.set_pairing(None);
                     self.note = "服务已停止，配对凭据仍保留。".into();
@@ -608,7 +626,9 @@ impl App {
         match id {
             START => {
                 self.settings.workspace = window_text(self.workspace).trim().to_string();
-                self.settings.public_origin = window_text(self.origin).trim().to_string();
+                if self.status.is_none() {
+                    self.settings.public_origin = window_text(self.origin).trim().to_string();
+                }
                 self.settings.no_tunnel =
                     SendMessageW(self.local, BM_GETCHECK, 0, 0) == BST_CHECKED as isize;
                 self.busy = true;
@@ -1263,6 +1283,11 @@ mod tests {
                 .unwrap();
             app.receive();
             assert_eq!(window_text(app.status_label), "服务运行中 · 已配对");
+            assert_eq!(
+                window_text(app.origin),
+                app.status.as_ref().unwrap().public_origin
+            );
+            assert_ne!(IsWindowEnabled(app.origin), 0);
             assert_eq!(window_text(app.pair), "添加设备");
             assert_eq!(window_text(app.note_detail), "关闭窗口后继续在托盘运行。");
             assert_ne!(
@@ -1272,13 +1297,13 @@ mod tests {
             app.command(PAIR);
             assert!(matches!(receiver.try_recv(), Ok(Request::Pair)));
             let pair = serde_json::json!({"payload": {"type": "cc-remote-pair", "version": 1,
-                "origin": "https://remote.example.com", "nonce": "test-nonce", "deviceName": "Test PC", "expiresAt": now_ms() + 300000},
+                "origin": "https://remote.example.com", "nonce": "test-nonce", "code": "01234567", "deviceName": "Test PC", "expiresAt": now_ms() + 300000},
                 "modules": vec![vec![true; 21]; 21]});
             event_tx.send(Event::Pair(pair.clone())).unwrap();
             app.receive();
             assert!(app.qr.is_some());
-            assert_eq!(window_text(app.pair), "刷新二维码");
-            assert!(window_text(app.pair_label).contains("扫码添加设备"));
+            assert_eq!(window_text(app.pair), "刷新配对");
+            assert!(window_text(app.pair_label).contains("配对码 0123 4567"));
             let mut next_pair = pair.clone();
             next_pair["payload"]["nonce"] = "next-nonce".into();
             event_tx
@@ -1294,6 +1319,7 @@ mod tests {
             assert!(app.qr.is_some());
             event_tx.send(Event::Stopped).unwrap();
             app.receive();
+            assert_eq!(window_text(app.origin), app.settings.public_origin);
             assert!(app.qr.is_none());
             assert_eq!(IsWindowVisible(app.note_detail), 0);
             app.set_pairing(Some(pair));

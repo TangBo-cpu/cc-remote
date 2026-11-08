@@ -1,15 +1,19 @@
 package com.example.cc_remote
 
 import android.Manifest
+import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.Settings
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 class MainActivity : FlutterActivity() {
     private val channelName = "cc_remote/camera_permission"
@@ -30,6 +34,42 @@ class MainActivity : FlutterActivity() {
                         )
                     "openSettings" -> result.success(openApplicationSettings())
                     else -> result.notImplemented()
+                }
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "cc_remote/delivery_files")
+            .setMethodCallHandler { call, result ->
+                if (call.method != "open" && call.method != "share") {
+                    result.notImplemented()
+                    return@setMethodCallHandler
+                }
+                try {
+                    val path = call.argument<String>("path") ?: error("missing_path")
+                    val file = File(path).canonicalFile
+                    val allowed = File(cacheDir, "deliveries").canonicalPath + File.separator
+                    require(file.path.startsWith(allowed) && file.isFile) { "invalid_file" }
+                    val uri = FileProvider.getUriForFile(this, "$packageName.deliveries", file)
+                    val mime = call.argument<String>("mimeType") ?: "application/octet-stream"
+                    val sharing = call.method == "share"
+                    val intent = Intent(if (sharing) Intent.ACTION_SEND else Intent.ACTION_VIEW).apply {
+                        if (sharing) {
+                            type = mime
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                        } else {
+                            setDataAndType(uri, mime)
+                        }
+                        clipData = ClipData.newUri(contentResolver, file.name, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    if (intent.resolveActivity(packageManager) == null) {
+                        result.error("no_app", "No app can open this file", null)
+                    } else {
+                        startActivity(Intent.createChooser(intent, if (sharing) "分享文件" else "选择打开方式"))
+                        result.success(null)
+                    }
+                } catch (_: ActivityNotFoundException) {
+                    result.error("no_app", "No app can open this file", null)
+                } catch (_: Exception) {
+                    result.error("file_action_failed", "Could not open file", null)
                 }
             }
     }
@@ -104,3 +144,5 @@ class MainActivity : FlutterActivity() {
         return true
     }
 }
+
+class DeliveryFileProvider : FileProvider()

@@ -86,6 +86,9 @@ void main() {
       host(ThinkingHistoryBlock(message: thought(ActivityState.running))),
     );
     expect(find.byKey(thinkingContent), findsOneWidget);
+    await tester.tap(find.byKey(thinkingToggle));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('thinking-preview')), findsNothing);
     await tester.pumpWidget(
       host(ThinkingHistoryBlock(message: thought(ActivityState.done))),
     );

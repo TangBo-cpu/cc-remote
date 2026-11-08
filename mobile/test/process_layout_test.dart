@@ -56,8 +56,8 @@ void expectCompactProcess(WidgetTester tester, Finder toggle) {
       .first;
   final targetRect = tester.getRect(toggle);
   final bodyRect = tester.getRect(reply);
-  expect(tester.getRect(leading).left, closeTo(bodyRect.left, 0.1));
-  expect(targetRect.height, greaterThanOrEqualTo(AppSizes.touchTarget));
+  expect(tester.getRect(leading).center.dx, closeTo(bodyRect.left + 12, 0.1));
+  expect(targetRect.height, greaterThanOrEqualTo(32));
   expect(bodyRect.top - targetRect.bottom, inInclusiveRange(0, 4));
   expect(tester.takeException(), isNull);
 }

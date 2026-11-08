@@ -1,10 +1,11 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { dirname, join } from 'node:path';
 
 const TOKEN_BYTES = 32;
 const SECRET_BYTES = 32;
 const PAIRING_TTL_MS = 5 * 60 * 1000;
+const MAX_CODE_ATTEMPTS = 5;
 const DEVICE_ID_BYTES = 8;
 const DEVICE_NAME_MAX_CHARS = 64;
 const LAST_SEEN_THROTTLE_MS = 60 * 1000;
@@ -41,6 +42,8 @@ type StoredState = {
 
 type PairingCode = {
   nonceHash: string;
+  codeHash: string;
+  codeAttempts: number;
   expiresAt: number;
   used: boolean;
 };
@@ -50,12 +53,13 @@ export type PairingPayload = {
   version: typeof PAIRING_VERSION;
   origin: string;
   nonce: string;
+  code: string;
   deviceName: string;
   expiresAt: number;
 };
 
 export type PairSuccess = { token: string; deviceId: string };
-export type PairFailure = { error: 'invalid_pairing_code' | 'device_limit' };
+export type PairFailure = { error: 'invalid_pairing_code' | 'pairing_code_locked' | 'device_limit' };
 
 export type AuthStatus = {
   paired: boolean;
@@ -65,7 +69,7 @@ export type AuthStatus = {
 
 export type AuthState = {
   createPairingPayload(publicOrigin: string, deviceName: string): PairingPayload;
-  pair(nonce: string, deviceName?: string): Promise<PairSuccess | PairFailure>;
+  pair(credential: string, deviceName?: string, method?: 'qr' | 'code'): Promise<PairSuccess | PairFailure>;
   verifyBearerToken(authHeader: string | undefined): string | null;
   verifyToken(token: string | undefined): string | null;
   /** Revokes one device, or every device when deviceId is omitted. Returns how many were revoked. */
@@ -116,9 +120,15 @@ export async function createAuthState(
   return {
     createPairingPayload(publicOrigin: string, deviceName: string): PairingPayload {
       const nonce = randomToken(TOKEN_BYTES);
+      let code: string;
+      do {
+        code = randomInt(100_000_000).toString().padStart(8, '0');
+      } while (pairing && safeEqual(sha256(code), pairing.codeHash));
       const expiresAt = Date.now() + PAIRING_TTL_MS;
       pairing = {
         nonceHash: sha256(nonce),
+        codeHash: sha256(code),
+        codeAttempts: 0,
         expiresAt,
         used: false,
       };
@@ -127,17 +137,27 @@ export async function createAuthState(
         version: PAIRING_VERSION,
         origin: publicOrigin.replace(/\/+$/, ''),
         nonce,
+        code,
         deviceName,
         expiresAt,
       };
     },
 
-    async pair(nonce: string, deviceName?: string): Promise<PairSuccess | PairFailure> {
-      const clean = nonce.trim();
-      if (!clean || !pairing || pairing.used || Date.now() > pairing.expiresAt) {
+    async pair(credential: string, deviceName?: string, method = 'qr'): Promise<PairSuccess | PairFailure> {
+      const clean = credential.trim();
+      if (!pairing || pairing.used || Date.now() >= pairing.expiresAt) {
         return { error: 'invalid_pairing_code' };
       }
-      if (!safeEqual(sha256(clean), pairing.nonceHash)) return { error: 'invalid_pairing_code' };
+      if (method === 'code') {
+        // Count globally for this code, so changing IP addresses cannot reset the limit.
+        if (pairing.codeAttempts >= MAX_CODE_ATTEMPTS) return { error: 'pairing_code_locked' };
+        if (!/^\d{8}$/.test(clean) || !safeEqual(sha256(clean), pairing.codeHash)) {
+          pairing.codeAttempts += 1;
+          return { error: pairing.codeAttempts >= MAX_CODE_ATTEMPTS ? 'pairing_code_locked' : 'invalid_pairing_code' };
+        }
+      } else if (!safeEqual(sha256(clean), pairing.nonceHash)) {
+        return { error: 'invalid_pairing_code' };
+      }
       if (state.devices.length >= maxDevices) return { error: 'device_limit' };
 
       pairing.used = true;

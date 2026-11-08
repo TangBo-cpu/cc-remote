@@ -3957,7 +3957,8 @@ void main() {
     expect(liveStatus.getSemanticsData().flagsCollection.isLiveRegion, isTrue);
     await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
     await tester.pump(const Duration(milliseconds: 220));
-    expect(find.text('先检查状态。', findRichText: true), findsNothing);
+    expect(find.text('先检查状态。', findRichText: true), findsOneWidget);
+    expect(find.byKey(const ValueKey('thinking-preview')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -4006,6 +4007,8 @@ void main() {
       );
 
       await tester.pumpWidget(buildReasoning('第一句。'));
+      await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+      await tester.pump(const Duration(milliseconds: 220));
       expect(find.text('第一句。', findRichText: true), findsOneWidget);
       await tester.pumpWidget(buildReasoning('第一句。第二句。'));
       expect(find.text('第一句。第二句。', findRichText: true), findsOneWidget);

@@ -46,7 +46,7 @@ class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
               context,
             )?.readState(context, identifier: expansionStorageId)
             as bool? ??
-        running;
+        false;
   }
 
   @override
@@ -58,9 +58,14 @@ class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
   @override
   void didUpdateWidget(covariant ThinkingHistoryBlock oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.message.activityId != widget.message.activityId ||
-        (oldWidget.message.activityState == ActivityState.running) != running) {
+    if (oldWidget.message.activityId != widget.message.activityId) {
       restoreExpansion();
+    } else if ((oldWidget.message.activityState == ActivityState.running) !=
+        running) {
+      expanded = false;
+      PageStorage.maybeOf(
+        context,
+      )?.writeState(context, false, identifier: expansionStorageId);
     }
   }
 
@@ -86,10 +91,11 @@ class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
     final textStyle = TextStyle(
       color: palette.muted,
       fontSize: AppTypography.activityBodySize,
-      height: 1.6,
+      height: 1.4,
     );
     return ActivityDisclosure(
       expanded: expanded && detail.isNotEmpty,
+      preview: running && !expanded && detail.isNotEmpty,
       toggleKey: const ValueKey('thinking-history-toggle'),
       titleKey: const ValueKey('thinking-title'),
       title: title,
@@ -118,45 +124,96 @@ class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
       child: Container(
         key: const ValueKey('thinking-history-content'),
         width: double.infinity,
-        padding: const EdgeInsetsDirectional.only(start: 12),
-        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsetsDirectional.only(start: 19),
+        margin: const EdgeInsetsDirectional.only(start: 12, bottom: 4),
         decoration: BoxDecoration(
           border: BorderDirectional(
             start: BorderSide(color: palette.lineStrong),
           ),
         ),
-        child: SelectionArea(
-          child: MarkdownBody(
-            data: detail,
-            styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
-                .copyWith(
-                  p: textStyle,
-                  h1: textStyle.copyWith(fontWeight: FontWeight.w600),
-                  h2: textStyle.copyWith(fontWeight: FontWeight.w600),
-                  h3: textStyle.copyWith(fontWeight: FontWeight.w600),
-                  h4: textStyle.copyWith(fontWeight: FontWeight.w600),
-                  h5: textStyle.copyWith(fontWeight: FontWeight.w600),
-                  h6: textStyle.copyWith(fontWeight: FontWeight.w600),
-                  listBullet: textStyle,
-                  tableBody: textStyle,
-                  tableHead: textStyle.copyWith(fontWeight: FontWeight.w600),
-                  a: textStyle.copyWith(color: palette.link),
-                  blockquote: textStyle.copyWith(color: palette.muted),
-                  code: textStyle.copyWith(
-                    fontFamily: AppTypography.codeFontFamily,
-                    fontFamilyFallback: AppTypography.codeFontFamilyFallback,
-                    fontSize: AppTypography.activityBodySize,
-                  ),
-                  codeblockDecoration: BoxDecoration(
-                    color: palette.control,
-                    borderRadius: BorderRadius.circular(AppRadii.compact),
-                  ),
+        child: running && !expanded
+            ? _ThinkingPreview(text: detail, style: textStyle)
+            : SelectionArea(
+                child: MarkdownBody(
+                  data: detail,
+                  styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
+                      .copyWith(
+                        blockSpacing: 4,
+                        p: textStyle,
+                        h1: textStyle.copyWith(fontWeight: FontWeight.w600),
+                        h2: textStyle.copyWith(fontWeight: FontWeight.w600),
+                        h3: textStyle.copyWith(fontWeight: FontWeight.w600),
+                        h4: textStyle.copyWith(fontWeight: FontWeight.w600),
+                        h5: textStyle.copyWith(fontWeight: FontWeight.w600),
+                        h6: textStyle.copyWith(fontWeight: FontWeight.w600),
+                        listBullet: textStyle,
+                        tableBody: textStyle,
+                        tableHead: textStyle.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                        a: textStyle.copyWith(color: palette.link),
+                        blockquote: textStyle.copyWith(color: palette.muted),
+                        code: textStyle.copyWith(
+                          fontFamily: AppTypography.codeFontFamily,
+                          fontFamilyFallback:
+                              AppTypography.codeFontFamilyFallback,
+                          fontSize: AppTypography.activityBodySize,
+                        ),
+                        codeblockDecoration: BoxDecoration(
+                          color: palette.control,
+                          borderRadius: BorderRadius.circular(AppRadii.compact),
+                        ),
+                      ),
                 ),
-          ),
-        ),
+              ),
       ),
     );
   }
+}
+
+class _ThinkingPreview extends StatelessWidget {
+  const _ThinkingPreview({required this.text, required this.style});
+
+  final String text;
+  final TextStyle style;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final shown = text.replaceAll(RegExp(r'\s+'), ' ');
+      final textStyle = DefaultTextStyle.of(context).style.merge(style);
+      final painter = TextPainter(
+        text: TextSpan(text: shown, style: textStyle),
+        textDirection: Directionality.of(context),
+        textScaler: MediaQuery.textScalerOf(context),
+        locale: Localizations.maybeLocaleOf(context),
+      )..layout(maxWidth: constraints.maxWidth);
+      final height = painter.preferredLineHeight * 3;
+      final shift = math.max(0.0, painter.height - height);
+      painter.dispose();
+      return SizedBox(
+        key: const ValueKey('thinking-preview'),
+        height: height,
+        child: ClipRect(
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: shift, end: shift),
+            duration: MediaQuery.disableAnimationsOf(context)
+                ? Duration.zero
+                : const Duration(milliseconds: 150),
+            curve: Curves.linear,
+            builder: (context, offset, child) =>
+                Transform.translate(offset: Offset(0, -offset), child: child),
+            child: OverflowBox(
+              alignment: AlignmentDirectional.topStart,
+              minHeight: 0,
+              maxHeight: double.infinity,
+              child: Text(shown, style: textStyle),
+            ),
+          ),
+        ),
+      );
+    },
+  );
 }
 
 class ThinkingIndicator extends StatefulWidget {
@@ -222,38 +279,40 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
       mainAxisSize: MainAxisSize.min,
       children: [
         ExcludeSemantics(
-          child: RepaintBoundary(
-            child: AnimatedBuilder(
-              animation: animation,
-              builder: (context, _) => CustomPaint(
-                key: const ValueKey('thinking-icon'),
-                size: const Size.square(18),
-                painter: _ThinkingBloomPainter(
-                  (animation.value * 12).floor() % 12,
-                  palette.muted,
+          child: SizedBox.square(
+            dimension: 24,
+            child: Center(
+              child: RepaintBoundary(
+                child: AnimatedBuilder(
+                  animation: animation,
+                  builder: (context, _) => CustomPaint(
+                    key: const ValueKey('thinking-icon'),
+                    size: const Size.square(18),
+                    painter: _ThinkingBloomPainter(
+                      (animation.value * 12).floor() % 12,
+                      palette.muted,
+                    ),
+                  ),
                 ),
               ),
             ),
           ),
         ),
-        const SizedBox(width: 7),
+        const SizedBox(width: 8),
+        ActivityShimmerText('思考中', color: palette.muted),
+        const SizedBox(width: 8),
         Flexible(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              ActivityShimmerText('思考中', color: palette.muted),
-              Text(
-                elapsed,
-                key: const ValueKey('thinking-elapsed'),
-                style: TextStyle(
-                  color: palette.muted,
-                  fontSize: 12,
-                  height: 1.4,
-                  fontFeatures: const [FontFeature.tabularFigures()],
-                ),
-              ),
-            ],
+          child: Text(
+            elapsed,
+            key: const ValueKey('thinking-elapsed'),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: palette.muted,
+              fontSize: 12,
+              height: 1.4,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
           ),
         ),
       ],

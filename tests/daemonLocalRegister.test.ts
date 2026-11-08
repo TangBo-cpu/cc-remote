@@ -114,9 +114,10 @@ test('desktop control routes reject missing tokens, public hosts, and foreign or
 test('desktop keeps a fresh QR available for additional devices without replacing paired tokens', async () => {
   const headers = { 'x-cc-remote-local-token': await localControlToken() };
   const initial = await fetch(`${daemon.baseUrl}/api/local/status`, { headers });
-  const initialStatus = await initial.json() as { paired: boolean; pairing: { payload: { nonce: string }; modules: boolean[][] } };
+  const initialStatus = await initial.json() as { paired: boolean; pairing: { payload: { nonce: string; code: string }; modules: boolean[][] } };
   assert.equal(initialStatus.paired, false);
   assert.ok(initialStatus.pairing.payload.nonce);
+  assert.match(initialStatus.pairing.payload.code, /^\d{8}$/);
   assert.ok(initialStatus.pairing.modules.length >= 21);
   assert.ok(initialStatus.pairing.modules.every(row => row.length === initialStatus.pairing.modules.length));
 
@@ -153,7 +154,7 @@ test('desktop keeps a fresh QR available for additional devices without replacin
   assert.equal(stillAuthorized.status, 200);
 
   const secondPaired = await fetch(`${daemon.baseUrl}/api/pair`, {
-    method: 'POST', body: JSON.stringify({ nonce: nextStatus.pairing.payload.nonce, deviceName: 'Pixel Tablet' }),
+    method: 'POST', body: JSON.stringify({ code: nextStatus.pairing.payload.code, deviceName: 'Pixel Tablet' }),
   });
   assert.equal(secondPaired.status, 200);
   const second = await secondPaired.json() as { token: string; deviceId: string };

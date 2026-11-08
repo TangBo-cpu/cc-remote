@@ -116,7 +116,7 @@ void main() {
                     },
                 ],
                 'nextCursor': null,
-                'maxSessionBytes': 2 * 1024 * 1024,
+                'maxSessionBytes': 20 * 1024 * 1024,
               });
             }
             if (request.url.path == '/api/native-sessions/sync') {
@@ -170,7 +170,7 @@ void main() {
         );
         await tester.pumpAndSettle();
         expect(find.byType(NativeSessionPickerPage), findsOneWidget);
-        expect(find.text('超过 2 MB 或无法读取的会话已过滤。'), findsOneWidget);
+        expect(find.text('超过 20 MB 或无法读取的会话已过滤。'), findsOneWidget);
         final button = find.byKey(const ValueKey('sync-native-session'));
         expect(tester.widget<FilledButton>(button).onPressed, isNull);
         await tester.tap(

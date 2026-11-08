@@ -9,6 +9,12 @@ import 'package:image_picker/image_picker.dart';
 const maxAttachmentBytes = 25 * 1024 * 1024;
 const maxAttachmentsPerPrompt = 5;
 
+String formatAttachmentSize(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+}
+
 enum AttachmentSource { camera, photos, files }
 
 class AttachmentDraft {

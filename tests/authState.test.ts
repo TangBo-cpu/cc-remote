@@ -101,6 +101,66 @@ test('multiple devices pair independently and revoke individually', async () => 
   }
 });
 
+test('numeric codes are single use, expire, and share consumption with QR pairing', async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-code-'));
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  try {
+    const statePath = join(dir, 'state.json');
+    const auth = await createAuthState(statePath);
+    const payload = auth.createPairingPayload('https://cc.example.com', 'Test PC');
+    assert.match(payload.code, /^\d{8}$/);
+    assert.equal(payload.expiresAt - now, 300_000);
+    assert.deepEqual(await auth.pair(payload.code), { error: 'invalid_pairing_code' });
+    const results = await Promise.all([
+      auth.pair(payload.code, 'Phone', 'code'),
+      auth.pair(payload.nonce, 'Tablet'),
+    ]);
+    assert.ok('token' in results[0]);
+    assert.equal(auth.verifyToken(results[0].token), results[0].deviceId);
+    assert.deepEqual(results[1], { error: 'invalid_pairing_code' });
+    assert.deepEqual(await auth.pair(payload.code, undefined, 'code'), { error: 'invalid_pairing_code' });
+    const stored = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(stored).sort(), ['authGeneration', 'devices', 'stateSecret', 'tokenHash']);
+
+    const qr = auth.createPairingPayload('https://cc.example.com', 'Test PC');
+    assert.ok('token' in await auth.pair(qr.nonce));
+    assert.deepEqual(await auth.pair(qr.code, undefined, 'code'), { error: 'invalid_pairing_code' });
+    const expired = auth.createPairingPayload('https://cc.example.com', 'Test PC');
+    now = expired.expiresAt;
+    assert.deepEqual(await auth.pair(expired.code, undefined, 'code'), { error: 'invalid_pairing_code' });
+    assert.deepEqual(await auth.pair(expired.nonce), { error: 'invalid_pairing_code' });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('five wrong code attempts lock manual pairing until refresh without blocking QR', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-code-lock-'));
+  try {
+    const auth = await createAuthState(join(dir, 'state.json'));
+    const payload = auth.createPairingPayload('https://cc.example.com', 'Test PC');
+    const wrong = payload.code === '00000000' ? '00000001' : '00000000';
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      assert.deepEqual(await auth.pair(wrong, `Phone ${attempt}`, 'code'), {
+        error: attempt === 5 ? 'pairing_code_locked' : 'invalid_pairing_code',
+      });
+    }
+    assert.deepEqual(await auth.pair(payload.code, undefined, 'code'), { error: 'pairing_code_locked' });
+    assert.deepEqual(await auth.pair(payload.code), { error: 'invalid_pairing_code' });
+    assert.ok('token' in await auth.pair(payload.nonce));
+
+    const old = auth.createPairingPayload('https://cc.example.com', 'Test PC');
+    const fresh = auth.createPairingPayload('https://cc.example.com', 'Test PC');
+    assert.notEqual(old.code, fresh.code);
+    assert.deepEqual(await auth.pair(old.code, undefined, 'code'), { error: 'invalid_pairing_code' });
+    assert.deepEqual(await auth.pair(old.nonce), { error: 'invalid_pairing_code' });
+    assert.ok('token' in await auth.pair(fresh.code, 'New phone', 'code'));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('device limit rejects additional pairing without consuming the nonce', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-remote-'));
   try {

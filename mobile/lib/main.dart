@@ -31,6 +31,8 @@ import 'data/permission_mode.dart';
 import 'data/remote_models.dart';
 import 'data/websocket_client.dart';
 import 'directory_picker.dart';
+import 'delivery_file_card.dart';
+import 'pairing_code_form.dart';
 import 'native_session_picker.dart';
 import 'effort_gauge.dart';
 import 'effort_preference.dart';
@@ -3265,19 +3267,39 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> pairWithPayload(PairingPayload payload) async {
-    setState(() => pairing = true);
+  Future<void> pairWithPayload(PairingPayload payload) => pairWithCredential(
+    payload.origin,
+    {'nonce': payload.nonce},
+    payload.deviceName,
+  );
+
+  Future<void> pairWithCode(Uri origin, String code) =>
+      pairWithCredential(origin, {'code': code}, '电脑');
+
+  Future<void> pairWithCredential(
+    Uri origin,
+    Map<String, String> credential,
+    String deviceName,
+  ) async {
+    if (pairing) return;
+    setState(() {
+      pairing = true;
+      pairError = null;
+    });
     try {
       final res = await apiClient.post(
-        payload.origin,
+        origin,
         '/api/pair',
         jsonBody: true,
         body: jsonEncode({
-          'nonce': payload.nonce,
+          ...credential,
           'deviceName': await currentDeviceName(),
         }),
         timeout: networkTimeout,
       );
+      if (res.statusCode == 429) throw StateError('pairing_code_locked');
+      if (res.statusCode == 409) throw StateError('device_limit');
+      if (res.statusCode == 401) throw StateError('invalid_pairing_code');
       if (res.statusCode != 200) throw StateError('pair_failed');
       final body = jsonDecode(res.body) as Map<String, dynamic>;
       final token = body['token'];
@@ -3285,9 +3307,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         throw StateError('bad_pair_response');
       }
       final saved = SavedSession(
-        origin: payload.origin,
+        origin: origin,
         token: token,
-        deviceName: body['deviceName'] as String? ?? payload.deviceName,
+        deviceName: body['deviceName'] as String? ?? deviceName,
         deviceId: body['deviceId'] as String?,
       );
       await tokenStore.save(saved);
@@ -3318,7 +3340,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       });
       connectWs(saved);
     } catch (err) {
-      if (mounted) setState(() => pairError = errorText(err));
+      if (mounted) {
+        setState(() => pairError = err is FormatException
+            ? '服务未返回有效的配对信息，请检查服务地址'
+            : errorText(err));
+      }
     } finally {
       if (mounted) setState(() => pairing = false);
     }
@@ -3341,6 +3367,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         canResetScan: pausedQrRaw != null,
         error: pairError,
         onQr: handleQr,
+        onCode: pairWithCode,
         onClearError: resetScanner,
         onDemoConnect: widget.demoMode ? connectDemoDevice : null,
       ),
@@ -3555,6 +3582,7 @@ class PairScreen extends StatefulWidget {
     required this.pairing,
     required this.canResetScan,
     required this.onQr,
+    this.onCode,
     required this.onClearError,
     this.error,
     this.onDemoConnect,
@@ -3566,6 +3594,7 @@ class PairScreen extends StatefulWidget {
   final bool canResetScan;
   final String? error;
   final ValueChanged<String> onQr;
+  final void Function(Uri origin, String code)? onCode;
   final VoidCallback onClearError;
   final VoidCallback? onDemoConnect;
 
@@ -3580,6 +3609,23 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
       MobileScannerController(autoStart: false);
   CameraPermissionState cameraPermission = CameraPermissionState.denied;
   bool checkingCamera = false;
+  bool codeMode = false;
+
+  Future<void> changePairMethod(bool useCode) async {
+    if (widget.pairing) return;
+    widget.onClearError();
+    setState(() => codeMode = useCode);
+    if (!widget.enableCamera) return;
+    if (useCode) {
+      try {
+        await scannerController.stop();
+      } catch (_) {
+        // The scanner may not have started when switching away.
+      }
+    } else {
+      await checkCameraPermission();
+    }
+  }
 
   @override
   void initState() {
@@ -3597,7 +3643,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && widget.enableCamera) {
+    if (state == AppLifecycleState.resumed && widget.enableCamera && !codeMode) {
       unawaited(checkCameraPermission());
     }
   }
@@ -3612,9 +3658,9 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
           : await cameraPermissionService.status();
       if (!mounted) return;
       setState(() => cameraPermission = next);
-      if (next == CameraPermissionState.granted) {
+      if (next == CameraPermissionState.granted && !codeMode) {
         await WidgetsBinding.instance.endOfFrame;
-        if (!mounted) return;
+        if (!mounted || codeMode) return;
         await scannerController.start();
       } else {
         await scannerController.stop();
@@ -3658,6 +3704,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
           onPressed: () => checkCameraPermission(request: true),
         ),
         onDetect: (capture) {
+          if (codeMode || widget.pairing) return;
           for (final barcode in capture.barcodes) {
             final value = barcode.rawValue;
             if (value != null && value.isNotEmpty) {
@@ -3672,6 +3719,20 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    if (codeMode && widget.onCode != null) {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) {
+          if (!didPop && !widget.pairing) unawaited(changePairMethod(false));
+        },
+        child: PairingCodeForm(
+          pairing: widget.pairing,
+          error: widget.error,
+          onSubmit: widget.onCode!,
+          onScan: () => changePairMethod(false),
+        ),
+      );
+    }
     return SafeArea(
       key: const ValueKey('pair'),
       child: LayoutBuilder(
@@ -3719,7 +3780,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                           ),
                           const SizedBox(height: 5),
                           Text(
-                            '扫描电脑终端里的二维码',
+                            '扫描电脑启动器或终端里的二维码',
                             style: TextStyle(
                               color: AppPalette.of(context).muted,
                               fontSize: 14,
@@ -3934,6 +3995,25 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
                               backgroundColor: AppPalette.of(
                                 context,
                               ).surfaceElevated,
+                              minimumSize: const Size.fromHeight(48),
+                            ),
+                          ),
+                        ),
+                      ],
+                      if (widget.onCode != null) ...[
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
+                          child: TextButton.icon(
+                            onPressed: widget.pairing
+                                ? null
+                                : () => changePairMethod(true),
+                            icon: SmartIcon(
+                              LucideIcons.keyboard,
+                              color: AppPalette.of(context).accentStrong,
+                            ),
+                            label: const Text('使用配对码连接'),
+                            style: TextButton.styleFrom(
                               minimumSize: const Size.fromHeight(48),
                             ),
                           ),
@@ -7213,12 +7293,6 @@ Future<AttachmentSource?> showAttachmentSourceSheet(
   );
 }
 
-String formatAttachmentSize(int bytes) {
-  if (bytes < 1024) return '$bytes B';
-  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
-  return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
-}
-
 Future<void> confirmLogout(BuildContext context, VoidCallback onLogout) async {
   final shouldLogout = await showDialog<bool>(
     context: context,
@@ -7396,7 +7470,7 @@ class _TranscriptProcessBlock extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         for (var i = 0; i < historyRows.length; i++) ...[
-          if (i > 0) const SizedBox(height: 4),
+          if (i > 0) const SizedBox(height: 2),
           if (historyRows[i].message.activityKind == ActivityKind.tool)
             buildTool!(historyRows[i].message)
           else
@@ -9851,13 +9925,12 @@ class MessageBlock extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     if (text.trim().isNotEmpty) assistantBody,
-                    if (message.attachments.isNotEmpty) ...[
+                    if (!isStreaming && message.attachments.isNotEmpty) ...[
                       if (text.trim().isNotEmpty) const SizedBox(height: 12),
-                      AttachmentMessageGrid(
-                        attachments: message.attachments,
+                      DeliveryFileCard(
+                        files: message.attachments,
                         session: session,
-                        activeSessionId: activeSessionId,
-                        fullImages: true,
+                        sessionId: activeSessionId,
                       ),
                     ],
                   ],
@@ -10504,7 +10577,7 @@ Widget buildActivityIcon(TranscriptMessage activity, BuildContext context) {
       child: SmartIcon(
         iconData,
         size: AppIconSizes.badge,
-        color: notoGlyphFor(iconData) == null ? iconColor : null,
+        color: iconColor,
       ),
     ),
   );
@@ -10582,13 +10655,10 @@ class ActivityBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (message.activityKind == ActivityKind.thinking) {
-      return Padding(
+      return ThinkingHistoryBlock(
         key: const ValueKey('thinking-bubble'),
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: ThinkingHistoryBlock(
-          message: message,
-          initialElapsedSeconds: elapsedSecondsSince(runStartedAt),
-        ),
+        message: message,
+        initialElapsedSeconds: elapsedSecondsSince(runStartedAt),
       );
     }
 
@@ -10914,19 +10984,7 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
       activity: activity,
       title: activityToolTitle(activity),
       titleWidget: buildActivityTitle(activity, context),
-      leading: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SmartIcon(
-            activityToolIconData(activity.activityTool),
-            size: AppIconSizes.inline,
-          ),
-          if (activity.activityState != ActivityState.done) ...[
-            const SizedBox(width: 4),
-            buildActivityIcon(activity, context),
-          ],
-        ],
-      ),
+      leading: buildActivityIcon(activity, context),
       reveal:
           activity.activityId == widget.revealActivityId &&
           widget.revealActivityId != null,
@@ -10945,6 +11003,7 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
               LucideIcons.wrench,
               size: AppIconSizes.inline,
             ),
+            compact: true,
             running: running,
             statusText: status,
             tone: tone,
@@ -10962,14 +11021,14 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
             },
             child: isExpanded
                 ? widget.contentBuilder?.call(context, buildToolRow) ??
-                    Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        for (final activity in activities)
-                          buildToolRow(activity),
-                      ],
-                    )
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          for (final activity in activities)
+                            buildToolRow(activity),
+                        ],
+                      )
                 : const SizedBox.shrink(),
           ),
           if (running && !isExpanded)
@@ -13043,7 +13102,18 @@ class TranscriptStore {
 String errorText(Object err) {
   if (err is FormatException) return '这不是 CC Remote 配对二维码';
   if (err is TimeoutException) return '连接超时，请检查电脑端和隧道';
-  return '配对失败，请重新生成二维码';
+  if (err is StateError) {
+    if (err.message == 'pairing_code_locked') {
+      return '配对码已锁定，请在电脑刷新后重试';
+    }
+    if (err.message == 'device_limit') {
+      return '已达到设备数量上限，请先撤销不再使用的设备';
+    }
+    if (err.message == 'invalid_pairing_code') {
+      return '配对凭据错误、已过期或已使用，请检查或在电脑刷新';
+    }
+  }
+  return '配对失败，请检查服务地址和网络，或在电脑刷新后重试';
 }
 
 bool isBlankAssistantMessage(TranscriptMessage message) {

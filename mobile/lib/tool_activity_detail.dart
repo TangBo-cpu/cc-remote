@@ -165,7 +165,7 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
               );
             },
       child: Padding(
-        padding: const EdgeInsetsDirectional.fromSTEB(24, 0, 8, 2),
+        padding: const EdgeInsetsDirectional.fromSTEB(32, 0, 8, 2),
         child: LayoutBuilder(
           builder: (context, constraints) {
             final text = filePath ?? detail;
@@ -173,7 +173,7 @@ class _ToolActivityDetailState extends State<ToolActivityDetail> {
               TextStyle(
                 color: palette.muted,
                 fontSize: AppTypography.activityBodySize,
-                height: 1.6,
+                height: 1.4,
                 fontFamily:
                     filePath != null ||
                         const {'Bash', 'Shell'}.contains(message.activityTool)

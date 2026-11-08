@@ -2,11 +2,11 @@
 
 **在手机上远程控制本机 Claude Code。**
 
-扫码配对后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 继续运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
+扫码或输入配对码后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 继续运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v2.0.18](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.18/cc-remote-v2.0.18-android.apk)
+[下载 Android APK · v2.0.19](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.19/cc-remote-v2.0.19-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.18)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.19)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -28,7 +28,7 @@
 | 想换引擎 | 新建会话时选 Claude 或 Codex；Codex 支持动态模型目录、原生 `/compact` 与 `/review` 命令、已启用 skills，默认完全访问沙箱 |
 | 电脑端免输命令 | Windows 原生启动器选择项目、启动服务、显示配对二维码；关闭窗口后留在托盘 |
 | 想换项目目录 | 手机浏览电脑文件夹或输入完整路径，选择 Claude / Codex 后在该目录新建对话；需更新 App 与 daemon |
-| 想接着电脑聊 | 点击「同步电脑会话」，每次选择一个 Claude / Codex 会话；超过 2 MB 的历史文件自动过滤 |
+| 想接着电脑聊 | 点击「同步电脑会话」，每次选择一个 Claude / Codex 会话；超过 20 MB 的历史文件自动过滤 |
 | 工具要权限 | 手机弹出决策卡：看命令摘要与工作目录，拒绝或仅本次允许 |
 | 想确认改了什么 | 只读工作区 + Git diff，手机不提交、不改文件 |
 | 断线了 | transcript 与草稿保留，自动重连；回来后从权威快照继续 |
@@ -38,7 +38,7 @@
 **安全边界（产品承诺）：**
 
 - daemon 默认只听 `127.0.0.1`，公网走 Tunnel
-- 一次性扫码配对，Bearer token；支持多台设备同时配对，手机端可查看设备列表并逐台撤销
+- 一次性扫码 / 8 位配对码，Bearer token；支持多台设备同时配对，手机端可查看设备列表并逐台撤销
 - 已配对手机可浏览电脑目录并在所选目录新建会话；工作区文件和 Git diff 接口保持只读，手机不直接执行 shell 或提交文件
 
 ---
@@ -125,11 +125,11 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v2.0.18 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.18/cc-remote-v2.0.18-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v2.0.19 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.19/cc-remote-v2.0.19-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫启动器窗口或终端中的二维码 → 确认电脑名与服务地址 → 进入控制台
 
-Android App 版本为 v2.0.18。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
+Android App 版本为 v2.0.19。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
 
 ### 4. 开始对话
 
@@ -142,10 +142,10 @@ Android App 版本为 v2.0.18。使用「同步电脑会话」需要同时更新
 **连接与会话**
 
 - Windows 原生启动器：项目选择、二维码配对、连接与任务状态、启动日志、托盘常驻
-- 扫码配对 / Secure Storage / 启动恢复；多设备授权（默认上限 8 台），手机端设备列表与逐台撤销
+- 扫码 / 配对码连接、Secure Storage、启动恢复；多设备授权（默认上限 8 台），手机端设备列表与逐台撤销
 - WebSocket 鉴权、退避重连、前台存活探测与活动任务状态恢复
 - 多项目、多会话；完整项目路径展示
-- 从电脑端选择并同步单个 Claude / Codex 会话，保留原生会话上下文；重复同步更新已有记录，超过 2 MB 的历史文件自动过滤
+- 从电脑端选择并同步单个 Claude / Codex 会话，保留原生会话上下文；重复同步更新已有记录，超过 20 MB 的历史文件自动过滤
 - 平板适配：≥840dp 宽时会话列表常驻左侧双栏，弹层与输入框居中限宽
 - 会话级引擎切换：Claude Code 或 Codex CLI（新建会话时选择）
 - 会话 transcript 持久化与恢复
@@ -163,7 +163,8 @@ Android App 版本为 v2.0.18。使用「同步电脑会话」需要同时更新
 - 六种权限模式 + 一次性工具审批（Claude 会话）
 - Codex 沙箱模式三档（read-only / workspace-write / danger-full-access），默认完全访问（danger-full-access）且持续生效，可随时显式切为只读或工作区可写
 - 图片 / 文件附件（每轮最多 5 个，单文件 ≤ 25MB；Codex 会话仅支持图片）
-- 回复中的本地图片链接自动登记为会话附件，手机鉴权下载并在对应回复下方完整展示；支持 PNG、JPEG、WebP 和 GIF，文件须位于当前项目或本会话附件目录
+- 回复中的本地文件链接自动显示为交付文件卡片，默认列出 4 个，可展开全部；支持图片、PDF、Word、Excel、PPT、压缩包及文本等，显示彩色类型图标、文件名和大小，提供预览、打开、保存、分享与复制路径
+- 交付文件须位于当前项目或本会话附件目录，单文件不超过 25 MB；图片和文本可在 App 内预览，PDF、Office 等交给手机应用打开。此功能需要同时更新 App 与 daemon
 
 **工作区（只读）**
 
@@ -248,7 +249,8 @@ cc-remote -DisableBypassPermissions
 
 ### 协议与 API
 
-- 配对：启动器或终端中的一次性 JSON 二维码（5 分钟、单次）→ `POST /api/pair`（可携带手机 `deviceName`）→ 每台设备获得独立 token 与 `deviceId`，token 仅返回一次；新配对不影响已配对设备，加新设备需刷新二维码
+- 配对：扫描启动器或终端中的 JSON 二维码，或在手机输入服务地址和 8 位配对码 → `POST /api/pair`（二维码提交 `nonce`，手动输入提交 `code`，可携带手机 `deviceName`）→ 每台设备获得独立 token 与 `deviceId`，token 仅返回一次
+- 二维码与配对码共用 5 分钟有效期，任一方式成功后同时失效，电脑自动生成下一组；数字码累计输错 5 次锁定，需在电脑刷新，扫码不受该锁定影响。配对码仅在内存中校验，不写入持久化授权文件
 - 实时：`/ws` 首条必须 `{ "type": "auth", "token": "..." }`，之后 `prompt` / `stop` / `permission_response` 等；prompt 可带 `engine`（须与会话引擎一致），Codex 会话另带 `sandboxMode`
 - 多设备：`GET /api/devices` 返回设备列表（含本机标记与最近活跃时间）；`POST /api/devices/{id}/revoke` 撤销单台设备并立即断开其连接；设备列表变化时 daemon 向所有已认证连接广播 `{ "type": "devices", ... }`；`POST /api/logout` 仅撤销调用方自己的设备
 - 存活探测：daemon 在 `status` 中声明 `connectionProbe: true` 与 `multiDevice: true` 能力位后，App 按能力降级；探测为 `{ "type": "ping", "probeId": "..." }` 并等待同 ID 的 `pong`，默认 8 秒超时后进入重连，旧服务端未声明能力时不发送探测。恢复前台时保留现有连接，用 8 秒探测窗口确认存活，不因隧道延迟误断健康连接；探测失败立即重连，无连接时跳过退避立即重试，已经开始的握手继续完成
@@ -265,7 +267,7 @@ cc-remote -DisableBypassPermissions
 
 ### 重置配对
 
-使用 Windows 启动器时，点击「重新配对」并用手机扫描新二维码。显示新二维码不会撤销已配对设备的 token；新设备配对成功后，旧设备继续可用。二维码过期时也可重新生成。要下线某台手机，在该手机的「设置 → 已配对设备」中撤销，或由任意已配对设备在设备列表中撤销它。
+使用 Windows 启动器时，点击「刷新配对」生成新的二维码和配对码。手机可扫码，或选择「使用配对码连接」输入服务地址和 8 位数字。刷新配对不会撤销已配对设备的 token；新设备配对成功后，旧设备继续可用。配对码过期或锁定时，在电脑刷新即可。要下线某台手机，在该手机的「设置 → 已配对设备」中撤销，或由任意已配对设备在设备列表中撤销它。
 
 命令行重置也可停止 daemon，删除 `.data/state.json`，再启动并重新扫码。
 
@@ -273,7 +275,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v2.0.18](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.18)**
-APK：[`cc-remote-v2.0.18-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.18/cc-remote-v2.0.18-android.apk)
+当前公开版：**[v2.0.19](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.19)**
+APK：[`cc-remote-v2.0.19-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.19/cc-remote-v2.0.19-android.apk)
 
-v2.0.18 优化长对话与流式输出：减少重复解析和滚动定位开销，滚动时暂时停用覆盖层背景模糊，工具时间线折叠时不再构建全部详情。Markdown 文件路径复用匹配结果；电脑端复用 WebSocket 广播序列化结果，并批量更新文本记录，保持文本与工具活动的先后顺序。Android 版本为 `2.0.18+28`，电脑端 package 版本为 `2.0.18`，安装包沿用旧版测试签名，适合个人使用。
+v2.0.19 新增一次性配对码和交付文件卡片：手机可输入服务地址与 8 位数字连接电脑，回复中的文件支持预览、保存、打开和分享。思考与工具活动采用更紧凑的行间距和彩色图标，电脑原生会话读取上限提高至 20 MB。Android 版本为 `2.0.19+29`，电脑端 package 版本为 `2.0.19`，安装包沿用旧版测试签名，适合个人使用。配对码和交付文件功能需要同时更新 App 与 daemon；启动器需重新构建才能显示配对码。

@@ -21,7 +21,7 @@ import {
   type StoredAttachment,
 } from './attachmentStore.js';
 import { readAttachments } from './attachmentUpload.js';
-import { collectReplyImages } from './replyImages.js';
+import { collectReplyFiles } from './replyFiles.js';
 import {
   ClaudeBridge,
   discoverClaudeCommands,
@@ -161,7 +161,7 @@ let bridge = createBridge(activeContext.project.path, activeContext.session.engi
 const claudeHistoryReader = new ClaudeHistoryReader();
 let historyBridge: CodexBridge | undefined;
 const historyErrors = new Map<string, string>();
-const replyImageRevisions = new WeakMap<SessionContext['transcript'], number>();
+const replyFileRevisions = new WeakMap<SessionContext['transcript'], number>();
 let nativeHistoryRefresh: Promise<void> | undefined;
 // Serializes prompt/select/register across awaits; bridge.isRunning alone races.
 const runFlight = createRunFlight(() => bridge.isRunning());
@@ -376,18 +376,24 @@ const nativeHistoryTimer = setInterval(() => {
 }, 30_000);
 nativeHistoryTimer.unref();
 
-server.listen(PORT, HOST, () => {
+function refreshPairing(): void {
   pairingPayload = auth.createPairingPayload(PUBLIC_ORIGIN, DEVICE_NAME);
-  const pairQr = JSON.stringify(pairingPayload);
+  pairingQr = undefined;
+  if (process.env.CC_REMOTE_DESKTOP !== '1') {
+    const pairQr = JSON.stringify(pairingPayload);
+    console.log(`Pairing code: ${pairingPayload.code.slice(0, 4)} ${pairingPayload.code.slice(4)} (valid for 5 minutes, single use)`);
+    console.log('Scan this QR with the CC Remote mobile app, or enter the public origin and pairing code:');
+    console.log(pairQr);
+    qrcode.generate(pairQr, { small: true });
+  }
+}
+
+server.listen(PORT, HOST, () => {
   console.log(`CC Remote listening on http://${HOST}:${PORT}`);
   console.log(`Workspace: ${activeContext.project.path}`);
   console.log(`Public origin: ${PUBLIC_ORIGIN}`);
   console.log(`Device name: ${DEVICE_NAME}`);
-  if (process.env.CC_REMOTE_DESKTOP !== '1') {
-    console.log('Scan this QR with the CC Remote mobile app:');
-    console.log(pairQr);
-    qrcode.generate(pairQr, { small: true });
-  }
+  refreshPairing();
   if (activeContext.session.engine === 'claude') void refreshCommands().catch(() => {});
 });
 
@@ -433,7 +439,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   }
 
   if (req.method === 'POST' && url.pathname === '/api/local/pairing') {
-    pairingPayload = auth.createPairingPayload(PUBLIC_ORIGIN, DEVICE_NAME);
+    refreshPairing();
     pairingQr = createPairingQr(pairingPayload);
     sendJson(res, 200, pairingQr);
     return;
@@ -497,17 +503,19 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   }
 
   if (req.method === 'POST' && url.pathname === '/api/pair') {
-    const body = await readJson<{ nonce?: string; deviceName?: string }>(req);
+    const body = await readJson<{ nonce?: unknown; code?: unknown; deviceName?: unknown }>(req);
+    const method = body?.code !== undefined ? 'code' : 'qr';
+    const credential = method === 'code' ? body?.code : body?.nonce;
     const result = await auth.pair(
-      body.nonce || '',
-      typeof body.deviceName === 'string' ? body.deviceName : undefined,
+      typeof credential === 'string' ? credential : '',
+      typeof body?.deviceName === 'string' ? body.deviceName : undefined,
+      method,
     );
     if ('error' in result) {
-      const status = result.error === 'device_limit' ? 409 : 401;
+      const status = result.error === 'device_limit' ? 409 : result.error === 'pairing_code_locked' ? 429 : 401;
       return sendJson(res, status, { ok: false, error: result.error });
     }
-    pairingPayload = auth.createPairingPayload(PUBLIC_ORIGIN, DEVICE_NAME);
-    pairingQr = undefined;
+    refreshPairing();
     sendJson(res, 200, {
       ok: true,
       token: result.token,
@@ -1372,7 +1380,7 @@ async function runPromptFlight(
       broadcast(sessionMessage({ type: 'session_info', ...sessionInfo }, runContext, runId));
     }
   }
-  const replyImagesChanged = await syncReplyImages(runContext);
+  const replyFilesChanged = await syncReplyFiles(runContext);
   if (result.stopped) {
     await runContext.transcript.finishStopped();
     broadcast(sessionMessage({ type: 'stopped' }, runContext, runId));
@@ -1390,7 +1398,7 @@ async function runPromptFlight(
       ...(engine === 'claude' ? { claudeSessionId: result.sessionId } : {}),
     }, runContext, runId));
   }
-  if (replyImagesChanged) broadcastNativeTranscript(runContext, runId);
+  if (replyFilesChanged) broadcastNativeTranscript(runContext, runId);
   broadcast(sessionMessage({
     type: 'status',
     authenticated: true,
@@ -1419,7 +1427,7 @@ function sendAttachment(res: ServerResponse, attachment: StoredAttachment): void
   res.writeHead(200, {
     'Content-Type': attachment.mimeType,
     'Content-Length': attachment.size,
-    'Content-Disposition': `inline; filename*=UTF-8''${dispositionName}`,
+    'Content-Disposition': `${attachment.mimeType.startsWith('image/') && attachment.mimeType !== 'image/svg+xml' ? 'inline' : 'attachment'}; filename*=UTF-8''${dispositionName}`,
     'Cache-Control': 'private, max-age=3600',
     'X-Content-Type-Options': 'nosniff',
   });
@@ -1560,7 +1568,7 @@ function getHistoryBridge(): CodexBridge {
 async function syncNativeMessages(context: SessionContext, required = false): Promise<boolean> {
   const snapshot = context.transcript.snapshot();
   if (snapshot.running) return false;
-  if (!snapshot.engineSessionId) return syncReplyImages(context);
+  if (!snapshot.engineSessionId) return syncReplyFiles(context);
   try {
     let history;
     if (context.session.engine === 'claude') {
@@ -1569,15 +1577,15 @@ async function syncNativeMessages(context: SessionContext, required = false): Pr
       // History is addressed by thread ID, independent of the active folder.
       history = await getHistoryBridge().readHistory(snapshot.engineSessionId);
     }
-    if (!history) return syncReplyImages(context);
+    if (!history) return syncReplyFiles(context);
     const result = await context.transcript.importNativeHistory(history);
-    const imagesChanged = await syncReplyImages(context);
+    const filesChanged = await syncReplyFiles(context);
     if (result.external && context.session.id === activeContext.session.id) bridge.close();
     historyErrors.delete(context.session.id);
     if (required && history.running) {
       throw new Error('native_session_is_busy');
     }
-    return result.changed || imagesChanged;
+    return result.changed || filesChanged;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (required) {
@@ -1588,18 +1596,18 @@ async function syncNativeMessages(context: SessionContext, required = false): Pr
       historyErrors.set(context.session.id, message);
       console.warn('[native-history] Could not refresh session history:', error);
     }
-    return syncReplyImages(context);
+    return syncReplyFiles(context);
   }
 }
 
-async function syncReplyImages(context: SessionContext): Promise<boolean> {
+async function syncReplyFiles(context: SessionContext): Promise<boolean> {
   const snapshot = context.transcript.snapshot();
-  if (replyImageRevisions.get(context.transcript) === snapshot.revision) return false;
+  if (replyFileRevisions.get(context.transcript) === snapshot.revision) return false;
   let changed = false;
   for (const [index, message] of snapshot.messages.entries()) {
     if (message.role !== 'assistant') continue;
     try {
-      const images = await collectReplyImages({
+      const files = await collectReplyFiles({
         store: attachments,
         projectId: context.project.id,
         sessionId: context.session.id,
@@ -1607,13 +1615,13 @@ async function syncReplyImages(context: SessionContext): Promise<boolean> {
         text: message.text,
         existing: message.attachments,
       });
-      changed = context.transcript.setAssistantAttachments(index, images) || changed;
+      changed = context.transcript.setAssistantAttachments(index, files) || changed;
     } catch (error) {
-      console.warn('[reply-images] Could not attach a reply image:', error);
+      console.warn('[reply-files] Could not attach reply files:', error);
     }
   }
   if (changed) await context.transcript.flush();
-  replyImageRevisions.set(context.transcript, context.transcript.snapshot().revision);
+  replyFileRevisions.set(context.transcript, context.transcript.snapshot().revision);
   return changed;
 }
 
