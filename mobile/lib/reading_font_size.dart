@@ -3,17 +3,17 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Continuous reading scale for transcript and UI text (1.0 = app default).
 const double kReadingFontScaleDefault = 1.0;
-const double kReadingFontScaleMin = 0.85;
-const double kReadingFontScaleMax = 1.40;
+const double kReadingFontScaleMin = 0.90;
+const double kReadingFontScaleMax = 1.10;
 
 double clampReadingFontScale(double value) {
   return value.clamp(kReadingFontScaleMin, kReadingFontScaleMax).toDouble();
 }
 
-/// Snap to 0.05 steps so the slider feels direct without float noise.
+/// Snap to 1% steps to avoid floating-point noise.
 double snapReadingFontScale(double value) {
   final clamped = clampReadingFontScale(value);
-  return (clamped * 20).round() / 20;
+  return (clamped * 100).round() / 100;
 }
 
 /// Parses stored wire values. Accepts continuous decimals and legacy enum names.
@@ -26,13 +26,12 @@ double parseReadingFontScale(String? raw) {
       // Legacy enum default was 1.0; keep wire value stable.
       return 1.0;
     case 'large':
-      return 1.15;
     case 'xlarge':
-      return 1.30;
+      return kReadingFontScaleMax;
   }
   final parsed = double.tryParse(raw);
   if (parsed == null) return kReadingFontScaleDefault;
-  return clampReadingFontScale(parsed);
+  return snapReadingFontScale(parsed);
 }
 
 class ReadingFontSizePreferenceStore {
@@ -70,7 +69,7 @@ String readingFontSizeDescription(double scale) {
     return '默认阅读尺寸';
   }
   if (snapped < kReadingFontScaleDefault) return '更紧凑，适合一屏看更多';
-  if (snapped < 1.25) return '更舒适的长文阅读';
+  if (snapped < kReadingFontScaleMax) return '更舒适的长文阅读';
   return '最大阅读字号';
 }
 

@@ -7,6 +7,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:http/http.dart' as http;
 
 import 'noto_icon.dart';
+import 'data/peer_transport.dart';
 import 'signal_console_theme.dart';
 import 'workspace_diff_view.dart';
 import 'workspace_paths.dart';
@@ -698,7 +699,7 @@ class WorkspaceApi {
     required this.token,
     this.demoMode = false,
     http.Client? client,
-  }) : client = client ?? http.Client();
+  }) : client = client ?? PeerHttpClient();
 
   final Uri origin;
   final String token;

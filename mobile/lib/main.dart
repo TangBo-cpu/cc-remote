@@ -25,6 +25,8 @@ import 'conversation_option_sheet.dart';
 import 'codex_model_picker.dart';
 import 'appearance_preference.dart';
 import 'data/api_client.dart';
+import 'data/peer_transport.dart';
+import 'data/remote_image.dart';
 import 'data/directory_api.dart';
 import 'data/native_session_api.dart';
 import 'data/permission_mode.dart';
@@ -366,7 +368,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final SessionMemoryStore sessionMemoryStore = SessionMemoryStore();
   late final Future<void> sessionMemoryInitialization;
   bool restoringPromptDraft = false;
-  late final RemoteApiClient apiClient = widget.apiClient ?? RemoteApiClient();
+  late final RemoteApiClient apiClient =
+      widget.apiClient ??
+      RemoteApiClient(client: PeerHttpClient(() => wsClient.peerTransport));
   final TextEditingController promptController = TextEditingController();
   final AttachmentPicker attachmentPicker = AttachmentPicker();
   final List<TranscriptMessage> messages = [];
@@ -397,6 +401,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   static const streamTextBatchInterval = Duration(milliseconds: 80);
   static const streamPersistInterval = Duration(milliseconds: 1500);
   String pendingAssistantText = '';
+  String? pendingAssistantMessageId;
+  String? pendingAssistantPhase;
   Timer? streamTextFlushTimer;
   Timer? streamPersistTimer;
   DateTime? lastStreamPersistAt;
@@ -421,6 +427,23 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   bool peekLoading = false;
   bool peekFailed = false;
   int liveMessageCountAtPeek = 0;
+  String? selectingSessionId;
+  String? expectedSelectionCatalogId;
+  bool selectionCatalogReceived = false;
+  int sessionSelectionGeneration = 0;
+  Future<void> sessionSelectionOperation = Future<void>.value();
+  Completer<void>? sessionSelectionAcknowledged;
+  final historyReads = <(Uri, String, String)>{};
+  final historyReadFailures = <(Uri, String, String)>{};
+  final sessionTranscriptCache =
+      <
+        (Uri, String, String),
+        ({
+          int revision,
+          List<TranscriptMessage> messages,
+          RemoteTranscriptSnapshot? snapshot,
+        })
+      >{};
 
   bool get canAnimateLiveFeedback =>
       viewingSessionId == null &&
@@ -1281,6 +1304,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   void closeWs() {
+    sessionSelectionGeneration++;
+    selectingSessionId = null;
+    expectedSelectionCatalogId = null;
+    sessionSelectionAcknowledged?.complete();
+    sessionSelectionAcknowledged = null;
+    sessionTranscriptCache.clear();
     wsClient.close();
     wsReady = false;
     reconnectSnapshot = const RemoteConnectionSnapshot.idle();
@@ -1302,6 +1331,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         onError: (Object err) => handleWsClosed('连接错误：$err'),
         onDone: () => handleWsClosed('连接已断开'),
         onState: handleWsConnectionState,
+        transcriptResume: () {
+          final id = activeSessionId;
+          final token = id == null
+              ? null
+              : cachedSessionTranscript(id)?.snapshot?.windowToken;
+          return token == null ? null : {'sessionId': id, 'token': token};
+        },
       );
     } catch (err) {
       handleWsClosed('连接失败：$err');
@@ -1309,11 +1345,15 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   void handleWsConnectionState(RemoteConnectionSnapshot snapshot) {
+    final reconnected =
+        snapshot.phase == RemoteConnectionPhase.connected &&
+        reconnectSnapshot.phase != RemoteConnectionPhase.connected;
     reconnectSnapshot = snapshot;
     if (!mounted || route != ShellRoute.chat) return;
     setState(() {
       reconnectSnapshot = snapshot;
       if (snapshot.phase == RemoteConnectionPhase.connecting) {
+        expectedSelectionCatalogId = null;
         respondingPermissionIds.clear();
       }
       if (snapshot.phase == RemoteConnectionPhase.connected) {
@@ -1321,6 +1361,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         remoteOffline = false;
       }
     });
+    if (reconnected && selectingSessionId != null && !peekFailed) {
+      wsClient.send({
+        'type': 'select_session',
+        'sessionId': selectingSessionId,
+      });
+    }
   }
 
   void reconnectNow() {
@@ -1351,6 +1397,47 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       return;
     }
 
+    if (decoded['type'] == 'transcript_snapshot' &&
+        decoded['unchanged'] == true) {
+      final id = decoded['sessionId'];
+      final cached = id is String
+          ? cachedSessionTranscript(id)?.snapshot
+          : null;
+      final history = decoded['history'];
+      if (cached == null ||
+          history is! Map ||
+          history['token'] != cached.windowToken) {
+        wsClient.send({'type': 'get_transcript', 'sessionId': id});
+        return;
+      }
+      decoded['messages'] = cached.messages
+          .map((message) => message.toJson())
+          .toList();
+      decoded['history'] = {
+        ...history,
+        'start': cached.messageStart,
+        'before': cached.olderCursor,
+      };
+    }
+    final receivedSnapshot = decoded['type'] == 'transcript_snapshot'
+        ? RemoteTranscriptSnapshot.tryParse(decoded)
+        : null;
+    if (receivedSnapshot != null) {
+      final id = decoded['sessionId'];
+      if (id is String) {
+        cacheSessionTranscript(
+          id,
+          receivedSnapshot.messages,
+          snapshot: receivedSnapshot,
+        );
+        if (id == viewingSessionId) {
+          setState(() {
+            peekMessages = cachedSessionTranscript(id)!.messages;
+            peekLoading = false;
+          });
+        }
+      }
+    }
     if (!acceptWsMessage(decoded)) return;
 
     switch (decoded['type']) {
@@ -1358,6 +1445,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         final catalog = RemoteProjectCatalog.tryParse(decoded);
 
         if (catalog == null) return;
+        if (expectedSelectionCatalogId != null &&
+            catalog.activeSessionId != expectedSelectionCatalogId) {
+          return;
+        }
+        expectedSelectionCatalogId = null;
         setState(() => applyCatalog(catalog));
         if (session != null) unawaited(tokenStore.save(session!));
         openPendingNotificationSession();
@@ -1391,13 +1483,19 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       case 'prompt_accepted':
         return;
       case 'transcript_snapshot':
-        final snapshot = RemoteTranscriptSnapshot.tryParse(decoded);
-        if (snapshot == null ||
-            !shouldApplyRemoteTranscriptSnapshot(
-              snapshot: snapshot,
-              currentRevision: remoteTranscriptRevision,
-              hasLocalMessages: messages.isNotEmpty,
-            )) {
+        if (receivedSnapshot == null) return;
+        final cached = cachedSessionTranscript(
+          decoded['sessionId'] as String,
+        )?.snapshot;
+        final snapshot =
+            cached != null && cached.revision >= receivedSnapshot.revision
+            ? cached
+            : receivedSnapshot;
+        if (!shouldApplyRemoteTranscriptSnapshot(
+          snapshot: snapshot,
+          currentRevision: remoteTranscriptRevision,
+          hasLocalMessages: messages.isNotEmpty,
+        )) {
           return;
         }
         final wasRunning = running;
@@ -1432,6 +1530,19 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             ),
           );
         });
+        if (selectionCatalogReceived &&
+            selectingSessionId == decoded['sessionId']) {
+          final jump = transcriptJumpRequest;
+          setState(() {
+            selectingSessionId = null;
+            resetSessionOnlyEffort();
+            sessionSelectionGeneration++;
+            clearSessionPeek();
+            transcriptJumpRequest = jump;
+          });
+          sessionSelectionAcknowledged?.complete();
+          sessionSelectionAcknowledged = null;
+        }
         persistTranscriptSnapshotLater();
         if (wasRunning && !running) releaseQueuedPromptIfTurnIdle();
         if (viewingSessionId != null && pendingPermissions.isNotEmpty) {
@@ -1505,7 +1616,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
         persistTranscriptSnapshotLater();
       case 'text':
-        queueAssistantText(decoded['text'] as String? ?? '');
+        queueAssistantText(
+          decoded['text'] as String? ?? '',
+          messageId: decoded['messageId'] as String?,
+          phase: assistantPhase(decoded['phase']),
+          replace: decoded['replace'] == true,
+        );
       case 'commands':
         final items = decoded['commands'];
         if (items is! List) return;
@@ -1691,8 +1807,31 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     persistTranscriptSnapshotNow();
   }
 
-  void queueAssistantText(String text) {
+  void queueAssistantText(
+    String text, {
+    String? messageId,
+    String? phase,
+    bool replace = false,
+  }) {
+    if (replace) {
+      clearStreamTextBatch(apply: true);
+      appendAssistantText(
+        text,
+        messageId: messageId,
+        phase: phase,
+        replace: true,
+        persist: false,
+      );
+      scheduleStreamPersist();
+      return;
+    }
     if (text.isEmpty) return;
+    if (pendingAssistantMessageId != messageId ||
+        pendingAssistantPhase != phase) {
+      clearStreamTextBatch(apply: true);
+    }
+    pendingAssistantMessageId = messageId;
+    pendingAssistantPhase = phase;
     // Keep whitespace deltas for streaming merge, but never start a blank bubble.
     pendingAssistantText += text;
     streamTextFlushTimer ??= Timer(
@@ -1710,11 +1849,18 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     // Hold a pure whitespace prefix until visible text arrives so indent is kept.
     if (text.trim().isEmpty) {
       final lastIsAssistant =
-          messages.isNotEmpty && messages.last.role == MessageRole.assistant;
+          messages.isNotEmpty &&
+          messages.last.role == MessageRole.assistant &&
+          messages.last.messageId == pendingAssistantMessageId;
       if (!lastIsAssistant) return;
     }
     pendingAssistantText = '';
-    appendAssistantText(text, persist: false);
+    appendAssistantText(
+      text,
+      messageId: pendingAssistantMessageId,
+      phase: pendingAssistantPhase,
+      persist: false,
+    );
     scheduleStreamPersist();
   }
 
@@ -1723,13 +1869,18 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     activityRefreshTimer = null;
     streamTextFlushTimer?.cancel();
     streamTextFlushTimer = null;
-    if (apply && pendingAssistantText.isNotEmpty) {
-      final text = pendingAssistantText;
-      pendingAssistantText = '';
-      appendAssistantText(text, persist: false);
-      return;
-    }
+    final text = pendingAssistantText;
     pendingAssistantText = '';
+    if (apply && text.isNotEmpty) {
+      appendAssistantText(
+        text,
+        messageId: pendingAssistantMessageId,
+        phase: pendingAssistantPhase,
+        persist: false,
+      );
+    }
+    pendingAssistantMessageId = null;
+    pendingAssistantPhase = null;
   }
 
   void scheduleStreamPersist() {
@@ -1752,24 +1903,43 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     persistTranscriptSnapshotLater();
   }
 
-  void appendAssistantText(String text, {bool persist = true}) {
-    if (text.isEmpty) return;
+  void appendAssistantText(
+    String text, {
+    bool persist = true,
+    String? messageId,
+    String? phase,
+    bool replace = false,
+  }) {
+    if (text.isEmpty && !replace) return;
     if (!mounted) return;
+    final start =
+        messages.lastIndexWhere((message) => message.role == MessageRole.user) +
+        1;
+    final lastIndex = messageId == null
+        ? messages.length - 1
+        : messages.lastIndexWhere(
+            (message) =>
+                message.role == MessageRole.assistant &&
+                message.messageId == messageId,
+          );
     final lastIsAssistant =
-        messages.isNotEmpty && messages.last.role == MessageRole.assistant;
+        lastIndex >= start &&
+        lastIndex >= 0 &&
+        messages[lastIndex].role == MessageRole.assistant &&
+        messages[lastIndex].messageId == messageId;
     // Prefix-only whitespace must not open a bubble or finish thinking yet.
     if (!lastIsAssistant && text.trim().isEmpty) {
       return;
     }
     if (lastIsAssistant) {
-      final lastIndex = messages.length - 1;
-      final merged = messages[lastIndex].text + text;
-      if (merged.trim().isEmpty) return;
+      final merged = replace ? text : messages[lastIndex].text + text;
       final previous = messages[lastIndex];
       final next = TranscriptMessage(
         MessageRole.assistant,
         merged,
         attachments: previous.attachments,
+        messageId: messageId,
+        phase: phase ?? previous.phase,
       );
       transcriptMotion.replaceMessage(previous, next);
       if (isBlankAssistantMessage(previous) && canAnimateLiveFeedback) {
@@ -1777,18 +1947,17 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       }
       messages[lastIndex] = next;
     } else {
-      final start =
-          messages.lastIndexWhere(
-            (message) => message.role == MessageRole.user,
-          ) +
-          1;
       finishRunningActivities(
         messages,
         ActivityState.done,
         start: start,
         kind: ActivityKind.thinking,
       );
-      final message = TranscriptMessage.assistant(text);
+      final message = TranscriptMessage.assistant(
+        text,
+        messageId: messageId,
+        phase: phase,
+      );
       messages.add(message);
       if (canAnimateLiveFeedback) transcriptMotion.recordMessage(message);
     }
@@ -1829,7 +1998,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       return;
     }
     if (!mounted || uploadingAttachments) return;
-    if (viewingSessionId != null) return;
+    if (viewingSessionId != null || selectingSessionId != null) return;
     if (running) {
       if (queuedPrompt != null) return;
       final sessionId = activeSessionId;
@@ -2423,6 +2592,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
   void applyCatalog(RemoteProjectCatalog? catalog) {
     if (catalog == null) return;
+    if (selectingSessionId != null &&
+        catalog.activeSessionId != selectingSessionId) {
+      return;
+    }
+    if (catalog.activeSessionId == selectingSessionId) {
+      selectionCatalogReceived = true;
+    }
     final changedSession =
         activeSessionId != catalog.activeSessionId &&
         (activeSessionId != null || messages.isNotEmpty);
@@ -2432,6 +2608,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       currentWorkspaceDir: session?.workspaceDir,
       nextWorkspaceDir: catalog.activeProject?.path,
     );
+    if (changedSession && activeSessionId != null) {
+      cacheSessionTranscript(activeSessionId!, messages);
+    }
     activeProjectId = catalog.activeProjectId;
     changeActiveSession(catalog.activeSessionId);
     if (changedSession) {
@@ -2458,7 +2637,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       remainingContext = null;
       selectedPermissionMode = PermissionMode.auto;
       activePermissionMode = PermissionMode.auto;
-      clearSessionPeek();
+      if (selectingSessionId == null) clearSessionPeek();
       queuedPrompt = null;
     }
     if (clearEcho) {
@@ -2615,6 +2794,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       sessions: remoteSessions,
       activeProjectId: activeProjectId,
       activeSessionId: activeSessionId,
+      viewingSessionId: viewingSessionId,
       running: running || uploadingAttachments,
       catalogListenable: sessionCatalog,
       busyListenable: directoryBusy,
@@ -2651,6 +2831,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       sessions: remoteSessions,
       activeProjectId: activeProjectId,
       activeSessionId: activeSessionId,
+      viewingSessionId: viewingSessionId,
       running: running || uploadingAttachments,
       catalogListenable: sessionCatalog,
       busyListenable: directoryBusy,
@@ -2787,6 +2968,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       liveRunning: running,
       hasLiveUpdate: messages.length > liveMessageCountAtPeek,
       queuedPreview: queuedPrompt?.preview,
+      switching: selectingSessionId == sessionId,
     );
   }
 
@@ -2867,13 +3049,15 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     RemoteSessionSummary target, {
     TranscriptJumpRequest? jump,
   }) async {
+    sessionSelectionGeneration++;
+    selectingSessionId = null;
+    expectedSelectionCatalogId = null;
     final generation = ++peekGeneration;
     setState(() {
       viewingSessionId = target.id;
       peekTitle = target.title;
-      peekMessages = [TranscriptMessage.system('正在读取会话…')];
-
-      peekLoading = true;
+      peekMessages = cachedSessionTranscript(target.id)?.messages ?? [];
+      peekLoading = cachedSessionTranscript(target.id) == null;
       peekFailed = false;
       liveMessageCountAtPeek = messages.length;
       transcriptJumpRequest = jump;
@@ -2896,8 +3080,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         return;
       }
       setState(() {
+        cacheSessionTranscript(
+          target.id,
+          payload.messages,
+          snapshot: payload.snapshot,
+        );
         peekTitle = payload.title;
-        peekMessages = payload.messages;
+        peekMessages =
+            cachedSessionTranscript(target.id)?.messages ?? payload.messages;
         peekLoading = false;
         peekFailed = false;
       });
@@ -2910,15 +3100,22 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<SessionPeekPayload?> fetchSessionPeek(String sessionId) async {
+  Future<SessionPeekPayload?> fetchSessionPeek(
+    String sessionId, {
+    String? before,
+  }) async {
     final current = session;
     if (current == null) return null;
     final res = await apiClient.get(
       current.origin,
-      '/api/sessions/${Uri.encodeComponent(sessionId)}',
+      '/api/sessions/${Uri.encodeComponent(sessionId)}?cached=1'
+      '${before == null ? '' : '&before=${Uri.encodeQueryComponent(before)}'}',
       token: current.token,
       timeout: networkTimeout,
     );
+    if (!isCurrentConnection(current)) return null;
+    if (res.statusCode == 409 && before != null)
+      throw StateError('transcript_history_changed');
     if (res.statusCode == 401) {
       await recoverUnauthorizedSession();
       return null;
@@ -2926,7 +3123,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     if (res.statusCode != 200) return null;
     final body = jsonDecode(res.body);
     if (body is! Map<String, dynamic>) return null;
-    return SessionPeekPayload.tryParse(body);
+    final payload = SessionPeekPayload.tryParse(body);
+    return payload?.sessionId == sessionId ? payload : null;
   }
 
   void selectRemoteSession(String sessionId) {
@@ -2960,7 +3158,8 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     String sessionId, {
     TranscriptJumpRequest? jump,
   }) {
-    if (sessionId == activeSessionId) {
+    if (sessionId == selectingSessionId && !peekFailed) return true;
+    if (sessionId == activeSessionId && selectingSessionId == null) {
       final wasPeeking = viewingSessionId != null;
       if (!wasPeeking && jump == null) return false;
       setState(() {
@@ -2996,7 +3195,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       unawaited(openSessionPeek(target, jump: jump));
       return true;
     }
-    if (intent != SessionOpenIntent.switchActive) return false;
+    if (intent != SessionOpenIntent.switchActive &&
+        intent != SessionOpenIntent.jumpInPlace) {
+      return false;
+    }
     if (widget.demoMode) {
       final selected = target;
       setState(() {
@@ -3029,19 +3231,239 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       persistTranscriptSnapshotLater();
       return true;
     }
-    final sent = wsClient.send({
-      'type': 'select_session',
-      'sessionId': sessionId,
-    });
-    if (!sent) return false;
+    final current = session;
+    if (current == null) return false;
+    if (activeSessionId != null) {
+      cacheSessionTranscript(activeSessionId!, messages);
+    }
+    final generation = ++sessionSelectionGeneration;
     setState(() {
       clearSessionPeek();
+      selectingSessionId = sessionId;
+      expectedSelectionCatalogId = sessionId;
+      selectionCatalogReceived = false;
+      viewingSessionId = sessionId;
+      peekTitle = target!.title;
+      peekMessages = cachedSessionTranscript(sessionId)?.messages ?? [];
+      peekLoading = cachedSessionTranscript(sessionId) == null;
+      peekFailed = false;
       transcriptJumpRequest = jump;
-      if (selectedEffort == ClaudeEffortPreference.max) {
-        resetSessionOnlyEffort();
+    });
+    // Reading the new view never waits behind an older activation request.
+    if (peekLoading) {
+      unawaited(readSelectedSession(sessionId, current, generation));
+    }
+    sessionSelectionOperation = sessionSelectionOperation.then((_) async {
+      if (!isCurrentConnection(current) ||
+          generation != sessionSelectionGeneration) {
+        return;
+      }
+      final acknowledged = Completer<void>();
+      sessionSelectionAcknowledged = acknowledged;
+      Timer? fallbackTimer;
+      try {
+        if (wsReady &&
+            wsClient.send({'type': 'select_session', 'sessionId': sessionId})) {
+          final fallback = Completer<void>();
+          fallbackTimer = Timer(const Duration(seconds: 2), fallback.complete);
+          await Future.any([acknowledged.future, fallback.future]);
+        }
+        if (!isCurrentConnection(current) ||
+            generation != sessionSelectionGeneration) {
+          return;
+        }
+        await Future.any([
+          requestSessionSelection(current, sessionId, generation),
+          acknowledged.future,
+        ]);
+      } finally {
+        fallbackTimer?.cancel();
+        if (identical(sessionSelectionAcknowledged, acknowledged)) {
+          sessionSelectionAcknowledged = null;
+        }
       }
     });
+    if (wsClient.isActive) unawaited(wsClient.ensureConnected(retryNow: true));
     return true;
+  }
+
+  ({
+    int revision,
+    List<TranscriptMessage> messages,
+    RemoteTranscriptSnapshot? snapshot,
+  })?
+  cachedSessionTranscript(String id) {
+    final current = session;
+    return current == null
+        ? null
+        : sessionTranscriptCache[(current.origin, current.token, id)];
+  }
+
+  Future<void> readSelectedSession(
+    String id,
+    SavedSession current,
+    int generation,
+  ) async {
+    try {
+      final payload = await fetchSessionPeek(id);
+      if (!isCurrentConnection(current) ||
+          generation != sessionSelectionGeneration ||
+          payload == null) {
+        return;
+      }
+      setState(() {
+        cacheSessionTranscript(
+          id,
+          payload.messages,
+          snapshot: payload.snapshot,
+        );
+        peekMessages = cachedSessionTranscript(id)!.messages;
+        peekTitle = payload.title;
+        peekLoading = false;
+      });
+    } catch (_) {
+      // Activation can still deliver the snapshot; its failure owns the retry.
+    }
+  }
+
+  void cacheSessionTranscript(
+    String id,
+    List<TranscriptMessage> transcript, {
+    RemoteTranscriptSnapshot? snapshot,
+  }) {
+    final current = session;
+    if (current == null) return;
+    final key = (current.origin, current.token, id);
+    final previousSnapshot = sessionTranscriptCache[key]?.snapshot;
+    snapshot =
+        snapshot?.retainEarlier(previousSnapshot) ??
+        previousSnapshot?.withMessages(transcript);
+    final nextRevision = snapshot?.revision ?? remoteTranscriptRevision;
+    if ((sessionTranscriptCache[key]?.revision ?? -1) > nextRevision) return;
+    sessionTranscriptCache.remove(key);
+    sessionTranscriptCache[key] = (
+      revision: nextRevision,
+      messages: List<TranscriptMessage>.of(snapshot?.messages ?? transcript),
+      snapshot: snapshot ?? previousSnapshot,
+    );
+    while (sessionTranscriptCache.length > 6) {
+      sessionTranscriptCache.remove(sessionTranscriptCache.keys.first);
+    }
+  }
+
+  Future<void> loadEarlierMessages(String id) async {
+    final current = session;
+    if (current == null) return;
+    final key = (current.origin, current.token, id);
+    final cursor = cachedSessionTranscript(id)?.snapshot?.olderCursor;
+    if (cursor == null || historyReads.contains(key)) return;
+    setState(() {
+      historyReads.add(key);
+      historyReadFailures.remove(key);
+    });
+    try {
+      SessionPeekPayload? payload;
+      var reset = false;
+      try {
+        payload = await fetchSessionPeek(id, before: cursor);
+      } on StateError catch (error) {
+        if (error.message != 'transcript_history_changed') rethrow;
+        payload = await fetchSessionPeek(id);
+        reset = true;
+      }
+      if (!isCurrentConnection(current)) return;
+      if (payload?.snapshot == null) throw StateError('history_read_failed');
+      if (id == activeSessionId) {
+        clearStreamTextBatch(apply: true);
+        cacheSessionTranscript(id, messages);
+      }
+      final previous = cachedSessionTranscript(id)?.snapshot;
+      if (previous == null || previous.olderCursor != cursor) return;
+      final merged = reset
+          ? payload!.snapshot
+          : previous.prepend(payload!.snapshot!);
+      if (merged == null) throw StateError('history_read_failed');
+      setState(() {
+        sessionTranscriptCache.remove(key);
+        cacheSessionTranscript(id, merged.messages, snapshot: merged);
+        if (viewingSessionId == id) peekMessages = merged.messages;
+        if (activeSessionId == id && selectingSessionId == null) {
+          messages
+            ..clear()
+            ..addAll(merged.messages);
+        }
+      });
+    } catch (_) {
+      if (isCurrentConnection(current))
+        setState(() => historyReadFailures.add(key));
+    } finally {
+      if (mounted) setState(() => historyReads.remove(key));
+    }
+  }
+
+  Future<void> requestSessionSelection(
+    SavedSession current,
+    String sessionId,
+    int generation,
+  ) async {
+    bool isCurrent() =>
+        isCurrentConnection(current) &&
+        generation == sessionSelectionGeneration;
+    try {
+      final res = await apiClient.post(
+        current.origin,
+        '/api/sessions/${Uri.encodeComponent(sessionId)}/select',
+        token: current.token,
+        timeout: networkTimeout,
+      );
+      if (!isCurrent()) return;
+      if (res.statusCode == 401) throw const UnauthorizedSession();
+      if (res.statusCode != 200) throw StateError('select_session_failed');
+      final body = jsonDecode(res.body) as Map<String, dynamic>;
+      final catalog = RemoteProjectCatalog.tryParse(body);
+      if (catalog == null || catalog.activeSessionId != sessionId) {
+        throw const FormatException('bad_select_session_response');
+      }
+      var snapshot = body['transcript'];
+      if (snapshot is! Map) {
+        final history = await apiClient.get(
+          current.origin,
+          '/api/sessions/${Uri.encodeComponent(sessionId)}',
+          token: current.token,
+          timeout: networkTimeout,
+        );
+        if (!isCurrent()) return;
+        if (history.statusCode == 401) throw const UnauthorizedSession();
+        if (history.statusCode != 200) {
+          throw StateError('select_session_failed');
+        }
+        snapshot = (jsonDecode(history.body) as Map)['transcript'];
+      }
+      if (snapshot is! Map ||
+          RemoteTranscriptSnapshot.tryParse(
+                Map<String, dynamic>.from(snapshot),
+              ) ==
+              null) {
+        throw const FormatException('bad_select_session_transcript');
+      }
+      setState(() {
+        resetSessionOnlyEffort();
+        applyCatalog(catalog);
+      });
+      handleWsMessage({
+        ...Map<String, dynamic>.from(snapshot),
+        'type': 'transcript_snapshot',
+        'sessionId': sessionId,
+      });
+    } on UnauthorizedSession {
+      if (isCurrent()) await recoverUnauthorizedSession();
+    } catch (_) {
+      if (!isCurrent()) return;
+      setState(() {
+        peekLoading = false;
+        peekFailed = true;
+      });
+    }
   }
 
   void handleTranscriptJumpHandled(TranscriptJumpRequest request) {
@@ -3341,9 +3763,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       connectWs(saved);
     } catch (err) {
       if (mounted) {
-        setState(() => pairError = err is FormatException
-            ? '服务未返回有效的配对信息，请检查服务地址'
-            : errorText(err));
+        setState(
+          () => pairError = err is FormatException
+              ? '服务未返回有效的配对信息，请检查服务地址'
+              : errorText(err),
+        );
       }
     } finally {
       if (mounted) setState(() => pairing = false);
@@ -3358,6 +3782,13 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       });
     }
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final displayedSessionId = viewingSessionId ?? activeSessionId;
+    final history = displayedSessionId == null
+        ? null
+        : cachedSessionTranscript(displayedSessionId)?.snapshot;
+    final historyKey = session == null || displayedSessionId == null
+        ? null
+        : (session!.origin, session!.token, displayedSessionId);
     final screen = switch (route) {
       ShellRoute.boot => BootstrapScreen(phase: bootstrapPhase),
       ShellRoute.pair => PairScreen(
@@ -3372,6 +3803,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         onDemoConnect: widget.demoMode ? connectDemoDevice : null,
       ),
       ShellRoute.chat => ChatScreen(
+        messageStart: history?.messageStart ?? 0,
+        onLoadEarlier: history?.olderCursor == null
+            ? null
+            : () => unawaited(loadEarlierMessages(displayedSessionId!)),
+        historyLoading: historyReads.contains(historyKey),
+        historyFailed: historyReadFailures.contains(historyKey),
         session: session,
         activeSessionId: activeSessionId,
         sessionMemoryStore: sessionMemoryStore,
@@ -3425,6 +3862,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
           widget.onReadingFontScaleChanged,
           logoutPairedDevice,
           onOpenDevices: multiDeviceSupported ? openDeviceManager : null,
+          connectionTransport: wsClient.isAuthenticated
+              ? reconnectSnapshot.transport
+              : 'offline',
         ),
         onOpenModelPicker: openModelPicker,
         onEffortSelected: (effort) => unawaited(setEffortPreference(effort)),
@@ -3444,14 +3884,25 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         onSend: sendPrompt,
         onStop: stopRun,
         peek: currentSessionPeek(),
-        onExitPeek: () => setState(clearSessionPeek),
+        onExitPeek: () {
+          if (selectingSessionId != null && activeSessionId != null) {
+            selectRemoteSessionWithJump(activeSessionId!);
+          } else {
+            setState(clearSessionPeek);
+          }
+        },
+        onRetryPeek: () {
+          final target = viewingSessionId;
+          if (target != null) selectRemoteSessionWithJump(target);
+        },
         queuedPreview: queuedPrompt?.preview,
         onCancelQueue: () => setState(restoreQueuedPrompt),
       ),
     };
     // Expanded windows (tablets, landscape desktops) keep the session list
     // mounted as a rail beside the chat instead of a modal sidebar.
-    final showSessionRail = route == ShellRoute.chat &&
+    final showSessionRail =
+        route == ShellRoute.chat &&
         sessionRailVisible &&
         projects.isNotEmpty &&
         isExpandedWindow(context);
@@ -3459,11 +3910,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         ? Row(
             key: const ValueKey('chat-session-rail'),
             children: [
-              SafeArea(
-                bottom: false,
-                right: false,
-                child: buildSessionRail(),
-              ),
+              SafeArea(bottom: false, right: false, child: buildSessionRail()),
               Expanded(child: screen),
             ],
           )
@@ -3643,7 +4090,9 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed && widget.enableCamera && !codeMode) {
+    if (state == AppLifecycleState.resumed &&
+        widget.enableCamera &&
+        !codeMode) {
       unawaited(checkCameraPermission());
     }
   }
@@ -4679,6 +5128,10 @@ class ChatScreen extends StatelessWidget {
     super.key,
     required this.session,
     this.activeSessionId,
+    this.messageStart = 0,
+    this.onLoadEarlier,
+    this.historyLoading = false,
+    this.historyFailed = false,
     this.sessionMemoryStore,
     required this.running,
     this.stopping = false,
@@ -4735,12 +5188,17 @@ class ChatScreen extends StatelessWidget {
     required this.onStop,
     this.peek,
     this.onExitPeek,
+    this.onRetryPeek,
     this.queuedPreview,
     this.onCancelQueue,
   });
 
   final SavedSession? session;
   final String? activeSessionId;
+  final int messageStart;
+  final VoidCallback? onLoadEarlier;
+  final bool historyLoading;
+  final bool historyFailed;
   final SessionMemoryStore? sessionMemoryStore;
   final bool running;
   final bool stopping;
@@ -4800,12 +5258,14 @@ class ChatScreen extends StatelessWidget {
   final VoidCallback onStop;
   final SessionPeekView? peek;
   final VoidCallback? onExitPeek;
+  final VoidCallback? onRetryPeek;
   final String? queuedPreview;
   final VoidCallback? onCancelQueue;
 
   @override
   Widget build(BuildContext context) {
     final peeking = peek != null;
+    final switching = peek?.switching == true;
     final evidence = _currentTurnEvidence(messages);
     final presentation = ConsolePresentation.resolve(
       connected: connected,
@@ -4853,7 +5313,36 @@ class ChatScreen extends StatelessWidget {
           contextWindow: info.contextWindow,
           remainingContext: info.remainingContext,
           presentation: presentation,
-          notification: peeking
+          notification: switching
+              ? Semantics(
+                  liveRegion: true,
+                  label: peek!.failed
+                      ? '切换「${peek!.title}」失败'
+                      : '正在同步「${peek!.title}」',
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: peek!.failed
+                            ? TextButton.icon(
+                                onPressed: onRetryPeek,
+                                icon: SmartIcon(
+                                  LucideIcons.rotateCcw,
+                                  size: AppIconSizes.inline,
+                                ),
+                                label: const Text('重试'),
+                              )
+                            : const SizedBox.shrink(),
+                      ),
+                      IconButton(
+                        key: const ValueKey('session-switch-return'),
+                        tooltip: '返回当前会话',
+                        onPressed: onExitPeek,
+                        icon: const SmartIcon(LucideIcons.x, size: 18),
+                      ),
+                    ],
+                  ),
+                )
+              : peeking
               ? null
               : RecoveryStatePanel(
                   key: ValueKey(activeSessionId),
@@ -4891,6 +5380,10 @@ class ChatScreen extends StatelessWidget {
       double topPadding, {
       bool tailOnlyUpdate = false,
     }) => TranscriptView(
+      messageStart: messageStart,
+      onLoadEarlier: onLoadEarlier,
+      historyLoading: historyLoading,
+      historyFailed: historyFailed,
       topPadding: topPadding,
       messages: peeking ? peek!.messages : messages,
       tailOnlyUpdate: tailOnlyUpdate,
@@ -4899,7 +5392,7 @@ class ChatScreen extends StatelessWidget {
       session: session,
       activeSessionId: peeking ? peek!.sessionId : activeSessionId,
       sessionMemoryStore: sessionMemoryStore,
-      loading: peeking && peek!.loading,
+      loading: peeking && (peek!.loading || peek!.failed),
       running: peeking ? false : running,
       runStartedAt: peeking ? null : runStartedAt,
       pendingPermissions: peeking
@@ -5009,52 +5502,67 @@ class ChatScreen extends StatelessWidget {
                       // transcript column instead of stretching on tablets.
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 760),
-                        child: peeking
+                        child: peeking && !switching
                             ? SessionPeekDock(
                                 peek: peek!,
                                 onReturn: onExitPeek ?? () {},
                                 onStop: peek!.liveRunning ? onStop : null,
                               )
-                            : withSessionInfo(
-                                (info) => PromptBar(
-                                  controller: promptController,
-                                  attachments: pendingAttachments,
-                                  commands: commands,
-                                  commandsLoading: commandsLoading,
-                                  commandsFailed: commandsFailed,
-                                  onRefreshCommands: onRefreshCommands,
-                                  running: running,
-                                  stopping: stopping,
-                                  uploading: uploadingAttachments,
-                                  connected: connected,
-                                  offline: offline,
-                                  permissionMode: permissionMode,
-                                  allowBypassPermissions:
-                                      allowBypassPermissions,
-                                  modelName: info.modelName,
-                                  contextWindow: info.contextWindow,
-                                  remainingContext: info.remainingContext,
-                                  engine: engine,
-                                  selectedModel: selectedModel,
-                                  selectedCodexModel: selectedCodexModel,
-                                  selectedEffort: selectedEffort,
-                                  codexSandboxMode: codexSandboxMode,
-                                  presentation: presentation,
-                                  queuedPreview: queuedPreview,
-                                  onCancelQueue: onCancelQueue,
-                                  onPermissionModeSelected:
-                                      onPermissionModeSelected,
-                                  onCodexSandboxModeSelected:
-                                      onCodexSandboxModeSelected,
-                                  onCommandSelected: (command) =>
-                                      onFillPrompt('/$command '),
-                                  onAddAttachment: onAddAttachment,
-                                  onRemoveAttachment: onRemoveAttachment,
-                                  onModelPressed: onOpenModelPicker,
-                                  onEffortSelected: onEffortSelected,
-                                  onReconnect: onReconnect,
-                                  onSend: onSend,
-                                  onStop: onStop,
+                            : IgnorePointer(
+                                ignoring: switching,
+                                child: ExcludeFocus(
+                                  excluding: switching,
+                                  child: ExcludeSemantics(
+                                    excluding: switching,
+                                    child: Opacity(
+                                      opacity: switching ? 0.45 : 1,
+                                      child: withSessionInfo(
+                                        (info) => PromptBar(
+                                          controller: promptController,
+                                          attachments: pendingAttachments,
+                                          commands: commands,
+                                          commandsLoading: commandsLoading,
+                                          commandsFailed: commandsFailed,
+                                          onRefreshCommands: onRefreshCommands,
+                                          running: running,
+                                          stopping: stopping,
+                                          uploading: uploadingAttachments,
+                                          connected: connected,
+                                          offline: offline,
+                                          permissionMode: permissionMode,
+                                          allowBypassPermissions:
+                                              allowBypassPermissions,
+                                          modelName: info.modelName,
+                                          contextWindow: info.contextWindow,
+                                          remainingContext:
+                                              info.remainingContext,
+                                          engine: engine,
+                                          selectedModel: selectedModel,
+                                          selectedCodexModel:
+                                              selectedCodexModel,
+                                          selectedEffort: selectedEffort,
+                                          codexSandboxMode: codexSandboxMode,
+                                          presentation: presentation,
+                                          queuedPreview: queuedPreview,
+                                          onCancelQueue: onCancelQueue,
+                                          onPermissionModeSelected:
+                                              onPermissionModeSelected,
+                                          onCodexSandboxModeSelected:
+                                              onCodexSandboxModeSelected,
+                                          onCommandSelected: (command) =>
+                                              onFillPrompt('/$command '),
+                                          onAddAttachment: onAddAttachment,
+                                          onRemoveAttachment:
+                                              onRemoveAttachment,
+                                          onModelPressed: onOpenModelPicker,
+                                          onEffortSelected: onEffortSelected,
+                                          onReconnect: onReconnect,
+                                          onSend: onSend,
+                                          onStop: onStop,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
                                 ),
                               ),
                       ),
@@ -5161,7 +5669,7 @@ class _ChatOverlayLayoutState extends State<_ChatOverlayLayout> {
           child: RepaintBoundary(
             child: SignalScrollBlurState(
               scrolling: _scrolling,
-              child: const _ChatTopBackdrop(fadeStart: 1),
+              child: const _ChatTopBackdrop(fadeStart: 0.5),
             ),
           ),
         ),
@@ -5198,8 +5706,7 @@ class _ChatTopBackdrop extends StatelessWidget {
 
   final double fadeStart;
 
-    // Keep the tint light enough to preserve colors behind the glass.
-    static final _filter = ui.ImageFilter.blur(sigmaX: 6, sigmaY: 6);
+  static final _filter = ui.ImageFilter.blur(sigmaX: 6, sigmaY: 6);
 
   @override
   Widget build(BuildContext context) {
@@ -5225,9 +5732,7 @@ class _ChatTopBackdrop extends StatelessWidget {
     return ExcludeSemantics(
       child: IgnorePointer(
         child: ClipRect(
-          child: SignalScrollBlurState.isScrolling(context)
-              ? surface
-              : BackdropFilter(filter: _filter, child: surface),
+          child: BackdropFilter(filter: _filter, child: surface),
         ),
       ),
     );
@@ -5840,7 +6345,10 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
                     minimumSize: const Size.fromHeight(AppSizes.touchTarget),
                     padding: const EdgeInsets.all(AppSpacing.sm),
                   ),
-                  icon: SmartIcon(content.actionIcon, size: AppIconSizes.control),
+                  icon: SmartIcon(
+                    content.actionIcon,
+                    size: AppIconSizes.control,
+                  ),
                   label: Text(content.actionLabel!),
                 ),
               ],
@@ -6353,6 +6861,7 @@ Future<void> showSettingsSheet(
   Future<void> Function(double scale, {bool persist}) onReadingFontScaleChanged,
   VoidCallback onLogout, {
   VoidCallback? onOpenDevices,
+  String? connectionTransport,
 }) async {
   FocusManager.instance.primaryFocus?.unfocus();
   await showModalBottomSheet<void>(
@@ -6376,6 +6885,7 @@ Future<void> showSettingsSheet(
         onReadingFontScaleChanged: onReadingFontScaleChanged,
         onLogout: onLogout,
         onOpenDevices: onOpenDevices,
+        connectionTransport: connectionTransport,
       ),
       barrierColor: AppPalette.of(context).scrim,
     ),
@@ -6467,7 +6977,9 @@ class _SettingsModalSurface extends StatelessWidget {
             clipBehavior: Clip.hardEdge,
             borderRadius: borderRadius,
             child: Padding(
-              padding: EdgeInsets.only(bottom: expanded ? 0 : media.padding.bottom),
+              padding: EdgeInsets.only(
+                bottom: expanded ? 0 : media.padding.bottom,
+              ),
               child: RepaintBoundary(child: child),
             ),
           ),
@@ -6491,6 +7003,7 @@ class SettingsSheet extends StatefulWidget {
     required this.onReadingFontScaleChanged,
     required this.onLogout,
     this.onOpenDevices,
+    this.connectionTransport,
   });
 
   final SavedSession? session;
@@ -6505,6 +7018,7 @@ class SettingsSheet extends StatefulWidget {
   onReadingFontScaleChanged;
   final VoidCallback onLogout;
   final VoidCallback? onOpenDevices;
+  final String? connectionTransport;
 
   @override
   State<SettingsSheet> createState() => _SettingsSheetState();
@@ -6748,7 +7262,7 @@ class _SettingsSheetState extends State<SettingsSheet> {
                                 ),
                                 min: kReadingFontScaleMin,
                                 max: kReadingFontScaleMax,
-                                divisions: 11,
+                                divisions: 20,
                                 label: readingFontSizeLabel(readingFontScale),
                                 onChanged: previewReadingFontScale,
                                 onChangeEnd: commitReadingFontScale,
@@ -6804,6 +7318,19 @@ class _SettingsSheetState extends State<SettingsSheet> {
                           label: '服务',
                           value: widget.session?.origin.toString() ?? '暂无服务信息',
                         ),
+                        if (widget.connectionTransport != null) ...[
+                          const SizedBox(height: 8),
+                          _SettingsDetailLine(
+                            label: '连接',
+                            value: switch (widget.connectionTransport) {
+                              'p2p' => 'P2P 直连',
+                              'turn' => 'TURN 中继',
+                              'webrtc' => 'WebRTC 数据通道',
+                              'websocket' => 'WebSocket 连接',
+                              _ => '未连接',
+                            },
+                          ),
+                        ],
                         const SizedBox(height: 8),
                         _SettingsDetailLine(
                           label: '目录',
@@ -7330,6 +7857,10 @@ class TranscriptView extends StatefulWidget {
     this.motion,
     this.session,
     this.activeSessionId,
+    this.messageStart = 0,
+    this.onLoadEarlier,
+    this.historyLoading = false,
+    this.historyFailed = false,
     this.sessionMemoryStore,
     this.loading = false,
     this.running = false,
@@ -7354,6 +7885,10 @@ class TranscriptView extends StatefulWidget {
   final TranscriptMotion? motion;
   final SavedSession? session;
   final String? activeSessionId;
+  final int messageStart;
+  final VoidCallback? onLoadEarlier;
+  final bool historyLoading;
+  final bool historyFailed;
   final SessionMemoryStore? sessionMemoryStore;
   final bool loading;
   final bool running;
@@ -7416,22 +7951,42 @@ List<Object> _groupTranscriptRows(
       index++;
       continue;
     }
-    final process = <_VisibleTranscriptRow>[];
+    final segment = <_VisibleTranscriptRow>[];
     while (index < rows.length && isProcessPart(rows[index].message)) {
-      process.add(rows[index++]);
+      segment.add(rows[index++]);
     }
-    final result = process.last.message.role == MessageRole.assistant
-        ? process.removeLast()
-        : null;
-    if (process.isNotEmpty) {
+    final typed = segment.any((row) => row.message.phase != null);
+    final lastActivity = segment.lastIndexWhere(
+      (row) => row.message.role == MessageRole.activity,
+    );
+    var process = <_VisibleTranscriptRow>[];
+    void flushProcess() {
+      if (process.isEmpty) return;
       items.add(
         _ProcessGroupRow(
           process,
           running: running && process.first.rawIndex > lastUserIndex,
         ),
       );
+      process = [];
     }
-    if (result != null) items.add(result);
+
+    for (var part = 0; part < segment.length; part++) {
+      final row = segment[part];
+      final message = row.message;
+      // Preserve untyped reply blocks after tools in older conversations.
+      final isProcess =
+          message.role == MessageRole.activity ||
+          message.phase == 'commentary' ||
+          (!typed && part < lastActivity);
+      if (isProcess) {
+        process.add(row);
+      } else {
+        flushProcess();
+        items.add(row);
+      }
+    }
+    flushProcess();
   }
   return items;
 }
@@ -7465,6 +8020,9 @@ class _TranscriptProcessBlock extends StatelessWidget {
               .lastOrNull
         : null;
     final historyRows = group.rows.where((row) => row != liveThought).toList();
+    final narration = historyRows
+        .where((row) => row.message.role == MessageRole.assistant)
+        .lastOrNull;
     Widget buildParts(Widget Function(TranscriptMessage)? buildTool) => Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -7478,7 +8036,7 @@ class _TranscriptProcessBlock extends StatelessWidget {
         ],
       ],
     );
-    final content = tools.isEmpty
+    final content = historyRows.isEmpty
         ? buildParts(null)
         : ActivityTimelineCard(
             activities: tools,
@@ -7491,6 +8049,7 @@ class _TranscriptProcessBlock extends StatelessWidget {
                       .activityId
                 : null,
             contentBuilder: (context, buildTool) => buildParts(buildTool),
+            preview: narration == null ? null : buildPart(narration),
           );
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -7524,6 +8083,7 @@ class _TranscriptViewState extends State<TranscriptView>
   SessionMemory? readingMemory;
   String? readingSessionId;
   double readingTopPadding = 0;
+  int readingMessageStart = 0;
   bool readingContentLoading = false;
   TranscriptReadingPosition? pendingReadingRestore;
   Timer? readingCaptureTimer;
@@ -7579,11 +8139,24 @@ class _TranscriptViewState extends State<TranscriptView>
       refreshTranscriptRows();
       observeTranscript(reset: true);
     } else {
+      final prepended = oldWidget.messageStart > widget.messageStart;
+      if (prepended) {
+        followingBottom = false;
+        captureReadingPosition();
+        pendingReadingRestore = readingMemory?.readingPosition;
+        rowKeys.clear();
+        readingRowKeys.clear();
+        activityStorage.clear();
+      }
       refreshTranscriptRows(
-        tailOnly: widget.tailOnlyUpdate && oldWidget.running == widget.running,
+        tailOnly:
+            !prepended &&
+            widget.tailOnlyUpdate &&
+            oldWidget.running == widget.running,
       );
-      observeTranscript();
+      observeTranscript(reset: prepended);
     }
+    readingMessageStart = widget.messageStart;
     scheduleJump();
     scheduleBottomJump(force: !didInitialBottomJump);
   }
@@ -7622,6 +8195,7 @@ class _TranscriptViewState extends State<TranscriptView>
 
   void resetReadingMemory() {
     readingGeneration++;
+    readingMessageStart = widget.messageStart;
     readingSessionId = widget.activeSessionId;
     readingMemoryStore = widget.sessionMemoryStore;
     readingMemory = readingSessionId == null
@@ -7689,7 +8263,7 @@ class _TranscriptViewState extends State<TranscriptView>
     memory.readingPosition = TranscriptReadingPosition(
       followingBottom: followingBottom,
       scrollOffset: position.pixels,
-      rawIndex: anchorIndex,
+      rawIndex: anchorIndex == null ? null : anchorIndex + readingMessageStart,
       role: message?.role.name,
       textPrefix: text?.substring(0, min(96, text.length)),
       anchorOffset: anchorTop == null
@@ -7715,6 +8289,16 @@ class _TranscriptViewState extends State<TranscriptView>
         widget.messages.isEmpty ||
         readingRestoreScheduled ||
         readingRestoreInFlight) {
+      return;
+    }
+    if ((pendingReadingRestore?.rawIndex ?? widget.messageStart) <
+            widget.messageStart &&
+        widget.onLoadEarlier != null) {
+      if (!widget.historyLoading && !widget.historyFailed) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onLoadEarlier?.call();
+        });
+      }
       return;
     }
     readingRestoreScheduled = true;
@@ -7753,16 +8337,18 @@ class _TranscriptViewState extends State<TranscriptView>
           row.message.text.startsWith(saved.textPrefix ?? '');
       final matchesByDistance = rows.where(matches).toList()
         ..sort(
-          (a, b) => (a.rawIndex - saved.rawIndex!).abs().compareTo(
-            (b.rawIndex - saved.rawIndex!).abs(),
-          ),
+          (a, b) => (a.rawIndex + widget.messageStart - saved.rawIndex!)
+              .abs()
+              .compareTo(
+                (b.rawIndex + widget.messageStart - saved.rawIndex!).abs(),
+              ),
         );
       var target = matchesByDistance.isNotEmpty
           ? matchesByDistance.first
           : rows.reduce(
               (a, b) =>
-                  (a.rawIndex - saved.rawIndex!).abs() <=
-                      (b.rawIndex - saved.rawIndex!).abs()
+                  (a.rawIndex + widget.messageStart - saved.rawIndex!).abs() <=
+                      (b.rawIndex + widget.messageStart - saved.rawIndex!).abs()
                   ? a
                   : b,
             );
@@ -7857,9 +8443,19 @@ class _TranscriptViewState extends State<TranscriptView>
     }
     bottomJumpScheduled = true;
     final generation = readingGeneration;
+    final scheduledOffset = scrollController.hasClients
+        ? scrollController.offset
+        : null;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || generation != readingGeneration) return;
       bottomJumpScheduled = false;
+      if (!force &&
+          scheduledOffset != null &&
+          scrollController.hasClients &&
+          (scrollController.offset - scheduledOffset).abs() > 0.5) {
+        updateBottomFollowing();
+        return;
+      }
       if (!mounted ||
           widget.messages.isEmpty ||
           widget.loading ||
@@ -7874,6 +8470,8 @@ class _TranscriptViewState extends State<TranscriptView>
       final target = position.maxScrollExtent;
       if ((target - position.pixels).abs() > 0.5) {
         scrollController.jumpTo(target);
+        // Recheck after lazy rows update the estimated scroll extent.
+        scheduleBottomJump(force: false);
       }
       didInitialBottomJump = true;
       followingBottom = true;
@@ -8031,6 +8629,12 @@ class _TranscriptViewState extends State<TranscriptView>
       return;
     }
 
+    if (request.messageIndex < widget.messageStart &&
+        widget.onLoadEarlier != null) {
+      if (!widget.historyLoading && !widget.historyFailed)
+        widget.onLoadEarlier?.call();
+      return;
+    }
     final targetRawIndex = resolveTargetRawIndex(request);
     if (targetRawIndex == null) {
       finishJump(request, found: false);
@@ -8083,13 +8687,15 @@ class _TranscriptViewState extends State<TranscriptView>
       return normalizedText.contains(normalizedSnippet);
     }
 
-    if (matches(request.messageIndex)) return request.messageIndex;
+    final localIndex = request.messageIndex - widget.messageStart;
+    if (matches(localIndex)) return localIndex;
 
     int? closest;
     var closestDistance = 1 << 30;
     for (var index = 0; index < widget.messages.length; index++) {
       if (!matches(index)) continue;
-      final distance = (index - request.messageIndex).abs();
+      final distance = (index + widget.messageStart - request.messageIndex)
+          .abs();
       if (distance < closestDistance) {
         closest = index;
         closestDistance = distance;
@@ -8239,7 +8845,7 @@ class _TranscriptViewState extends State<TranscriptView>
   Widget build(BuildContext context) {
     if (widget.messages.isEmpty && widget.pendingPermissions.isEmpty) {
       scheduleJump();
-      if (!widget.connected) return const SizedBox.expand();
+      if (!widget.connected || widget.loading) return const SizedBox.expand();
       final workspaceName = widget.session?.workspaceName;
       return LayoutBuilder(
         builder: (context, constraints) {
@@ -8360,6 +8966,14 @@ class _TranscriptViewState extends State<TranscriptView>
           child: RepaintBoundary(
             child: NotificationListener<UserScrollNotification>(
               onNotification: (notification) {
+                if (notification.direction == ScrollDirection.forward &&
+                    scrollController.hasClients &&
+                    scrollController.position.extentBefore <=
+                        widget.topPadding + 100 &&
+                    !widget.historyLoading &&
+                    !widget.historyFailed) {
+                  widget.onLoadEarlier?.call();
+                }
                 if (notification.direction != ScrollDirection.idle &&
                     (pendingReadingRestore != null || readingRestoreInFlight)) {
                   cancelReadingRestore();
@@ -8370,6 +8984,9 @@ class _TranscriptViewState extends State<TranscriptView>
               child: ListView.builder(
                 key: const ValueKey('transcript-list'),
                 controller: scrollController,
+                physics: widget.onLoadEarlier == null
+                    ? null
+                    : const AlwaysScrollableScrollPhysics(),
                 // Tall bottom padding: last bubble can rest above the dock, while
                 // earlier lines still scroll *under* the floating composer.
                 padding: EdgeInsets.fromLTRB(0, widget.topPadding, 0, 188),
@@ -8377,8 +8994,26 @@ class _TranscriptViewState extends State<TranscriptView>
                 cacheExtent: 180,
                 addAutomaticKeepAlives: false,
                 addRepaintBoundaries: true,
-                itemCount: itemCount,
+                itemCount: itemCount + (widget.onLoadEarlier == null ? 0 : 1),
                 itemBuilder: (context, index) {
+                  if (widget.onLoadEarlier != null) {
+                    if (index == 0) {
+                      return TextButton(
+                        key: const ValueKey('transcript-load-earlier'),
+                        onPressed: widget.historyLoading
+                            ? null
+                            : widget.onLoadEarlier,
+                        child: Text(
+                          widget.historyLoading
+                              ? '正在读取更早消息'
+                              : widget.historyFailed
+                              ? '读取失败，点击重试'
+                              : '查看更早消息',
+                        ),
+                      );
+                    }
+                    index--;
+                  }
                   final item = itemAt(index);
                   Widget row;
                   int? rawIndex;
@@ -8422,6 +9057,7 @@ class _TranscriptViewState extends State<TranscriptView>
                           runStartedAt: widget.runStartedAt,
                           searchHighlighted: highlighted,
                           isStreaming: part.rawIndex == streamingAssistantIndex,
+                          secondary: true,
                         );
                         child = messageEntrance(
                           part.message,
@@ -9040,46 +9676,74 @@ final MarkdownStyleSheet kAssistantMarkdownStyleSheet = MarkdownStyleSheet(
   ),
 );
 
-final _assistantMarkdownThemes = <Brightness, MarkdownStyleSheet>{};
+final _assistantMarkdownThemes = <(Brightness, bool), MarkdownStyleSheet>{};
 
-MarkdownStyleSheet assistantMarkdownStyleSheet(BuildContext context) {
+MarkdownStyleSheet assistantMarkdownStyleSheet(
+  BuildContext context, {
+  bool secondary = false,
+}) {
   final colors = AppPalette.of(context);
-  return _assistantMarkdownThemes.putIfAbsent(colors.brightness, () {
-    final base = kAssistantMarkdownStyleSheet;
-    final body = _kAssistantPlainStyle.copyWith(color: colors.messageInk);
-    return base.copyWith(
-      p: body,
-      a: base.a!.copyWith(color: colors.messageLink),
-      code: base.code!.copyWith(
-        color: colors.inlineCodeForeground,
-        backgroundColor: colors.inlineCodeBackground,
-      ),
-      h1: base.h1!.copyWith(color: colors.messageInk),
-      h2: base.h2!.copyWith(color: colors.messageInk),
-      h3: base.h3!.copyWith(color: colors.messageInk),
-      h4: base.h4!.copyWith(color: colors.messageInk),
-      h5: base.h5!.copyWith(color: colors.messageInk),
-      h6: base.h6!.copyWith(color: colors.messageInk),
-      blockquote: body.copyWith(color: colors.messageMuted),
-      img: body,
-      checkbox: body,
-      listBullet: base.listBullet!.copyWith(color: colors.messageInk),
-      tableHead: base.tableHead!.copyWith(color: colors.messageInk),
-      tableBody: base.tableBody!.copyWith(color: colors.messageInk),
-      tableBorder: TableBorder.all(
-        color: colors.messageBorder,
-        borderRadius: const BorderRadius.all(Radius.circular(12)),
-      ),
-      tableHeadCellsDecoration: BoxDecoration(color: colors.messageSecondary),
-      tableCellsDecoration: const BoxDecoration(),
-      blockquoteDecoration: BoxDecoration(
-        border: Border(left: BorderSide(color: colors.messageBorder, width: 3)),
-      ),
-      horizontalRuleDecoration: BoxDecoration(
-        border: Border(top: BorderSide(color: colors.messageBorder)),
-      ),
-    );
-  });
+  return _assistantMarkdownThemes.putIfAbsent(
+    (colors.brightness, secondary),
+    () {
+      if (secondary) {
+        final base = assistantMarkdownStyleSheet(context);
+        TextStyle? subdued(TextStyle? style) =>
+            style?.apply(fontSizeFactor: 0.9, color: colors.messageMuted);
+        return base.copyWith(
+          p: subdued(base.p),
+          h1: subdued(base.h1),
+          h2: subdued(base.h2),
+          h3: subdued(base.h3),
+          h4: subdued(base.h4),
+          h5: subdued(base.h5),
+          h6: subdued(base.h6),
+          blockquote: subdued(base.blockquote),
+          listBullet: subdued(base.listBullet),
+          tableHead: subdued(base.tableHead),
+          tableBody: subdued(base.tableBody),
+          code: base.code?.apply(fontSizeFactor: 0.9),
+          blockSpacing: 8,
+        );
+      }
+      final base = kAssistantMarkdownStyleSheet;
+      final body = _kAssistantPlainStyle.copyWith(color: colors.messageInk);
+      return base.copyWith(
+        p: body,
+        a: base.a!.copyWith(color: colors.messageLink),
+        code: base.code!.copyWith(
+          color: colors.inlineCodeForeground,
+          backgroundColor: colors.inlineCodeBackground,
+        ),
+        h1: base.h1!.copyWith(color: colors.messageInk),
+        h2: base.h2!.copyWith(color: colors.messageInk),
+        h3: base.h3!.copyWith(color: colors.messageInk),
+        h4: base.h4!.copyWith(color: colors.messageInk),
+        h5: base.h5!.copyWith(color: colors.messageInk),
+        h6: base.h6!.copyWith(color: colors.messageInk),
+        blockquote: body.copyWith(color: colors.messageMuted),
+        img: body,
+        checkbox: body,
+        listBullet: base.listBullet!.copyWith(color: colors.messageInk),
+        tableHead: base.tableHead!.copyWith(color: colors.messageInk),
+        tableBody: base.tableBody!.copyWith(color: colors.messageInk),
+        tableBorder: TableBorder.all(
+          color: colors.messageBorder,
+          borderRadius: const BorderRadius.all(Radius.circular(12)),
+        ),
+        tableHeadCellsDecoration: BoxDecoration(color: colors.messageSecondary),
+        tableCellsDecoration: const BoxDecoration(),
+        blockquoteDecoration: BoxDecoration(
+          border: Border(
+            left: BorderSide(color: colors.messageBorder, width: 3),
+          ),
+        ),
+        horizontalRuleDecoration: BoxDecoration(
+          border: Border(top: BorderSide(color: colors.messageBorder)),
+        ),
+      );
+    },
+  );
 }
 
 class _MarkdownPreGate {
@@ -9873,6 +10537,7 @@ class MessageBlock extends StatelessWidget {
     this.searchHighlighted = false,
     this.isStreaming = false,
     this.followsProcess = false,
+    this.secondary = false,
   });
 
   final TranscriptMessage message;
@@ -9882,6 +10547,7 @@ class MessageBlock extends StatelessWidget {
   final bool searchHighlighted;
   final bool isStreaming;
   final bool followsProcess;
+  final bool secondary;
 
   @override
   Widget build(BuildContext context) {
@@ -9906,10 +10572,11 @@ class MessageBlock extends StatelessWidget {
         data: text,
         isStreaming: isStreaming,
         attachments: message.attachments,
+        secondary: secondary,
       );
       return Semantics(
         container: true,
-        label: '助手回复',
+        label: secondary ? '处理过程' : '助手回复',
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
@@ -9917,6 +10584,7 @@ class MessageBlock extends StatelessWidget {
             AssistantBubbleFrame(
               bubbleKey: const ValueKey('assistant-message'),
               searchHighlighted: searchHighlighted,
+              compact: secondary,
               topPadding: followsProcess ? 0 : null,
               child: AssistantSelectionArea(
                 text: text,
@@ -9943,6 +10611,12 @@ class MessageBlock extends StatelessWidget {
     }
 
     final maxWidth = MediaQuery.sizeOf(context).width * 0.84;
+    final userText = message.text.trim().isEmpty
+        ? ''
+        : message.text.replaceAll(
+            RegExp(r'^(?:[ \t]*\r?\n)+|(?:\r?\n[ \t]*)+$'),
+            '',
+          );
     return Semantics(
       container: true,
       label: '你',
@@ -9999,10 +10673,10 @@ class MessageBlock extends StatelessWidget {
                       session: session,
                       activeSessionId: activeSessionId,
                     ),
-                  if (message.attachments.isNotEmpty && message.text.isNotEmpty)
+                  if (message.attachments.isNotEmpty && userText.isNotEmpty)
                     const SizedBox(height: 8),
-                  if (message.text.isNotEmpty)
-                    Text(message.text, style: _kUserBubbleStyle),
+                  if (userText.isNotEmpty)
+                    Text(userText, style: _kUserBubbleStyle),
                 ],
               ),
             ),
@@ -10020,11 +10694,13 @@ class _CachedMarkdownBody extends StatefulWidget {
     required this.data,
     this.isStreaming = false,
     this.attachments = const [],
+    this.secondary = false,
   });
 
   final String data;
   final bool isStreaming;
   final List<RemoteAttachment> attachments;
+  final bool secondary;
 
   @override
   State<_CachedMarkdownBody> createState() => _CachedMarkdownBodyState();
@@ -10045,10 +10721,12 @@ class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
     super.didUpdateWidget(oldWidget);
     if (widget.data != oldWidget.data ||
         widget.isStreaming != oldWidget.isStreaming ||
+        widget.secondary != oldWidget.secondary ||
         widget.attachments != oldWidget.attachments) {
       if (widget.data != oldWidget.data &&
           widget.isStreaming &&
           oldWidget.isStreaming &&
+          widget.secondary == oldWidget.secondary &&
           widget.attachments == oldWidget.attachments &&
           cached != null &&
           streamRenderTimer != null) {
@@ -10093,9 +10771,10 @@ class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
     )) {
       return cached = WorkspacePathText(
         widget.data,
-        style: _kAssistantPlainStyle.copyWith(
-          color: AppPalette.of(context).messageInk,
-        ),
+        style: assistantMarkdownStyleSheet(
+          context,
+          secondary: widget.secondary,
+        ).p,
       );
     }
     if (!widget.isStreaming && sourcesData != widget.data) {
@@ -10119,7 +10798,10 @@ class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
       selectable: false, // Parent AssistantSelectionArea owns selection.
       softLineBreak: true,
       onTapLink: (_, href, _) => unawaited(openSearchSource(context, href)),
-      styleSheet: assistantMarkdownStyleSheet(context),
+      styleSheet: assistantMarkdownStyleSheet(
+        context,
+        secondary: widget.secondary,
+      ),
       imageBuilder: widget.attachments.isEmpty
           ? null
           : (uri, title, alt) {
@@ -10290,11 +10972,16 @@ class RemoteAttachmentTile extends StatelessWidget {
     final saved = session;
     final sessionId = activeSessionId;
     if (attachment.isImage && saved != null && sessionId != null) {
-      final image = Image.network(
-        attachment.contentUri(saved.origin, sessionId).toString(),
-        headers: {'Authorization': 'Bearer ${saved.token}'},
+      final image = Image(
+        image: ResizeImage.resizeIfNeeded(
+          720,
+          null,
+          remoteImageProvider(
+            attachment.contentUri(saved.origin, sessionId),
+            saved.token,
+          ),
+        ),
         fit: fullImage ? BoxFit.contain : BoxFit.cover,
-        cacheWidth: 720,
         semanticLabel: attachment.name,
         frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
           if (frame == null && !wasSynchronouslyLoaded) return child;
@@ -10773,6 +11460,7 @@ class ActivityTimelineCard extends StatefulWidget {
     this.onExpandedChanged,
     this.revealActivityId,
     this.contentBuilder,
+    this.preview,
   });
 
   final List<TranscriptMessage> activities;
@@ -10783,6 +11471,7 @@ class ActivityTimelineCard extends StatefulWidget {
   final String? revealActivityId;
   final Widget Function(BuildContext, Widget Function(TranscriptMessage))?
   contentBuilder;
+  final Widget? preview;
 
   @override
   State<ActivityTimelineCard> createState() => _ActivityTimelineCardState();
@@ -10823,8 +11512,9 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
 
   Object get expansionStorageId => (
     'activity-timeline-expanded',
-    widget.activities.firstOrNull?.activityId,
-    isRunning(widget),
+    widget.contentBuilder == null
+        ? widget.activities.firstOrNull?.activityId
+        : null,
   );
 
   void restoreExpansion() {
@@ -10833,10 +11523,14 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
               context,
             )?.readState(context, identifier: expansionStorageId)
             as bool? ??
-        isRunning(widget);
+        (isRunning(widget) && widget.preview == null);
   }
 
   String groupTitle(List<TranscriptMessage> activities) {
+    if (widget.contentBuilder != null && !isRunning(widget)) {
+      return '查看过程';
+    }
+    if (activities.isEmpty) return isRunning(widget) ? '正在处理' : '查看过程';
     if (widget.thinking && widget.running != false) return '思考中';
     if (widget.running != false) {
       for (final activity in activities.reversed) {
@@ -10913,19 +11607,15 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
   @override
   Widget build(BuildContext context) {
     final activities = widget.activities;
-    if (activities.isEmpty) return const SizedBox.shrink();
-    final palette = AppPalette.of(context);
+    if (activities.isEmpty && widget.contentBuilder == null) {
+      return const SizedBox.shrink();
+    }
     final running =
         widget.running ??
         activities.any(
           (activity) => activity.activityState == ActivityState.running,
         );
     final isExpanded = widget.expanded ?? expanded;
-    final stoppedCount = activities
-        .where((activity) => activity.activityState == ActivityState.stopped)
-        .length;
-    final status = stoppedCount > 0 ? '$stoppedCount 个已停止' : null;
-    final tone = stoppedCount > 0 ? palette.warning : null;
     Widget buildToolRow(TranscriptMessage activity) => ToolActivityDetail(
       key: ValueKey('tool-inline-${activity.activityId}'),
       activity: activity,
@@ -10947,17 +11637,17 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
             expanded: isExpanded,
             title: displayedTitle,
             leading: ActivityIconBadge(
-              color: tone,
-              child: const Icon(LucideIcons.wrench),
+              child: Icon(
+                widget.contentBuilder == null
+                    ? LucideIcons.wrench
+                    : LucideIcons.activity,
+              ),
             ),
             compact: true,
             running: running,
-            statusText: status,
-            tone: tone,
             toggleKey: const ValueKey('activity-process-toggle'),
             semanticLabel:
-                '$displayedTitle，${activities.length} 次操作'
-                '${status == null ? '' : '，$status'}',
+                '$displayedTitle${activities.isEmpty ? '' : '，${activities.length} 次操作'}',
             onToggle: () {
               final next = !isExpanded;
               setState(() => expanded = next);
@@ -10983,6 +11673,7 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
               max(0, activities.length - 2),
             ))
               buildToolRow(activity),
+          if (running && !isExpanded && widget.preview != null) widget.preview!,
         ],
       ),
     );
@@ -11104,7 +11795,7 @@ class PromptBar extends StatelessWidget {
             context: context,
             borderRadius: composerRadius,
             elevated: composerElevated,
-          ),
+          ).copyWith(color: AppPalette.of(context).surface),
           child: Material(
             color: Colors.transparent,
             child: InkWell(
@@ -11214,7 +11905,7 @@ class PromptBar extends StatelessWidget {
                     borderRadius: composerRadius,
                     focused: composerFocused,
                     elevated: composerElevated,
-                  ),
+                  ).copyWith(color: AppPalette.of(context).surface),
                   child: Container(
                     constraints: const BoxConstraints(
                       minHeight: AppSizes.composer,

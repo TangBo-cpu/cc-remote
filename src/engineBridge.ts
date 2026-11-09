@@ -50,6 +50,19 @@ export type EngineSessionInfo = {
   remainingTokens?: number;
 };
 
+export type AssistantPhase = 'commentary' | 'partial_answer' | 'final_answer';
+
+export function assistantPhase(value: unknown): AssistantPhase | undefined {
+  return value === 'commentary' || value === 'partial_answer' || value === 'final_answer'
+    ? value : undefined;
+}
+
+export type EngineTextMetadata = {
+  messageId?: string;
+  phase?: AssistantPhase;
+  replace?: boolean;
+};
+
 export type EngineRunOptions = {
   prompt: string;
   sessionId?: string;
@@ -60,7 +73,7 @@ export type EngineRunOptions = {
   permissionMode: ClaudePermissionMode;
   sandboxMode?: CodexSandboxMode;
   onEvent: (event: unknown) => void;
-  onText: (text: string) => void;
+  onText: (text: string, metadata?: EngineTextMetadata) => void;
   onSessionId: (sessionId: string) => void;
   onPrompt?: (prompt: string) => void;
   onPermissionRequest?: (request: EnginePermissionRequest) => void;

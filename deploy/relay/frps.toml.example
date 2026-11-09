@@ -1,0 +1,8 @@
+bindPort = 7000
+proxyBindAddr = "127.0.0.1"
+allowPorts = [{ single = 18787 }]
+auth.method = "token"
+auth.token = "REPLACE_FRP_TOKEN"
+transport.tls.force = true
+transport.tls.certFile = "/etc/frp/tls/server.crt"
+transport.tls.keyFile = "/etc/frp/tls/server.key"

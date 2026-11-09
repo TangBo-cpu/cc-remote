@@ -216,9 +216,9 @@ class AppTypography {
   ];
 
   /// Base assistant body before reading-font scale factor.
-  static const assistantBodySize = 16.0;
+  static const assistantBodySize = 17.0;
   static const assistantBodyHeight = 26 / assistantBodySize;
-  static const userBodySize = 15.0;
+  static const userBodySize = 16.0;
   static const userBodyHeight = 1.6;
   static const activityBodySize = 14.0;
 }

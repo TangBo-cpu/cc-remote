@@ -70,12 +70,14 @@ Future<dynamic> boot(WidgetTester tester) async {
       ],
     }),
   );
-  state.handleWsMessage(jsonEncode({
-    'type': 'status',
-    'sessionId': 'a',
-    'authenticated': true,
-    'running': false,
-  }));
+  state.handleWsMessage(
+    jsonEncode({
+      'type': 'status',
+      'sessionId': 'a',
+      'authenticated': true,
+      'running': false,
+    }),
+  );
   await tester.pumpAndSettle();
   return state;
 }
@@ -88,6 +90,69 @@ Future<void> disposeApp(WidgetTester tester, dynamic state) async {
 
 void main() {
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
+
+  testWidgets(
+    'stream batches preserve IDs, late phases and multiple final messages',
+    (tester) async {
+      final dynamic state = await boot(tester);
+      state.handleWsMessage(jsonEncode(snapshot(running: true)));
+      void text(
+        String id,
+        String value, {
+        String? phase,
+        bool replace = false,
+      }) {
+        state.handleWsMessage(
+          jsonEncode({
+            'type': 'text',
+            'sessionId': 'a',
+            'runId': 'next-run',
+            'messageId': id,
+            'text': value,
+            'phase': phase,
+            'replace': replace,
+          }),
+        );
+      }
+
+      text('progress', '检查');
+      text('progress', '检查完成。', phase: 'commentary', replace: true);
+      text('partial', '确认上限。', phase: 'partial_answer');
+      text('final', '第一段。\n\n第二段。', phase: 'final_answer');
+      text('final', '\n\n第三段。\n\n第四段。', phase: 'final_answer');
+      text('extra', '补充。', phase: 'final_answer', replace: true);
+      state.handleWsMessage(
+        jsonEncode({
+          'type': 'done',
+          'sessionId': 'a',
+          'runId': 'next-run',
+          'exitCode': 0,
+        }),
+      );
+      final replies = (state.messages as List<TranscriptMessage>)
+          .skip(5)
+          .toList();
+      expect(replies.map((message) => message.text), [
+        '检查完成。',
+        '确认上限。',
+        '第一段。\n\n第二段。\n\n第三段。\n\n第四段。',
+        '补充。',
+      ]);
+      expect(replies.map((message) => message.phase), [
+        'commentary',
+        'partial_answer',
+        'final_answer',
+        'final_answer',
+      ]);
+      expect(
+        replies.map(
+          (message) => TranscriptMessage.fromJson(message.toJson()).messageId,
+        ),
+        ['progress', 'partial', 'final', 'extra'],
+      );
+      await disposeApp(tester, state);
+    },
+  );
 
   testWidgets(
     'native snapshots preserve the current session, draft and reading memory',

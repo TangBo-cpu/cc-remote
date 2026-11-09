@@ -21,6 +21,7 @@ Future<void> showSessionNavigator(
   required List<RemoteSessionSummary> sessions,
   required String? activeProjectId,
   required String? activeSessionId,
+  String? viewingSessionId,
   required bool running,
   ValueChanged<SessionEngine>? onOpenDirectory,
   VoidCallback? onSyncDesktop,
@@ -85,7 +86,9 @@ Future<void> showSessionNavigator(
                         activeProjectId:
                             catalog?.activeProjectId ?? activeProjectId,
                         activeSessionId:
-                            catalog?.activeSessionId ?? activeSessionId,
+                            viewingSessionId ??
+                            catalog?.activeSessionId ??
+                            activeSessionId,
                         running: busyListenable?.value ?? running,
                         onSelect: (id) {
                           Navigator.pop(pageContext);
@@ -143,6 +146,7 @@ class SessionRail extends StatelessWidget {
     required this.sessions,
     required this.activeProjectId,
     required this.activeSessionId,
+    this.viewingSessionId,
     required this.running,
     required this.onClose,
     this.onOpenDirectory,
@@ -167,6 +171,7 @@ class SessionRail extends StatelessWidget {
   final List<RemoteSessionSummary> sessions;
   final String? activeProjectId;
   final String? activeSessionId;
+  final String? viewingSessionId;
   final bool running;
   final ValueChanged<SessionEngine>? onOpenDirectory;
   final VoidCallback? onSyncDesktop;
@@ -211,7 +216,9 @@ class SessionRail extends StatelessWidget {
                 activeProjectId:
                     catalogListenable?.value?.activeProjectId ?? activeProjectId,
                 activeSessionId:
-                    catalogListenable?.value?.activeSessionId ?? activeSessionId,
+                    viewingSessionId ??
+                    catalogListenable?.value?.activeSessionId ??
+                    activeSessionId,
                 running: busyListenable?.value ?? running,
                 onSelect: onSelect,
                 onSearchResult: onSearchResult,

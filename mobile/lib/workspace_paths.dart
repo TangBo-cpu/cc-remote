@@ -237,7 +237,7 @@ bool looksLikeNormalizedWorkspacePath(String path) {
   if (path.isEmpty || path.contains('://')) return false;
   final name = path.split('/').last;
   if (name.isEmpty || name == '.' || name == '..') return false;
-  if (name.startsWith('.') && name.length > 1) return true;
+  if (name.startsWith('.') && RegExp(r'[A-Za-z_]').hasMatch(name)) return true;
   final dot = name.lastIndexOf('.');
   if (dot > 0 && dot < name.length - 1) {
     final ext = name.substring(dot + 1).toLowerCase();
@@ -300,7 +300,7 @@ bool _looksLikeHostSegment(String segment) {
 bool _hasRejectedPathContext(String text, int start) {
   if (start <= 0) return false;
   final prev = text[start - 1];
-  if (prev == '/' || prev == r'\') return true;
+  if (RegExp(r'[\w./\\+\-]').hasMatch(prev)) return true;
   if (prev != ':') return false;
   return _schemePrefix.hasMatch(text.substring(0, start).toLowerCase());
 }

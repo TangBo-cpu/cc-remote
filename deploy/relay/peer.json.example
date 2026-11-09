@@ -1,0 +1,9 @@
+{
+  "enabled": false,
+  "stunUrls": ["stun:REPLACE_DOMAIN:3478"],
+  "turnUrls": [
+    "turn:REPLACE_DOMAIN:3478?transport=udp",
+    "turn:REPLACE_DOMAIN:3478?transport=tcp"
+  ],
+  "turnSecret": "REPLACE_TURN_SECRET"
+}

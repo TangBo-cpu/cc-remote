@@ -9,6 +9,28 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:cc_remote/data/websocket_client.dart';
 
 void main() {
+  test('reconnect auth reads the latest transcript resume token', () async {
+    final first = FakeWebSocketChannel();
+    final second = FakeWebSocketChannel();
+    final channels = [first, second];
+    final client = RemoteWebSocketClient(connect: (_) => channels.removeAt(0));
+    var resume = {'sessionId': 'a', 'token': 'first-page'};
+    client.connect(
+      origin: Uri.parse('https://example.test'),
+      token: 'secret',
+      onMessage: (_) {},
+      onError: (_) {},
+      onDone: () {},
+      transcriptResume: () => resume,
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect((jsonDecode(first.sent.first) as Map)['transcriptResume'], resume);
+    resume = {'sessionId': 'b', 'token': 'next-page'};
+    client.reconnect();
+    await Future<void>.delayed(Duration.zero);
+    expect((jsonDecode(second.sent.first) as Map)['transcriptResume'], resume);
+    client.close();
+  });
   test('authenticates and guards sends to the active connection', () async {
     final first = FakeWebSocketChannel();
     final second = FakeWebSocketChannel();

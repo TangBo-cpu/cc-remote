@@ -932,6 +932,100 @@ test('Codex history stays warm when switching conversations across folders', asy
   }
 });
 
+test('slow native history does not block session switches or websocket authentication', async t => {
+  const instance = await startDaemon({
+    codexBin: process.execPath,
+    codexArgs: root => [resolve('tests/fixtures/fakeCodex.mjs'),
+      '--fake-history=' + join(root, 'slow-history.json'),
+      '--fake-log=' + join(root, 'slow-history.jsonl')],
+  });
+  const sockets: WebSocket[] = [];
+  try {
+    const paired = await fetch(instance.baseUrl + '/api/pair', {
+      method: 'POST', headers: { Origin: instance.baseUrl },
+      body: JSON.stringify({ nonce: instance.nonce }),
+    });
+    const { token } = await paired.json() as { token: string };
+    const headers = { Authorization: 'Bearer ' + token, Origin: instance.baseUrl, 'Content-Type': 'application/json' };
+    const initial = await (await fetch(instance.baseUrl + '/api/status', { headers })).json() as {
+      activeProjectId: string; activeSessionId: string;
+    };
+    const created = await fetch(instance.baseUrl + '/api/projects/' + initial.activeProjectId + '/sessions', {
+      method: 'POST', headers, body: JSON.stringify({ engine: 'codex' }),
+    });
+    const { sessionId } = await created.json() as { sessionId: string };
+    const connect = async () => {
+      const socket = new WebSocket(instance.baseUrl.replace('http:', 'ws:') + '/ws', { headers: { Origin: instance.baseUrl } });
+      sockets.push(socket);
+      await once(socket, 'open');
+      const ready = waitForWsMessage(socket, message => message.type === 'transcript_snapshot');
+      socket.send(JSON.stringify({ type: 'auth', token }));
+      await ready;
+      return socket;
+    };
+    const socket = await connect();
+    const done = waitForPromptResult(socket, sessionId);
+    socket.send(JSON.stringify({ type: 'prompt', sessionId, engine: 'codex', text: 'saved conversation' }));
+    await done;
+    assert.equal((await fetch(instance.baseUrl + '/api/sessions/' + initial.activeSessionId + '/select', {
+      method: 'POST', headers,
+    })).status, 200);
+    const historyPath = join(instance.root, 'slow-history.json');
+    const history = JSON.parse(await readFile(historyPath, 'utf8'));
+    history.delayMs = 2_000;
+    history.turns[0].items.push({ id: 'desktop-extra', type: 'agentMessage', text: 'new desktop reply' });
+    await writeFile(historyPath, JSON.stringify(history));
+    const readStart = performance.now();
+    const view = await fetch(instance.baseUrl + '/api/sessions/' + sessionId + '?cached=1', { headers });
+    assert.equal(view.status, 200);
+    assert.ok(JSON.stringify(await view.json()).includes('saved conversation'));
+    assert.ok(performance.now() - readStart < 1_000, 'viewing a session must not await native history');
+    const beforeSelect = await (await fetch(instance.baseUrl + '/api/status', { headers })).json() as { activeSessionId: string };
+    assert.equal(beforeSelect.activeSessionId, initial.activeSessionId, 'reading must not activate the session');
+    const updates: Record<string, unknown>[] = [];
+    socket.on('message', data => updates.push(JSON.parse(data.toString())));
+    const switched = waitForWsMessage(socket, message => message.type === 'transcript_snapshot' && message.sessionId === sessionId);
+    const switchStart = performance.now();
+    socket.send(JSON.stringify({ type: 'select_session', sessionId }));
+    await switched;
+    const switchMs = performance.now() - switchStart;
+    const confirmed = await fetch(instance.baseUrl + '/api/sessions/' + sessionId + '/select', {
+      method: 'POST', headers,
+    });
+    assert.equal(confirmed.status, 200);
+    const selected = await confirmed.json() as { activeSessionId: string; transcript: Record<string, unknown> };
+    assert.equal(selected.activeSessionId, sessionId);
+    assert.equal(selected.transcript.sessionId, sessionId);
+    assert.equal(selected.transcript.type, 'transcript_snapshot');
+    assert.ok(JSON.stringify(selected.transcript.messages).includes('saved conversation'));
+    const authStart = performance.now();
+    await connect();
+    const authMs = performance.now() - authStart;
+    const httpStart = performance.now();
+    assert.equal((await fetch(instance.baseUrl + '/api/sessions/' + initial.activeSessionId + '/select', {
+      method: 'POST', headers,
+    })).status, 200);
+    const httpMs = performance.now() - httpStart;
+    t.diagnostic(`With a 2000 ms history read: switch ${switchMs.toFixed(0)} ms, auth ${authMs.toFixed(0)} ms, HTTP switch ${httpMs.toFixed(0)} ms`);
+    assert.ok(switchMs < 1_000, 'switch must show the saved transcript before native history finishes');
+    assert.ok(authMs < 1_000, 'authentication must not wait for native history');
+    assert.ok(httpMs < 1_000, 'background history must not hold the session mutation lock');
+    const hasUpdate = (message: Record<string, unknown>) => message.type === 'transcript_snapshot'
+      && message.sessionId === sessionId && JSON.stringify(message.messages).includes('new desktop reply');
+    if (!updates.some(hasUpdate)) await waitForWsMessage(socket, hasUpdate);
+    const status = await (await fetch(instance.baseUrl + '/api/status', { headers })).json() as { activeSessionId: string };
+    assert.equal(status.activeSessionId, initial.activeSessionId, 'a late history result must not reactivate the old session');
+    const records = (await readFile(join(instance.root, 'slow-history.jsonl'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(records.filter(entry => entry.method === 'thread/turns/list').length, 1,
+      'switch and reconnect must share the in-flight history read');
+  } finally {
+    for (const socket of sockets) socket.terminate();
+    instance.child.kill();
+    if (instance.child.exitCode === null) await once(instance.child, 'exit');
+    await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
 for (const engine of ['claude', 'codex'] as const) {
   test('desktop session import selects one ' + engine + ' conversation, filters oversized files and resumes it', async () => {
     const nativeId = engine === 'claude' ? randomUUID() : 'fake-thread-id';
@@ -1163,8 +1257,9 @@ for (const engine of ['claude', 'codex'] as const) {
       await appendDesktop('offline desktop', 'offline reply');
       const reconnected = await connect();
       socket = reconnected.connection;
-      const restored = await reconnected.snapshot;
-      assert.equal(contains(restored, 'offline reply'), true);
+      const saved = await reconnected.snapshot;
+      const restored = contains(saved, 'offline reply') ? saved : await waitForWsMessage(socket,
+        message => message.type === 'transcript_snapshot' && contains(message, 'offline reply'));
       assert.equal(contains(restored, 'phone continues'), true);
       assert.equal(contains(restored, 'must wait'), true);
       const current = await fetch(instance.baseUrl + '/api/sessions/' + sessionId, { headers });
@@ -1186,7 +1281,11 @@ for (const engine of ['claude', 'codex'] as const) {
       await new Promise(resolveTimeout => setTimeout(resolveTimeout, 20));
       const deleteRequest = fetch(instance.baseUrl + '/api/sessions/' + sessionId, { method: 'DELETE', headers });
       const background = await backgroundRequest;
-      assert.equal(JSON.stringify(await background.json()).includes('background reply'), true);
+      if (background.status === 200) {
+        assert.equal(JSON.stringify(await background.json()).includes('background reply'), true);
+      } else {
+        assert.equal(background.status, 404, 'a read overtaken by deletion must not expose the deleted session');
+      }
       const catalog = JSON.parse(await readFile(join(instance.root, '.data', 'projects.json'), 'utf8'));
       assert.equal(catalog.activeSessionId, nextSession.sessionId);
       const deleted = await deleteRequest;
@@ -1357,6 +1456,117 @@ for (const failure of ['catalog', 'auth', 'transcript'] as const) {
   });
 }
 
+test('Codex message phases survive batching, native resync and websocket reconnect', async () => {
+  const instance = await startDaemon({
+    codexBin: process.execPath,
+    codexArgs: root => [resolve('tests/fixtures/fakeCodex.mjs'), '--fake-mode=phases',
+      '--fake-history=' + join(root, 'native.json')],
+  });
+  let socket: WebSocket | undefined;
+  try {
+    const pair = await fetch(instance.baseUrl + '/api/pair', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: instance.baseUrl },
+      body: JSON.stringify({ nonce: instance.nonce }),
+    });
+    const { token } = await pair.json() as { token: string };
+    const headers = { Authorization: 'Bearer ' + token, Origin: instance.baseUrl, 'Content-Type': 'application/json' };
+    const { activeProjectId } = await (await fetch(instance.baseUrl + '/api/status', { headers })).json() as { activeProjectId: string };
+    const created = await fetch(instance.baseUrl + '/api/projects/' + activeProjectId + '/sessions', {
+      method: 'POST', headers, body: JSON.stringify({ engine: 'codex' }),
+    });
+    const { sessionId } = await created.json() as { sessionId: string };
+    const connect = async () => {
+      socket = new WebSocket(instance.baseUrl.replace('http:', 'ws:') + '/ws', { headers: { Origin: instance.baseUrl } });
+      await once(socket, 'open');
+      const ready = waitForWsMessage(socket, message => message.type === 'transcript_snapshot');
+      socket.send(JSON.stringify({ type: 'auth', token }));
+      return ready;
+    };
+    await connect();
+    const streamed = new Map<string, { text: string; phase: unknown }>();
+    socket!.on('message', data => {
+      const message = JSON.parse(data.toString());
+      if (message.type !== 'text') return;
+      const previous = streamed.get(message.messageId);
+      streamed.set(message.messageId, {
+        text: message.replace ? message.text : (previous?.text ?? '') + message.text,
+        phase: message.phase ?? previous?.phase,
+      });
+    });
+    const done = waitForWsMessage(socket!, message => message.type === 'done');
+    socket!.send(JSON.stringify({ type: 'prompt', sessionId, engine: 'codex', text: '检查' }));
+    await done;
+    const expected = [
+      { text: '先检查设置。', phase: 'commentary' },
+      { text: '检查完成。', phase: 'commentary' },
+      { text: '可以同步 3.03 MiB。', phase: 'partial_answer' },
+      { text: '第一段。\n\n第二段。\n\n第三段。\n\n第四段。\n\n第五段。', phase: 'final_answer' },
+      { text: '补充答复。', phase: 'final_answer' },
+    ];
+    assert.deepEqual([...streamed.values()], expected);
+    const response = await fetch(instance.baseUrl + '/api/sessions/' + sessionId, { headers });
+    const { transcript } = await response.json() as { transcript: { messages: Array<{ text: string; phase?: string }> } };
+    assert.deepEqual(transcript.messages.slice(1).map(({ text, phase }) => ({ text, phase })), expected);
+    socket!.close();
+    await once(socket!, 'close');
+    const reconnected = await connect();
+    assert.deepEqual(reconnected.messages, transcript.messages);
+  } finally {
+    socket?.terminate();
+    instance.child.kill();
+    await Promise.race([
+      instance.child.exitCode === null ? once(instance.child, 'exit') : Promise.resolve(),
+      new Promise(resolveTimeout => setTimeout(resolveTimeout, 2_000)),
+    ]);
+    await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
+test('session reads, selection and websocket reconnect send bounded transcript pages', async () => {
+  const transcriptMessages = Array.from({ length: 25 }, (_, i) => ({ role: 'system' as const, text: 'history ' + i }));
+  const instance = await startDaemon({ transcriptMessages });
+  const sockets: WebSocket[] = [];
+  try {
+    const paired = await fetch(instance.baseUrl + '/api/pair', {
+      method: 'POST', headers: { Origin: instance.baseUrl }, body: JSON.stringify({ nonce: instance.nonce }),
+    });
+    const { token } = await paired.json() as { token: string };
+    const headers = { Authorization: 'Bearer ' + token, Origin: instance.baseUrl };
+    const { activeSessionId } = await (await fetch(instance.baseUrl + '/api/status', { headers })).json() as { activeSessionId: string };
+    const url = instance.baseUrl + '/api/sessions/' + activeSessionId;
+    type Page = { messages: typeof transcriptMessages; history: { start: number; total: number; before: string | null; token: string } };
+    const read = async (suffix = '') => (await (await fetch(url + '?cached=1' + suffix, { headers })).json() as { transcript: Page }).transcript;
+    const tail = await read();
+    assert.deepEqual(tail.messages, transcriptMessages.slice(-10));
+    assert.equal(tail.history.total, 25);
+    const middle = await read('&before=' + tail.history.before);
+    const first = await read('&before=' + middle.history.before);
+    assert.deepEqual([...first.messages, ...middle.messages, ...tail.messages], transcriptMessages);
+    assert.equal(first.history.before, null);
+    assert.equal((await fetch(url + '?before=invalid', { headers })).status, 400);
+    const selected = await (await fetch(url + '/select', { method: 'POST', headers })).json() as { transcript: Page };
+    assert.equal(selected.transcript.messages.length, 10);
+    for (const resume of [undefined, { sessionId: activeSessionId, token: tail.history.token }]) {
+      const socket = new WebSocket(instance.baseUrl.replace('http:', 'ws:') + '/ws', { headers: { Origin: instance.baseUrl } });
+      sockets.push(socket);
+      await once(socket, 'open');
+      const ready = waitForWsMessage(socket, message => message.type === 'transcript_snapshot');
+      socket.send(JSON.stringify({ type: 'auth', token, transcriptResume: resume }));
+      const snapshot = await ready;
+      assert.equal((snapshot.messages as unknown[]).length, resume ? 0 : 10);
+      assert.equal(snapshot.unchanged, resume ? true : undefined);
+      const changed = waitForWsMessage(socket, message => message.type === 'transcript_snapshot');
+      socket.send(JSON.stringify({ type: 'select_session', sessionId: activeSessionId }));
+      assert.equal(((await changed).messages as unknown[]).length, 10);
+    }
+  } finally {
+    for (const socket of sockets) socket.terminate();
+    instance.child.kill();
+    if (instance.child.exitCode === null) await once(instance.child, 'exit');
+    await rm(instance.root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
 async function startDaemon(options: {
   claudeBin?: string;
   claudeArgs?: (root: string) => string[];
@@ -1364,10 +1574,11 @@ async function startDaemon(options: {
   codexArgs?: (root: string) => string[];
   staleSessionId?: string;
   nativeHistory?: boolean;
+  transcriptMessages?: { role: 'system'; text: string }[];
 } = {}): Promise<RunningDaemon> {
   const root = await mkdtemp(join(tmpdir(), 'cc-remote-daemon-e2e-'));
   await writeFile(join(root, 'README.md'), '# fixture\n', 'utf8');
-  if (options.staleSessionId) {
+  if (options.staleSessionId || options.transcriptMessages) {
     await mkdir(join(root, '.data'), { recursive: true });
     await writeFile(join(root, '.data', 'transcript.json'), JSON.stringify({
       version: 1,
@@ -1378,7 +1589,7 @@ async function startDaemon(options: {
       permissionMode: 'manual',
       pendingPermissions: [],
       sessionInfo: {},
-      messages: [],
+      messages: options.transcriptMessages ?? [],
     }, null, 2) + '\n', 'utf8');
   }
   if (options.nativeHistory && options.staleSessionId) {

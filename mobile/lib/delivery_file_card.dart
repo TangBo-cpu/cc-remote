@@ -10,6 +10,8 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'attachments.dart';
 import 'data/remote_models.dart';
+import 'data/peer_transport.dart';
+import 'data/remote_image.dart';
 import 'delivery_files.dart';
 import 'noto_icon.dart';
 import 'signal_console_theme.dart';
@@ -157,7 +159,7 @@ class _DeliveryFileRowState extends State<_DeliveryFileRow> {
       }
       var file = localFile;
       if (file == null || !await file.exists()) {
-        final downloadClient = http.Client();
+        final downloadClient = PeerHttpClient();
         client = downloadClient;
         var lastPercent = -1;
         try {
@@ -271,12 +273,15 @@ class _DeliveryFileRowState extends State<_DeliveryFileRow> {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: bitmap && session != null && sessionId != null
-                  ? Image.network(
-                      attachment
-                          .contentUri(session.origin, sessionId)
-                          .toString(),
-                      headers: {'Authorization': 'Bearer ${session.token}'},
-                      cacheWidth: 120,
+                  ? Image(
+                      image: ResizeImage.resizeIfNeeded(
+                        120,
+                        null,
+                        remoteImageProvider(
+                          attachment.contentUri(session.origin, sessionId),
+                          session.token,
+                        ),
+                      ),
                       fit: BoxFit.cover,
                       excludeFromSemantics: true,
                       errorBuilder: (_, _, _) => thumb,

@@ -825,11 +825,25 @@ void main() {
     expect(find.byType(PairScreen), findsNothing);
     expect(find.text('字体大小'), findsOneWidget);
 
+    final fontSlider = find.byKey(const ValueKey('reading-font-size-slider'));
+    final slider = tester.widget<Slider>(fontSlider);
+    expect(slider.min, 0.90);
+    expect(slider.max, 1.10);
+    expect(slider.divisions, 20);
+    slider.onChanged!(1.07);
+    await tester.pump();
+    expect(find.text('107%'), findsOneWidget);
+    tester.widget<Slider>(fontSlider).onChangeEnd!(1.07);
+    await tester.pumpAndSettle();
+    expect(await ReadingFontSizePreferenceStore().load(), 1.07);
+
     await tester.tap(find.byTooltip('关闭'));
     await tester.pumpAndSettle();
     expect(tester.testTextInput.isVisible, isFalse);
 
     await openSettingsFromHeader(tester);
+    expect(tester.widget<Slider>(fontSlider).value, 1.07);
+    expect(find.text('107%'), findsOneWidget);
 
     await tester.ensureVisible(
       find.byKey(const ValueKey('background-notifications-toggle')),
@@ -4428,44 +4442,54 @@ void main() {
     );
   });
 
-  testWidgets('transcript opens at the latest message', (tester) async {
-    tester.view.physicalSize = const Size(393, 720);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
+  for (final scale in [0.9, 1.0, 1.1]) {
+    testWidgets('transcript opens at the latest message at $scale text', (
+      tester,
+    ) async {
+      tester.view.physicalSize = const Size(393, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
 
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: buildSignalConsoleTheme(),
-        home: Scaffold(
-          body: TranscriptView(
-            messages: [
-              for (var index = 0; index < 80; index++)
-                TranscriptMessage.user('restored message $index'),
-            ],
-            activeSessionId: 'session-1',
-            connected: true,
-            offline: false,
-            pendingPermissions: const [],
-            respondingPermissionIds: const {},
-            onFillPrompt: (_) {},
-            onReconnect: () {},
-            onPermissionAllow: (_) {},
-            onPermissionDeny: (_) {},
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildSignalConsoleTheme(),
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(scale)),
+            child: child!,
+          ),
+          home: Scaffold(
+            body: TranscriptView(
+              messages: [
+                for (var index = 0; index < 80; index++)
+                  TranscriptMessage.user('restored message $index'),
+              ],
+              activeSessionId: 'session-1',
+              connected: true,
+              offline: false,
+              pendingPermissions: const [],
+              respondingPermissionIds: const {},
+              onFillPrompt: (_) {},
+              onReconnect: () {},
+              onPermissionAllow: (_) {},
+              onPermissionDeny: (_) {},
+            ),
           ),
         ),
-      ),
-    );
-    await tester.pump();
+      );
+      await tester.pumpAndSettle();
 
-    final list = tester.widget<ListView>(
-      find.byKey(const ValueKey('transcript-list')),
-    );
-    final position = list.controller!.position;
-    expect(position.maxScrollExtent, greaterThan(0));
-    expect(position.extentAfter, lessThan(1));
-    expect(find.text('restored message 79'), findsOneWidget);
-  });
+      final list = tester.widget<ListView>(
+        find.byKey(const ValueKey('transcript-list')),
+      );
+      final position = list.controller!.position;
+      expect(position.maxScrollExtent, greaterThan(0));
+      expect(position.extentAfter, lessThan(1));
+      expect(find.text('restored message 79'), findsOneWidget);
+    });
+  }
 
   testWidgets('new output stays visible while reading and returns to latest', (
     tester,

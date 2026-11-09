@@ -34,6 +34,7 @@ class SessionPeekPayload {
     required this.title,
     required this.messages,
     this.archived = false,
+    this.snapshot,
   });
 
   final String sessionId;
@@ -41,6 +42,7 @@ class SessionPeekPayload {
   final String title;
   final List<TranscriptMessage> messages;
   final bool archived;
+  final RemoteTranscriptSnapshot? snapshot;
 
   static SessionPeekPayload? tryParse(Map<String, dynamic> json) {
     final sessionId = json['sessionId'];
@@ -62,6 +64,7 @@ class SessionPeekPayload {
       projectId: projectId,
       title: title,
       archived: json['archived'] == true,
+      snapshot: snapshot,
       messages: snapshot.messages,
     );
   }
@@ -77,6 +80,7 @@ class SessionPeekView {
     this.liveRunning = false,
     this.hasLiveUpdate = false,
     this.queuedPreview,
+    this.switching = false,
   });
 
   final String sessionId;
@@ -87,6 +91,7 @@ class SessionPeekView {
   final bool liveRunning;
   final bool hasLiveUpdate;
   final String? queuedPreview;
+  final bool switching;
 }
 
 SessionOpenIntent sessionOpenIntent({
@@ -100,7 +105,6 @@ SessionOpenIntent sessionOpenIntent({
   if (archived || uploading) return SessionOpenIntent.ignore;
   if (targetSessionId == activeSessionId) return SessionOpenIntent.jumpInPlace;
   if (running) return SessionOpenIntent.peek;
-  if (!wsReady) return SessionOpenIntent.ignore;
   return SessionOpenIntent.switchActive;
 }
 

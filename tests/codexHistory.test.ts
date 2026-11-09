@@ -10,7 +10,9 @@ const firstTurn = {
     { id: 'u1', type: 'userMessage', content: [{ type: 'text', text: '手机提问' }] },
     { id: 'reasoning', type: 'reasoning', content: ['PRIVATE_REASONING'] },
     { id: 'tool', type: 'commandExecution', aggregatedOutput: 'PRIVATE_TOOL_OUTPUT' },
-    { id: 'a1', type: 'agentMessage', text: '手机回复' },
+    { id: 'progress', type: 'agentMessage', phase: 'commentary', text: '检查设置。' },
+    { id: 'partial', type: 'agentMessage', phase: 'partial_answer', text: '确认上限。' },
+    { id: 'a1', type: 'agentMessage', phase: 'final_answer', text: '手机回复' },
   ],
 };
 const secondTurn = {
@@ -41,7 +43,9 @@ for (const mode of ['normal', 'history-summary', 'history-legacy']) {
       assert.equal(result.sessionId, 'native-thread');
       assert.equal(result.running, false);
       assert.deepEqual(result.messages.map(message => message.text),
-        ['手机提问', '手机回复', '电脑提问', '电脑回复']);
+        ['手机提问', '检查设置。', '确认上限。', '手机回复', '电脑提问', '电脑回复']);
+      assert.deepEqual(result.messages.map(message => message.phase),
+        [undefined, 'commentary', 'partial_answer', 'final_answer', undefined, undefined]);
       assert.equal(JSON.stringify(result).includes('PRIVATE'), false);
       await writeFile(path, JSON.stringify({
         running: true, turns: [firstTurn, { ...secondTurn, status: 'inProgress' }],

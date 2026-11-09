@@ -15,6 +15,26 @@ $tunnelConfig = Join-Path $runDir "cloudflared-cc-remote.yml"
 $tunnelOut = Join-Path $runDir "cloudflared.out.log"
 $tunnelErr = Join-Path $runDir "cloudflared.err.log"
 $tunnelProcess = $null
+$relayPath = Join-Path $root '.data/relay.json'
+$relayEnabled = $false
+if (-not $NoTunnel -and (Test-Path -LiteralPath $relayPath)) {
+  $relay = Get-Content -Raw -LiteralPath $relayPath | ConvertFrom-Json
+  if ($relay.enabled -eq $true) {
+    $relayOrigin = [Uri]$relay.origin
+    if (-not $relayOrigin.IsAbsoluteUri -or $relayOrigin.Scheme -ne 'https' -or
+        [string]::IsNullOrWhiteSpace($relayOrigin.Host) -or $relayOrigin.UserInfo) {
+      throw 'The relay origin must be a valid HTTPS URL.'
+    }
+    $relayEnabled = $true
+    $PublicOrigin = $relay.origin
+    $tunnelConfig = Join-Path $root '.data/frpc.toml'
+    $tunnelOut = Join-Path $runDir 'frpc.out.log'
+    $tunnelErr = Join-Path $runDir 'frpc.err.log'
+    if (-not (Test-Path -LiteralPath $tunnelConfig)) {
+      throw 'Relay configuration missing: .data/frpc.toml'
+    }
+  }
+}
 
 if ([string]::IsNullOrWhiteSpace($PublicOrigin) -and
     -not [string]::IsNullOrWhiteSpace($env:PUBLIC_ORIGIN)) {
@@ -23,6 +43,7 @@ if ([string]::IsNullOrWhiteSpace($PublicOrigin) -and
 
 if ([string]::IsNullOrWhiteSpace($PublicOrigin) -and
     -not $NoTunnel -and
+    -not $relayEnabled -and
     (Test-Path $tunnelConfig)) {
   $hostnameLine = Select-String `
     -LiteralPath $tunnelConfig `
@@ -86,7 +107,7 @@ try {
 
 function Stop-Tunnel {
   if ($script:tunnelProcess -and -not $script:tunnelProcess.HasExited) {
-    Write-Host "Stopping cloudflared pid=$($script:tunnelProcess.Id)"
+    Write-Host "Stopping tunnel pid=$($script:tunnelProcess.Id)"
     Stop-Process -Id $script:tunnelProcess.Id -Force -ErrorAction SilentlyContinue
     $script:tunnelProcess.WaitForExit(5000) | Out-Null
   }
@@ -96,30 +117,38 @@ New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 
 try {
   if (-not $NoTunnel) {
-    $cloudflared = Get-Command cloudflared -ErrorAction SilentlyContinue
-    if (-not $cloudflared) {
-      throw "cloudflared not found in PATH. Install cloudflared or run with -NoTunnel."
+    if ($relayEnabled) {
+      $tunnelBinary = Join-Path $root '.run/frp/frpc.exe'
+      if (-not (Test-Path -LiteralPath $tunnelBinary)) {
+        throw 'frpc not found: .run/frp/frpc.exe'
+      }
+      $tunnelArgs = @('-c', ('"{0}"' -f $tunnelConfig))
+    } else {
+      $cloudflared = Get-Command cloudflared -ErrorAction SilentlyContinue
+      if (-not $cloudflared) {
+        throw "cloudflared not found in PATH. Install cloudflared or run with -NoTunnel."
+      }
+      $tunnelBinary = $cloudflared.Source
+      if (Test-Path $tunnelConfig) {
+        $tunnelArgs = @("tunnel", "--config", ('"{0}"' -f $tunnelConfig), "run")
+      } else {
+        $tunnelArgs = @("tunnel", "--url", "http://127.0.0.1:$Port")
+      }
     }
 
     Remove-Item $tunnelOut, $tunnelErr -Force -ErrorAction SilentlyContinue
 
-    if (Test-Path $tunnelConfig) {
-      $tunnelArgs = @("tunnel", "--config", $tunnelConfig, "run")
-    } else {
-      $tunnelArgs = @("tunnel", "--url", "http://127.0.0.1:$Port")
-    }
-
     $script:tunnelProcess = Start-Process `
-      -FilePath $cloudflared.Source `
+      -FilePath $tunnelBinary `
       -ArgumentList $tunnelArgs `
       -WorkingDirectory $root `
       -RedirectStandardOutput $tunnelOut `
       -RedirectStandardError $tunnelErr `
-      -NoNewWindow `
+      -WindowStyle Hidden `
       -PassThru
 
-    Write-Host "cloudflared pid=$($script:tunnelProcess.Id)"
-    Write-Host "cloudflared logs: $tunnelOut"
+    Write-Host "Tunnel pid=$($script:tunnelProcess.Id)"
+    Write-Host "Tunnel logs: $tunnelOut"
   }
 
   $env:PUBLIC_ORIGIN = $PublicOrigin

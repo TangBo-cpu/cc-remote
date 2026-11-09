@@ -22,7 +22,7 @@ void main() {
     }
   });
 
-  testWidgets('top frost follows the full header before fading out', (
+  testWidgets('top frost keeps blurring during scroll and fades into the body', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(432, 960);
@@ -102,6 +102,22 @@ void main() {
       final headerBottom = tester.getRect(topOverlay).bottom - maskBounds.top;
       expect(maskBounds.height, closeTo(headerBottom / 2 + 14, 0.1));
 
+      final gesture = await tester.startGesture(const Offset(216, 500));
+      await gesture.moveBy(const Offset(0, -100));
+      await tester.pump();
+      await tester.pump();
+      expect(
+        SignalScrollBlurState.isScrolling(tester.element(header)),
+        isTrue,
+      );
+      expect(
+        find.ancestor(of: mask, matching: find.byType(BackdropFilter)),
+        findsOneWidget,
+        reason: 'Scrolling text must keep its top blur.',
+      );
+      await gesture.up();
+      await tester.pumpAndSettle();
+
       final decoration =
           tester.widget<DecoratedBox>(mask).decoration as BoxDecoration;
       await tester.runAsync(() async {
@@ -119,7 +135,13 @@ void main() {
         );
         image.dispose();
 
-        expect(pixels!.getUint8((maskBounds.height.floor() - 1) * 4 + 3), 255);
+        expect(pixels!.getUint8(3), 255);
+        final fadePixel = (maskBounds.height * 0.75).floor();
+        expect(pixels.getUint8(fadePixel * 4 + 3), inInclusiveRange(80, 180));
+        expect(
+          pixels.getUint8((maskBounds.height.floor() - 1) * 4 + 3),
+          lessThan(16),
+        );
       });
 
       final list = tester.widget<ListView>(

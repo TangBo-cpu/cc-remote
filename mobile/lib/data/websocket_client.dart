@@ -5,6 +5,7 @@ import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'remote_origin.dart';
+import 'peer_transport.dart';
 
 typedef WebSocketMessageHandler = void Function(dynamic data);
 typedef WebSocketErrorHandler = void Function(Object error);
@@ -19,18 +20,21 @@ class RemoteConnectionSnapshot {
     this.attempt = 0,
     this.nextRetryAt,
     this.lastError,
+    this.transport = 'websocket',
   });
 
   const RemoteConnectionSnapshot.idle()
     : phase = RemoteConnectionPhase.idle,
       attempt = 0,
       nextRetryAt = null,
-      lastError = null;
+      lastError = null,
+      transport = 'websocket';
 
   final RemoteConnectionPhase phase;
   final int attempt;
   final DateTime? nextRetryAt;
   final Object? lastError;
+  final String transport;
 }
 
 class RemoteWebSocketClient {
@@ -95,13 +99,17 @@ class RemoteWebSocketClient {
   WebSocketErrorHandler? _onError;
   void Function()? _onDone;
   WebSocketStateHandler? _onState;
+  Map<String, dynamic>? Function()? _transcriptResume;
   Map<String, dynamic>? _pendingPrompt;
   Object? _lastError;
+  RemotePeerTransport? _peer;
+  bool _peerAttempted = false;
 
   WebSocketChannel? get channel => _channel;
   bool get isActive => !_explicitlyClosed && _origin != null && _token != null;
   bool get isAuthenticated => _authenticated;
   bool get supportsMultiDevice => _supportsMultiDevice;
+  RemotePeerTransport? get peerTransport => _peer;
 
   Future<void> ensureConnected({
     bool retryNow = false,
@@ -153,6 +161,7 @@ class RemoteWebSocketClient {
     required WebSocketErrorHandler onError,
     required void Function() onDone,
     WebSocketStateHandler? onState,
+    Map<String, dynamic>? Function()? transcriptResume,
   }) {
     final sameCredentials = _origin == origin && _token == token;
     if (!sameCredentials) _pendingPrompt = null;
@@ -162,6 +171,7 @@ class RemoteWebSocketClient {
     _onError = onError;
     _onDone = onDone;
     _onState = onState;
+    _transcriptResume = transcriptResume;
     _explicitlyClosed = false;
     _reconnectAttempt = 0;
     _lastError = null;
@@ -191,24 +201,7 @@ class RemoteWebSocketClient {
     _channel = channel;
     _transportReady = false;
     _subscription = channel.stream.listen(
-      (data) {
-        if (!_isCurrent(channel, generation)) return;
-        final decoded = _decodeMessage(data);
-        final authenticated =
-            decoded != null && _handlePromptProtocolMessage(decoded);
-        _onMessage?.call(decoded ?? data);
-        if (authenticated && !_isCurrent(channel, generation)) return;
-        if (authenticated) {
-          final wasAuthenticated = _authenticated;
-          _authenticated = true;
-          _authTimer?.cancel();
-          _authTimer = null;
-          _reconnectAttempt = 0;
-          _lastError = null;
-          _publishState(RemoteConnectionPhase.connected);
-          if (!wasAuthenticated) _retryPendingPrompt(channel, generation);
-        }
-      },
+      (data) => _receive(data, channel, generation),
       onError: (Object error, StackTrace stackTrace) {
         if (!_isCurrent(channel, generation)) return;
         _reportError(error);
@@ -232,7 +225,13 @@ class RemoteWebSocketClient {
             _handleDisconnect(channel, generation);
           });
           try {
-            channel.sink.add(jsonEncode({'type': 'auth', 'token': token}));
+            channel.sink.add(
+              jsonEncode({
+                'type': 'auth',
+                'token': token,
+                'transcriptResume': ?_transcriptResume?.call(),
+              }),
+            );
             _transportReady = true;
           } catch (error) {
             if (_isCurrent(channel, generation)) {
@@ -250,6 +249,74 @@ class RemoteWebSocketClient {
     );
   }
 
+  void _receive(dynamic data, WebSocketChannel channel, int generation) {
+    if (!_isCurrent(channel, generation)) return;
+    final decoded = _decodeMessage(data);
+    if (decoded != null &&
+        const [
+          'peer_answer',
+          'peer_ice',
+          'peer_switched',
+          'peer_unavailable',
+        ].contains(decoded['type'])) {
+      unawaited(_peer?.handleSignal(decoded));
+      return;
+    }
+    final authenticated =
+        decoded != null && _handlePromptProtocolMessage(decoded);
+    _onMessage?.call(decoded ?? data);
+    if (!_isCurrent(channel, generation)) return;
+    if (authenticated) {
+      final wasAuthenticated = _authenticated;
+      _authenticated = true;
+      _authTimer?.cancel();
+      _authTimer = null;
+      _reconnectAttempt = 0;
+      _lastError = null;
+      _publishState(RemoteConnectionPhase.connected);
+      if (!wasAuthenticated) _retryPendingPrompt(channel, generation);
+      if (decoded['peerTransport'] == true && !_peerAttempted) {
+        _peerAttempted = true;
+        late final RemotePeerTransport peer;
+        peer = RemotePeerTransport(
+          origin: _origin!,
+          token: _token!,
+          signal: (value) {
+            if (!_isCurrent(channel, generation)) return false;
+            try {
+              channel.sink.add(jsonEncode(value));
+              return true;
+            } catch (_) {
+              return false;
+            }
+          },
+          onMessage: (raw) => _receive(raw, channel, generation),
+          onReady: () {
+            if (_isCurrent(channel, generation) && identical(_peer, peer)) {
+              _publishState(RemoteConnectionPhase.connected);
+            }
+          },
+          onFailed: (wasReady) {
+            if (!_isCurrent(channel, generation) || !identical(_peer, peer)) {
+              return;
+            }
+            _peer = null;
+            if (wasReady) {
+              _handleDisconnect(channel, generation, immediate: true);
+            }
+          },
+        );
+        _peer = peer;
+        unawaited(peer.start());
+      }
+    }
+  }
+
+  void _sendPayload(WebSocketChannel channel, String raw) {
+    if (_peer?.sendMessage(raw) == true) return;
+    channel.sink.add(raw);
+  }
+
   bool send(Map<String, dynamic> message, {Object? expectedConnection}) {
     final channel = _channel;
     if (!_transportReady ||
@@ -259,7 +326,7 @@ class RemoteWebSocketClient {
     }
     final generation = _generation;
     try {
-      channel.sink.add(jsonEncode(message));
+      _sendPayload(channel, jsonEncode(message));
       return true;
     } catch (error) {
       if (_isCurrent(channel, generation)) {
@@ -288,7 +355,7 @@ class RemoteWebSocketClient {
     _pendingPrompt = Map<String, dynamic>.from(message);
     final generation = _generation;
     try {
-      channel.sink.add(jsonEncode(message));
+      _sendPayload(channel, jsonEncode(message));
     } catch (error) {
       if (_isCurrent(channel, generation)) {
         _reportError(error);
@@ -367,7 +434,7 @@ class RemoteWebSocketClient {
     final pending = _pendingPrompt;
     if (pending == null || !_isCurrent(channel, generation)) return;
     try {
-      channel.sink.add(jsonEncode(pending));
+      _sendPayload(channel, jsonEncode(pending));
     } catch (error) {
       if (_isCurrent(channel, generation)) {
         _reportError(error);
@@ -421,6 +488,9 @@ class RemoteWebSocketClient {
 
   void _closeCurrentConnection() {
     _generation += 1;
+    _peer?.close();
+    _peer = null;
+    _peerAttempted = false;
     _authTimer?.cancel();
     _authTimer = null;
     _transportReady = false;
@@ -460,6 +530,7 @@ class RemoteWebSocketClient {
         attempt: _reconnectAttempt,
         nextRetryAt: nextRetryAt,
         lastError: _lastError,
+        transport: _peer?.isReady == true ? _peer!.path : 'websocket',
       ),
     );
   }

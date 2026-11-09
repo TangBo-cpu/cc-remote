@@ -535,6 +535,10 @@ class RemoteTranscriptSnapshot {
     this.modelName,
     this.contextWindow,
     this.remainingContext,
+    this.messageStart = 0,
+    this.totalMessages = 0,
+    this.olderCursor,
+    this.windowToken,
   });
 
   final int revision;
@@ -550,10 +554,95 @@ class RemoteTranscriptSnapshot {
   final int? contextWindow;
   final int? remainingContext;
 
+  final int messageStart;
+  final int totalMessages;
+  final String? olderCursor;
+  final String? windowToken;
+
+  RemoteTranscriptSnapshot withMessages(
+    List<TranscriptMessage> messages, {
+    int? start,
+    String? before,
+    bool preserveToken = false,
+  }) => RemoteTranscriptSnapshot(
+    revision: revision,
+    running: running,
+    messages: messages,
+    permissionMode: permissionMode,
+    pendingPermissions: pendingPermissions,
+    codexSandboxMode: codexSandboxMode,
+    stopping: stopping,
+    runId: runId,
+    startedAt: startedAt,
+    modelName: modelName,
+    contextWindow: contextWindow,
+    remainingContext: remainingContext,
+    messageStart: start ?? messageStart,
+    totalMessages: totalMessages > (start ?? messageStart) + messages.length
+        ? totalMessages
+        : (start ?? messageStart) + messages.length,
+    olderCursor: start == null ? olderCursor : before,
+    windowToken:
+        preserveToken ||
+            (messages.length == this.messages.length &&
+                messages.asMap().entries.every(
+                  (entry) => identical(entry.value, this.messages[entry.key]),
+                ))
+        ? windowToken
+        : null,
+  );
+
+  RemoteTranscriptSnapshot retainEarlier(RemoteTranscriptSnapshot? previous) {
+    if (previous == null ||
+        windowToken == null ||
+        messages.isEmpty ||
+        previous.messageStart > messageStart ||
+        previous.totalMessages > totalMessages) {
+      return this;
+    }
+    final prefixLength = messageStart - previous.messageStart;
+    if (prefixLength >= previous.messages.length) return this;
+    final anchor = previous.messages[prefixLength];
+    final first = messages.first;
+    final sameAnchor = first.messageId != null
+        ? first.messageId == anchor.messageId
+        : first.activityId != null
+        ? first.activityId == anchor.activityId
+        : jsonEncode(first.toJson()) == jsonEncode(anchor.toJson());
+    if (!sameAnchor) return this;
+    return withMessages(
+      [...previous.messages.take(prefixLength), ...messages],
+      start: previous.messageStart,
+      before: previous.olderCursor,
+      preserveToken: true,
+    );
+  }
+
+  RemoteTranscriptSnapshot? prepend(RemoteTranscriptSnapshot older) {
+    if (older.messageStart + older.messages.length != messageStart) return null;
+    return withMessages(
+      [...older.messages, ...messages],
+      start: older.messageStart,
+      before: older.olderCursor,
+      preserveToken: true,
+    );
+  }
+
   static RemoteTranscriptSnapshot? tryParse(Map<String, dynamic> json) {
     if (json['version'] != 1 || json['revision'] is! num) return null;
     final rawMessages = json['messages'];
     if (rawMessages is! List) return null;
+    final history = json['history'];
+    if (history != null &&
+        (history is! Map ||
+            history['start'] is! int ||
+            history['total'] is! int ||
+            history['start'] < 0 ||
+            history['start'] + rawMessages.length > history['total'] ||
+            history['token'] is! String ||
+            (history['before'] != null && history['before'] is! String))) {
+      return null;
+    }
     final rawSessionInfo = json['sessionInfo'];
     final sessionInfo = rawSessionInfo is Map<String, dynamic>
         ? rawSessionInfo
@@ -585,6 +674,10 @@ class RemoteTranscriptSnapshot {
         modelName: sessionInfo['model'] as String?,
         contextWindow: (sessionInfo['contextWindow'] as num?)?.toInt(),
         remainingContext: (sessionInfo['remainingTokens'] as num?)?.toInt(),
+        messageStart: history?['start'] as int? ?? 0,
+        totalMessages: history?['total'] as int? ?? rawMessages.length,
+        olderCursor: history?['before'] as String?,
+        windowToken: history?['token'] as String?,
       );
     } catch (_) {
       return null;
@@ -665,6 +758,8 @@ class TranscriptMessage {
     this.role,
     this.text, {
     this.attachments = const [],
+    this.messageId,
+    this.phase,
     this.activityId,
     this.activityKind,
     this.activityState,
@@ -677,8 +772,16 @@ class TranscriptMessage {
     String text, {
     List<RemoteAttachment> attachments = const [],
   }) => TranscriptMessage(MessageRole.user, text, attachments: attachments);
-  factory TranscriptMessage.assistant(String text) =>
-      TranscriptMessage(MessageRole.assistant, text);
+  factory TranscriptMessage.assistant(
+    String text, {
+    String? messageId,
+    String? phase,
+  }) => TranscriptMessage(
+    MessageRole.assistant,
+    text,
+    messageId: messageId,
+    phase: phase,
+  );
   factory TranscriptMessage.system(String text) =>
       TranscriptMessage(MessageRole.system, text);
   factory TranscriptMessage.activity(
@@ -703,6 +806,8 @@ class TranscriptMessage {
   final MessageRole role;
   final String text;
   final List<RemoteAttachment> attachments;
+  final String? messageId;
+  final String? phase;
   final String? activityId;
   final ActivityKind? activityKind;
   final ActivityState? activityState;
@@ -714,6 +819,8 @@ class TranscriptMessage {
     return {
       'role': role.name,
       'text': text,
+      if (messageId != null) 'messageId': messageId,
+      if (phase != null) 'phase': phase,
       if (attachments.isNotEmpty)
         'attachments': attachments
             .map((attachment) => attachment.toJson())
@@ -748,7 +855,17 @@ class TranscriptMessage {
               .toList()
         : const <RemoteAttachment>[];
     if (role != MessageRole.activity) {
-      return TranscriptMessage(role, text, attachments: attachments);
+      return TranscriptMessage(
+        role,
+        text,
+        attachments: attachments,
+        messageId: role == MessageRole.assistant && json['messageId'] is String
+            ? json['messageId'] as String
+            : null,
+        phase: role == MessageRole.assistant
+            ? assistantPhase(json['phase'])
+            : null,
+      );
     }
 
     final id = json['activityId'];
@@ -774,6 +891,11 @@ class TranscriptMessage {
 }
 
 enum MessageRole { user, assistant, system, activity }
+
+String? assistantPhase(Object? value) => switch (value) {
+  'commentary' || 'partial_answer' || 'final_answer' => value as String,
+  _ => null,
+};
 
 enum ActivityKind { thinking, tool, summary }
 

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { CodexBridge, extractCodexSessionInfo } from '../src/codexBridge.js';
+import { createTranscriptState } from '../src/transcriptState.js';
 
 test('codex token usage prefers the latest request over the thread total', () => {
   // tokenUsage.total accumulates across every turn; last is the most recent
@@ -179,5 +180,38 @@ test('CodexBridge interrupts a running turn', async () => {
   } finally {
     bridge?.close();
     await rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+  }
+});
+
+test('Codex keeps message phases and boundaries through streaming, completion and reload', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cc-remote-codex-phases-'));
+  const path = join(root, 'transcript.json');
+  const bridge = new CodexBridge({
+    codexBin: process.execPath,
+    codexArgs: [join(process.cwd(), 'tests/fixtures/fakeCodex.mjs'), '--fake-mode=phases'],
+    workspaceDir: root,
+  });
+  try {
+    const state = await createTranscriptState(path);
+    state.beginPrompt('检查', 'manual');
+    const result = await bridge.run({
+      prompt: '检查', permissionMode: 'manual', onEvent: () => {}, onSessionId: () => {},
+      onText: (text, metadata) => state.appendText(text, metadata),
+    });
+    assert.equal(result.exitCode, 0);
+    await state.finishDone();
+    const messages = state.snapshot().messages.slice(1);
+    assert.deepEqual(messages.map(message => message.phase),
+      ['commentary', 'commentary', 'partial_answer', 'final_answer', 'final_answer']);
+    assert.deepEqual(messages.map(message => message.text), [
+      '先检查设置。', '检查完成。', '可以同步 3.03 MiB。',
+      '第一段。\n\n第二段。\n\n第三段。\n\n第四段。\n\n第五段。', '补充答复。',
+    ]);
+    assert.equal(new Set(messages.map(message => message.messageId)).size, 5);
+    assert.deepEqual((await createTranscriptState(path)).snapshot().messages,
+      JSON.parse(JSON.stringify(state.snapshot().messages)));
+  } finally {
+    bridge.close();
+    await rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
   }
 });

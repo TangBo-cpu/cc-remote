@@ -50,6 +50,38 @@ test('identical messages in different native turns remain distinct', () => {
     [...phone, ...nativeTurn('repeat', '手机问题', '手机回复')]), /native_history_conflict/);
 });
 
+test('resync upgrades legacy Codex phases without dropping replies, files or diagnostics', () => {
+  const incoming: NativeMessage[] = [phone[0],
+    { id: 'progress', role: 'assistant', text: '检查。', phase: 'commentary' },
+    { id: 'partial', role: 'assistant', text: '已确认。', phase: 'partial_answer' },
+    { id: 'final', role: 'assistant', text: '最终答复。', phase: 'final_answer' },
+    { id: 'extra', role: 'assistant', text: '补充。', phase: 'final_answer' },
+  ];
+  const legacy = mergeNativeMessages([], incoming.map(({ phase: _phase, ...message }) => message)).messages;
+  legacy[3].attachments = [{ id: 'file', name: 'report.md', mimeType: 'text/markdown', size: 20 }];
+  legacy.push({ role: 'system', text: '已有诊断' });
+  const result = mergeNativeMessages(legacy, incoming);
+  assert.deepEqual(result.messages.slice(1, 5).map(message => message.phase),
+    ['commentary', 'partial_answer', 'final_answer', 'final_answer']);
+  assert.deepEqual(result.messages[3].attachments, legacy[3].attachments);
+  assert.equal(result.messages.at(-1)?.text, '已有诊断');
+  assert.deepEqual(mergeNativeMessages(result.messages, incoming), { messages: result.messages, external: false });
+  const combined: TranscriptMessage[] = [phone[0],
+    { role: 'assistant', text: incoming.slice(1).map(message => message.text).join('') }];
+  assert.deepEqual(mergeNativeMessages(combined, incoming).messages.slice(1).map(message => message.text),
+    incoming.slice(1).map(message => message.text));
+  const split: TranscriptMessage[] = [phone[0],
+    { role: 'assistant', text: '检' }, { role: 'activity', text: '工具' },
+    { role: 'assistant', text: '查。' }, { role: 'assistant', text: '已确认。' },
+    { role: 'assistant', text: '最终答复。' },
+    { role: 'assistant', text: '补充。', attachments: legacy[3].attachments },
+  ];
+  const upgraded = mergeNativeMessages(split, incoming).messages;
+  assert.deepEqual(upgraded.at(-1)?.attachments, legacy[3].attachments);
+  assert.deepEqual(upgraded.filter(message => message.role === 'assistant').map(message => message.text),
+    incoming.slice(1).map(message => message.text));
+});
+
 test('legacy repeated turns match only when their complete ordered alignment is unique', () => {
   const twice = [...phone, ...nativeTurn('repeat', '手机问题', '手机回复')];
   const result = mergeNativeMessages([...local, ...local], twice);

@@ -2,6 +2,24 @@ import 'package:cc_remote/workspace_paths.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('numbers, versions and IPs never become hidden-file links', () {
+    for (final value in [
+      '3.03 MiB',
+      '39.23 MiB',
+      '.5',
+      '-0.5%',
+      'v1.2.3',
+      '1.2.3-beta',
+      '192.168.1.1',
+    ]) {
+      expect(extractWorkspacePaths(value), isEmpty, reason: value);
+      expect(looksLikeWorkspacePath(value), isFalse, reason: value);
+    }
+    expect(
+      extractWorkspacePaths('3.03 MiB，查看 .env、.gitignore 和 src/main.dart'),
+      ['.env', '.gitignore', 'src/main.dart'],
+    );
+  });
   test('normalizeWorkspacePath strips the workspace root and quotes', () {
     expect(
       normalizeWorkspacePath(

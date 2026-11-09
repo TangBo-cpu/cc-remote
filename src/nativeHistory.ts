@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { TranscriptMessage } from './transcriptState.js';
-import type { AgentEngine } from './engineBridge.js';
+import type { AgentEngine, AssistantPhase } from './engineBridge.js';
 
 export const MAX_NATIVE_SESSION_BYTES = 20 * 1024 * 1024;
 
@@ -16,6 +16,7 @@ export type NativeMessage = {
   id: string;
   role: 'user' | 'assistant';
   text: string;
+  phase?: AssistantPhase;
 };
 
 export type NativeHistory = {
@@ -166,28 +167,54 @@ export function mergeNativeMessages(
       result.push(...turn.messages.map((message, messageIndex): TranscriptMessage => ({
         role: message.role,
         text: message.text,
+        ...(message.phase ? { messageId: message.id, phase: message.phase } : {}),
         ...(messageIndex === 0 ? { native: nextBinding } : {}),
       })));
       return;
     }
     const existing = local.turns[existingIndex].messages;
+    const existingReplies = existing.filter(message => message.role === 'assistant');
+    const nativeReplies = turn.messages.filter(message => message.role === 'assistant');
+    const phasesChanged = nativeReplies.some((message, index) => message.phase
+      && (message.phase !== existingReplies[index]?.phase || message.id !== existingReplies[index]?.messageId));
     const previous = existing[0].native;
     if (previous && previous.ids.some(id => !nextBinding.ids.includes(id))) {
       throw new Error('native_history_conflict');
     }
-    if (previous ? previous.hash !== nextBinding.hash
-      : assistantText(local.turns[existingIndex]) !== assistantText(turn)) {
+    if (phasesChanged || (previous ? previous.hash !== nextBinding.hash
+      : assistantText(local.turns[existingIndex]) !== assistantText(turn))) {
       external = true;
       result.push({ ...existing[0], native: nextBinding });
       const replies = turn.messages.slice(1);
+      const updatedReplies: TranscriptMessage[] = [];
       for (const message of existing.slice(1)) {
         if (message.role !== 'assistant') result.push(message);
         else {
           const reply = replies.shift();
-          if (reply) result.push({ ...message, text: reply.text });
+          if (reply) {
+            const { attachments: _attachments, ...rest } = message;
+            const updated = { ...rest, text: reply.text, messageId: reply.id, phase: reply.phase };
+            result.push(updated);
+            updatedReplies.push(updated);
+          }
         }
       }
-      result.push(...replies.map(message => ({ role: message.role, text: message.text })));
+      for (const message of replies) {
+        const updated = { role: message.role, text: message.text,
+          ...(message.phase ? { messageId: message.id, phase: message.phase } : {}) };
+        result.push(updated);
+        updatedReplies.push(updated);
+      }
+      // Keep files when resync splits or combines legacy reply blocks.
+      for (const message of existingReplies) {
+        if (!message.attachments?.length) continue;
+        const target = updatedReplies.find(reply => message.messageId && reply.messageId === message.messageId)
+          ?? updatedReplies.find(reply => reply.text === message.text)
+          ?? [...updatedReplies].reverse().find(reply => reply.phase !== 'commentary') ?? updatedReplies.at(-1);
+        if (target) target.attachments = [...new Map(
+          [...(target.attachments ?? []), ...message.attachments].map(attachment => [attachment.id, attachment]),
+        ).values()];
+      }
     } else {
       result.push({ ...existing[0], native: nextBinding }, ...existing.slice(1));
     }

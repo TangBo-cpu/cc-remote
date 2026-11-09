@@ -110,10 +110,6 @@ void main() {
     );
     await tester.pumpWidget(chain(true));
     expect(find.byKey(const ValueKey('activity-detail-read')), findsOneWidget);
-    await tester.tap(find.byKey(processToggle));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(processToggle));
-    await tester.pumpAndSettle();
     await tester.pumpWidget(chain(false));
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('activity-detail-read')), findsNothing);
@@ -121,7 +117,9 @@ void main() {
 
   for (final reasoning in [true, false]) {
     testWidgets(
-      '${reasoning ? 'reasoning' : 'tool chain'} does not restore running expansion into completed history',
+      reasoning
+          ? 'reasoning folds at completion'
+          : 'manually opened process stays open after completion and remount',
       (tester) async {
         final bucket = PageStorageBucket();
         Widget activity(bool running) => host(
@@ -152,7 +150,12 @@ void main() {
         await tester.pumpWidget(const SizedBox());
         await tester.pumpWidget(activity(false));
         await tester.pumpAndSettle();
-        expect(content, findsNothing);
+        expect(content, reasoning ? findsNothing : findsOneWidget);
+        if (!reasoning) {
+          await tester.tap(toggle);
+          await tester.pumpAndSettle();
+          expect(content, findsNothing);
+        }
         await tester.tap(toggle);
         await tester.pumpAndSettle();
         await tester.pumpWidget(activity(false));

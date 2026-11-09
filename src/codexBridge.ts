@@ -3,6 +3,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { stat } from 'node:fs/promises';
 import { MAX_NATIVE_SESSION_BYTES, type NativeHistory, type NativeMessage, type NativeSessionSummary } from './nativeHistory.js';
 import {
+  assistantPhase,
   normalizeCodexSandboxMode,
   normalizeEngineEffort,
   normalizeEngineModel,
@@ -11,6 +12,7 @@ import {
   type EngineRunOptions,
   type EngineRunResult,
   type EngineSessionInfo,
+  type AssistantPhase,
 } from './engineBridge.js';
 
 export type CodexBridgeOptions = {
@@ -43,6 +45,7 @@ type CurrentRun = {
   turnId?: string;
   nativeCommand?: NativeCommand;
   sawDelta: boolean;
+  messages: Map<string, { text: string; phase?: AssistantPhase }>;
   stderr: string;
   options: EngineRunOptions;
   resolve: (result: EngineRunResult) => void;
@@ -164,7 +167,9 @@ export class CodexBridge implements EngineBridge {
           throw new Error('native_history_invalid');
         }
         if (item.type === 'agentMessage' && typeof item.text === 'string' && item.text.trim()) {
-          messages.push({ id: item.id, role: 'assistant', text: item.text });
+          const phase = assistantPhase(item.phase);
+          messages.push({ id: item.id, role: 'assistant', text: item.text,
+            ...(phase ? { phase } : {}) });
         } else if (item.type === 'userMessage' && Array.isArray(item.content)) {
           const text = item.content.filter(input => isRecord(input)
             && input.type === 'text' && typeof input.text === 'string')
@@ -280,6 +285,7 @@ export class CodexBridge implements EngineBridge {
       settled: false,
       sessionId: options.sessionId,
       sawDelta: false,
+      messages: new Map(),
       stderr: '',
       options,
       resolve: resolveRun,
@@ -599,10 +605,23 @@ export class CodexBridge implements EngineBridge {
       state.threadId = foundSessionId;
       run.options.onSessionId(foundSessionId);
     }
+    const item = isRecord(event.item) ? event.item : undefined;
+    const agentItem = item?.type === 'agentMessage' || item?.type === 'agent_message';
+    const messageId = stringValue(event.itemId) ?? (agentItem ? stringValue(item?.id) : undefined);
+    const previous = messageId ? run.messages.get(messageId) : undefined;
+    const phase = assistantPhase(item?.phase) ?? previous?.phase;
     const text = extractCodexText(event);
-    if (event.type === 'item.agentMessage.delta' && text) {
+    if (messageId && event.type === 'item.started' && agentItem) {
+      run.messages.set(messageId, { text: previous?.text ?? '', phase });
+    } else if (event.type === 'item.agentMessage.delta' && text) {
       run.sawDelta = true;
-      run.options.onText(text);
+      if (messageId) run.messages.set(messageId, { text: (previous?.text ?? '') + text, phase });
+      run.options.onText(text, { messageId, phase });
+    } else if (messageId && event.type === 'item.completed' && agentItem) {
+      if (text !== previous?.text || phase !== previous?.phase) {
+        run.options.onText(text, { messageId, phase, replace: true });
+      }
+      run.messages.set(messageId, { text, phase });
     } else if (text && !run.sawDelta) {
       run.options.onText(text);
     }

@@ -51,6 +51,9 @@ impl Settings {
         if settings.public_origin.is_empty() {
             settings.public_origin = std::env::var("PUBLIC_ORIGIN").unwrap_or_default();
         }
+        if let Some(origin) = relay_origin(root) {
+            settings.public_origin = origin;
+        }
         settings
     }
 
@@ -65,6 +68,19 @@ impl Settings {
         .map_err(|e| e.to_string())?;
         fs::rename(temp, dir.join("desktop.json")).map_err(|e| e.to_string())
     }
+}
+
+fn relay_origin(root: &Path) -> Option<String> {
+    let value: Value =
+        serde_json::from_slice(&fs::read(root.join(".data/relay.json")).ok()?).ok()?;
+    if value["enabled"].as_bool() != Some(true) {
+        return None;
+    }
+    let origin = value["origin"].as_str()?;
+    if !origin.starts_with("https://") || validate_origin(origin).is_err() {
+        return None;
+    }
+    Some(origin.to_string())
 }
 
 #[derive(Clone, Default, Deserialize)]
@@ -220,8 +236,16 @@ impl TunnelSpawner for DefaultTunnelSpawner {
         config: &Path,
         logs: &Logs,
     ) -> Result<Child, String> {
-        let mut command = Command::new("cloudflared");
-        command.arg("tunnel").arg("--config").arg(config).arg("run");
+        let mut command = if config.file_name().and_then(|name| name.to_str()) == Some("frpc.toml")
+        {
+            let mut command = Command::new(root.join(".run/frp/frpc.exe"));
+            command.arg("-c").arg(config);
+            command
+        } else {
+            let mut command = Command::new("cloudflared");
+            command.arg("tunnel").arg("--config").arg(config).arg("run");
+            command
+        };
         spawn_child(&mut command, root, job, logs, None)
     }
 }
@@ -367,7 +391,15 @@ impl Service {
         if !daemon_path.is_file() {
             return Err("服务尚未构建，请先运行 npm run build:desktop。".into());
         }
-        let config = self.root.join(".run/cloudflared-cc-remote.yml");
+        let relay = relay_origin(&self.root);
+        let config = self.root.join(if relay.is_some() {
+            ".data/frpc.toml"
+        } else {
+            ".run/cloudflared-cc-remote.yml"
+        });
+        if relay.is_some() && !settings.no_tunnel && !config.is_file() {
+            return Err("服务器连接配置缺失：.data/frpc.toml。".into());
+        }
         let (tunnel_mode, fixed_config) = if settings.no_tunnel {
             (TunnelMode::None, None)
         } else if config.is_file() {
@@ -381,7 +413,7 @@ impl Service {
             tunnel: None,
             recovery: TunnelRecovery::new(tunnel_mode, fixed_config),
         };
-        let mut origin = settings.public_origin.trim().to_string();
+        let mut origin = relay.unwrap_or_else(|| settings.public_origin.trim().to_string());
         if !settings.no_tunnel {
             emit(Event::Progress("正在启动隧道…".into()));
             if origin.is_empty() && config.is_file() {

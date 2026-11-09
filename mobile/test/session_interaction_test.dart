@@ -60,7 +60,7 @@ void main() {
           wsReady: false,
           archived: false,
         ),
-        SessionOpenIntent.ignore,
+        SessionOpenIntent.switchActive,
       );
       expect(
         sessionOpenIntent(

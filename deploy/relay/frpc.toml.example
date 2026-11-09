@@ -1,0 +1,14 @@
+serverAddr = "REPLACE_PUBLIC_IP"
+serverPort = 7000
+auth.method = "token"
+auth.token = "REPLACE_FRP_TOKEN"
+transport.tls.enable = true
+transport.tls.serverName = "REPLACE_DOMAIN"
+transport.tls.trustedCaFile = ".data/relay-ca.crt"
+
+[[proxies]]
+name = "cc-remote"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 8787
+remotePort = 18787

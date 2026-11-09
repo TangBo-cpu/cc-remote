@@ -168,6 +168,36 @@ input.on('line', line => {
     turn: { id: turnId, items: [], status: 'inProgress' },
   });
   if (fakeOptions.mode === 'hang') return;
+  if (fakeOptions.mode === 'phases') {
+    const items = [
+      { id: turnId + '-progress', type: 'agentMessage', phase: 'commentary', text: '先检查设置。' },
+      { id: turnId + '-late-phase', type: 'agentMessage', phase: 'commentary', text: '检查完成。' },
+      { id: turnId + '-partial', type: 'agentMessage', phase: 'partial_answer', text: '可以同步 3.03 MiB。' },
+      { id: turnId + '-final', type: 'agentMessage', phase: 'final_answer',
+        text: '第一段。\n\n第二段。\n\n第三段。\n\n第四段。\n\n第五段。' },
+      { id: turnId + '-more', type: 'agentMessage', phase: 'final_answer', text: '补充答复。' },
+    ];
+    notify('item/completed', { threadId, turnId,
+      item: { id: turnId + '-reasoning', type: 'reasoning', text: 'PRIVATE_REASONING' } });
+    for (const [index, item] of items.entries()) {
+      notify('item/started', { threadId, turnId, item: { ...item, text: '', phase: index === 1 ? null : item.phase } });
+      if (index === 0 || index === 1 || index === 3) {
+        const delta = index === 1 ? '检查' : item.text;
+        notify('item/agentMessage/delta', { threadId, turnId, itemId: item.id, delta });
+      }
+      notify('item/completed', { threadId, turnId, item });
+      notify('item/completed', { threadId, turnId, item });
+    }
+    if (fakeOptions.history) {
+      const history = readHistory();
+      history.turns.push({ id: turnId, status: 'completed', itemsView: 'full', items: [
+        { id: turnId + '-user', type: 'userMessage', content: message.params.input }, ...items,
+      ] });
+      writeFileSync(fakeOptions.history, JSON.stringify(history));
+    }
+    notify('turn/completed', { threadId, turn: { id: turnId, items: [], status: 'completed' } });
+    return;
+  }
   notify('item/started', {
     threadId,
     turnId,

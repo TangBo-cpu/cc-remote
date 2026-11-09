@@ -4,9 +4,9 @@
 
 扫码或输入配对码后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 继续运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v2.0.19](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.19/cc-remote-v2.0.19-android.apk)
+[下载 Android APK · v2.0.20](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.20/cc-remote-v2.0.20-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.19)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.20)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -125,11 +125,11 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v2.0.19 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.19/cc-remote-v2.0.19-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v2.0.20 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.20/cc-remote-v2.0.20-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫启动器窗口或终端中的二维码 → 确认电脑名与服务地址 → 进入控制台
 
-Android App 版本为 v2.0.19。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
+Android App 版本为 v2.0.20。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
 
 ### 4. 开始对话
 
@@ -144,6 +144,7 @@ Android App 版本为 v2.0.19。使用「同步电脑会话」需要同时更新
 - Windows 原生启动器：项目选择、二维码配对、连接与任务状态、启动日志、托盘常驻
 - 扫码 / 配对码连接、Secure Storage、启动恢复；多设备授权（默认上限 8 台），手机端设备列表与逐台撤销
 - WebSocket 鉴权、退避重连、前台存活探测与活动任务状态恢复
+- 可选自建公网入口与 WebRTC 数据通道：在现有配对鉴权后尝试直连或 TURN，聊天与附件共用通道，WSS 保持可用。默认关闭，需配置服务器并更新两端；部署方式见 [`deploy/relay/README.md`](deploy/relay/README.md)
 - 多项目、多会话；完整项目路径展示
 - 从电脑端选择并同步单个 Claude / Codex 会话，保留原生会话上下文；重复同步更新已有记录，超过 20 MB 的历史文件自动过滤
 - 平板适配：≥840dp 宽时会话列表常驻左侧双栏，弹层与输入框居中限宽
@@ -174,7 +175,7 @@ Android App 版本为 v2.0.19。使用「同步电脑会话」需要同时更新
 **通知与偏好**
 
 - Android 后台本地通知（完成 / 失败 / 等待权限）
-- 连续字号滑杆（约 0.85×–1.40×，默认 1.0）
+- 字号滑杆（90%–110%，步进 1%，默认 100%）
 - 外观：跟随系统 / 浅色 / 深色，选择本地持久化
 
 **当前不做 / 限制**
@@ -220,7 +221,10 @@ flutter pub get
 flutter run
 # 或
 flutter build apk --release --obfuscate --split-debug-info=build/symbols
+python tool/verify_apk_assets.py build/app/outputs/flutter-apk/app-release.apk
 ```
+
+安装前必须通过资源检查，避免把缺少字体或图片的 APK 装到手机。
 
 ### 常用启动参数
 
@@ -275,7 +279,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v2.0.19](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.19)**
-APK：[`cc-remote-v2.0.19-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.19/cc-remote-v2.0.19-android.apk)
+当前公开版：**[v2.0.20](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.20)**
+APK：[`cc-remote-v2.0.20-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.20/cc-remote-v2.0.20-android.apk)
 
-v2.0.19 新增一次性配对码和交付文件卡片：手机可输入服务地址与 8 位数字连接电脑，回复中的文件支持预览、保存、打开和分享。思考与工具活动采用更紧凑的行间距和彩色图标，电脑原生会话读取上限提高至 20 MB。Android 版本为 `2.0.19+29`，电脑端 package 版本为 `2.0.19`，安装包沿用旧版测试签名，适合个人使用。配对码和交付文件功能需要同时更新 App 与 daemon；启动器需重新构建才能显示配对码。
+v2.0.20 新增可选的自建公网入口、WebRTC 直连与 TURN 中继，改进会话切换、原生消息分段和长历史分页。Android 版本为 `2.0.20+30`，电脑端 package 版本为 `2.0.20`。安装包沿用旧版测试签名，适合个人使用；请覆盖安装，不要卸载旧版。WebRTC 需要同时更新 App、daemon 和桌面启动器，并配置服务器；未启用时仍使用原有 WSS。部署说明见 [`deploy/relay/README.md`](deploy/relay/README.md)。

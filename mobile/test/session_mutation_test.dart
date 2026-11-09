@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:cc_remote/data/api_client.dart';
 import 'package:cc_remote/data/remote_models.dart';
+import 'package:cc_remote/data/websocket_client.dart';
 import 'package:cc_remote/main.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -29,8 +30,14 @@ http.Response response(Object body, [int status = 200]) => http.Response(
   headers: {'content-type': 'application/json; charset=utf-8'},
 );
 
-Future<dynamic> boot(WidgetTester tester, RemoteApiClient api) async {
-  await tester.pumpWidget(CcRemoteApp(enableCamera: false, apiClient: api));
+Future<dynamic> boot(
+  WidgetTester tester,
+  RemoteApiClient api, {
+  RemoteWebSocketClient? wsClient,
+}) async {
+  await tester.pumpWidget(
+    CcRemoteApp(enableCamera: false, apiClient: api, wsClient: wsClient),
+  );
   await tester.pumpAndSettle();
   final dynamic state = tester.state(find.byType(DemoShell));
   state.session = SavedSession(

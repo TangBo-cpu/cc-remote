@@ -1,6 +1,6 @@
 {
   "name": "cc-remote",
-  "version": "2.0.19",
+  "version": "2.0.20",
   "description": "Phone-friendly remote console for local Claude Code via Cloudflare Tunnel.",
   "type": "module",
   "scripts": {
@@ -14,6 +14,7 @@
     "test": "node --import tsx --test tests/*.test.ts"
   },
   "dependencies": {
+    "@roamhq/wrtc": "^0.10.0",
     "busboy": "^1.6.0",
     "qrcode-terminal": "^0.12.0",
     "ws": "^8.18.0"

@@ -7,6 +7,37 @@ import test from 'node:test';
 import { promisify } from 'node:util';
 import { createTranscriptState } from '../src/transcriptState.js';
 
+test('pages ten messages without truncating stored history and rejects stale cursors', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-transcript-pages-'));
+  try {
+    const state = await createTranscriptState(join(dir, 'transcript.json'));
+    for (let i = 0; i < 13; i++) {
+      state.beginPrompt('question ' + i, 'manual');
+      state.appendText('answer ' + i);
+      await state.finishDone();
+    }
+    const full = state.snapshot();
+    const tail = state.snapshot({});
+    assert.equal(tail.messages.length, 10);
+    assert.equal(tail.history?.start, 16);
+    assert.equal(tail.history?.total, 26);
+    assert.deepEqual(tail.messages, full.messages.slice(-10));
+    const middle = state.snapshot({ before: tail.history!.before! });
+    const first = state.snapshot({ before: middle.history!.before! });
+    assert.deepEqual([...first.messages, ...middle.messages, ...tail.messages], full.messages);
+    assert.equal(first.history?.before, null);
+    tail.messages[0].text = 'client mutation';
+    assert.deepEqual(state.snapshot(), full);
+    state.beginPrompt('new question', 'manual');
+    assert.deepEqual(state.snapshot({ before: middle.history!.before! }).messages, first.messages);
+    assert.throws(() => state.snapshot({ before: 'not-a-cursor' }), /invalid_transcript_cursor/);
+    await state.clear();
+    assert.throws(() => state.snapshot({ before: middle.history!.before! }), /transcript_history_changed/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('background save failure stays recoverable and flush retries unsaved history', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-remote-transcript-save-failure-'));
   const blocked = join(dir, 'blocked');

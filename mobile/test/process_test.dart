@@ -7,6 +7,7 @@ import 'package:cc_remote/workspace_paths.dart';
 import 'package:cc_remote/main.dart';
 import 'package:cc_remote/data/remote_models.dart';
 import 'package:cc_remote/signal_console_theme.dart';
+import 'package:cc_remote/activity_disclosure.dart';
 
 TranscriptMessage thought(
   ActivityState state, {
@@ -78,6 +79,146 @@ Widget transcript(
 );
 
 void main() {
+  testWidgets('completed thinking uses the shared process entry', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      host(
+        transcript([
+          TranscriptMessage.user('检查'),
+          thought(ActivityState.done),
+          TranscriptMessage.assistant('检查完成。'),
+        ]),
+        reduceMotion: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('查看过程'), findsOneWidget);
+    expect(find.byKey(const ValueKey('thinking-history-toggle')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('thinking-history-toggle')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<ActivityDisclosure>(find.byType(ActivityDisclosure).first)
+          .leading,
+      isNotNull,
+    );
+  });
+
+  testWidgets(
+    'text-only Codex process folds while all answer parts stay visible',
+    (tester) async {
+      final messages = [
+        TranscriptMessage.user('检查'),
+        TranscriptMessage.assistant('先检查配置。', phase: 'commentary'),
+        TranscriptMessage.assistant('继续运行验证。', phase: 'commentary'),
+        TranscriptMessage.assistant('先给出已确认的结果。', phase: 'partial_answer'),
+        TranscriptMessage.assistant(
+          '第一段。\n\n第二段。\n\n第三段。\n\n第四段。\n\n第五段。',
+          phase: 'final_answer',
+        ),
+        TranscriptMessage.assistant('补充结果。', phase: 'final_answer'),
+      ];
+      await tester.pumpWidget(host(transcript(messages), reduceMotion: true));
+      await tester.pumpAndSettle();
+      expect(find.text('查看过程'), findsOneWidget);
+      expect(
+        tester
+            .widget<ActivityDisclosure>(find.byType(ActivityDisclosure))
+            .leading,
+        isNotNull,
+      );
+      expect(find.text('先检查配置。'), findsNothing);
+      final visible = tester.widgetList<MessageBlock>(
+        find.byType(MessageBlock),
+      );
+      expect(
+        visible
+            .where((block) => block.message.role == MessageRole.assistant)
+            .map((block) => block.message.text),
+        messages.skip(3).map((message) => message.text),
+      );
+      await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+      await tester.pumpAndSettle();
+      final progress = tester.widget<MessageBlock>(
+        find.byWidgetPredicate(
+          (widget) => widget is MessageBlock && widget.message.text == '先检查配置。',
+        ),
+      );
+      expect(progress.secondary, isTrue);
+      expect(find.text('继续运行验证。'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'live commentary previews the latest update and folds at completion',
+    (tester) async {
+      final messages = [
+        TranscriptMessage.user('检查'),
+        TranscriptMessage.assistant(
+          '正在检查第一项。',
+          messageId: 'one',
+          phase: 'commentary',
+        ),
+        TranscriptMessage.assistant(
+          '正在检查第二项。',
+          messageId: 'two',
+          phase: 'commentary',
+        ),
+      ];
+      await tester.pumpWidget(
+        host(transcript(messages, running: true), reduceMotion: true),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('正在检查第一项。'), findsNothing);
+      expect(find.text('正在检查第二项。'), findsOneWidget);
+      await tester.pumpWidget(
+        host(
+          transcript([
+            ...messages,
+            TranscriptMessage.assistant('完成。', phase: 'final_answer'),
+          ]),
+          reduceMotion: true,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('正在检查第二项。'), findsNothing);
+      expect(find.text('完成。'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+      await tester.pumpAndSettle();
+      expect(find.text('正在检查第一项。'), findsOneWidget);
+      expect(find.text('正在检查第二项。'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('legacy replies without phases remain visible after tools', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      host(
+        transcript([
+          TranscriptMessage.user('检查'),
+          tool(ActivityState.done),
+          TranscriptMessage.assistant('第一部分。'),
+          TranscriptMessage.assistant('第二部分。'),
+          TranscriptMessage.assistant('第三部分。'),
+          TranscriptMessage.assistant('第四部分。'),
+        ]),
+        reduceMotion: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+    for (final text in ['第一部分。', '第二部分。', '第三部分。', '第四部分。']) {
+      expect(find.text(text), findsOneWidget);
+    }
+  });
+
   test(
     'summary duration cannot overwrite the individual thinking duration',
     () {
@@ -732,33 +873,72 @@ void main() {
     expect(find.text('搜索代码'), findsNothing);
   });
 
-  testWidgets('tool errors stay in details while stops remain in the summary', (
+  testWidgets(
+    'tool errors and stops remain in details without failure counts',
+    (tester) async {
+      for (final state in [ActivityState.error, ActivityState.stopped]) {
+        final status = state == ActivityState.error ? '1 个失败' : '1 个已停止';
+        await tester.pumpWidget(
+          host(ActivityTimelineCard(activities: [tool(state)])),
+        );
+        expect(find.text(status), findsNothing);
+        expect(find.text('flutter test'), findsNothing);
+        final semantics = tester
+            .getSemantics(find.byKey(const ValueKey('activity-process-toggle')))
+            .getSemanticsData();
+        expect(semantics.label, '运行命令，1 次操作');
+        expect(semantics.flagsCollection.isButton, isTrue);
+        expect(semantics.flagsCollection.isExpanded, Tristate.isFalse);
+        await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+        await tester.pumpAndSettle();
+        expect(find.text('flutter test'), findsOneWidget);
+        await tester.pumpWidget(const SizedBox());
+      }
+    },
+  );
+
+  testWidgets('successful retry keeps failures inside the combined process', (
     tester,
   ) async {
-    for (final state in [ActivityState.error, ActivityState.stopped]) {
-      final stopped = state == ActivityState.stopped;
-      await tester.pumpWidget(
-        host(ActivityTimelineCard(activities: [tool(state)])),
-      );
-      expect(find.text('1 个失败'), findsNothing);
-      expect(find.text('1 个已停止'), stopped ? findsOneWidget : findsNothing);
-      expect(find.text('flutter test'), findsNothing);
-      final semantics = tester
-          .getSemantics(find.byKey(const ValueKey('activity-process-toggle')))
-          .getSemanticsData();
-      expect(semantics.label, '运行命令，1 次操作${stopped ? '，1 个已停止' : ''}');
-      expect(semantics.flagsCollection.isButton, isTrue);
-      expect(semantics.flagsCollection.isExpanded, Tristate.isFalse);
-      await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
-      await tester.pumpAndSettle();
-      expect(find.text('flutter test'), findsOneWidget);
-      expect(find.text(stopped ? '已停止' : '执行失败'), findsOneWidget);
-      final detailSemantics = tester.getSemantics(
-        find.byKey(const ValueKey('activity-step-toggle-tool')),
-      );
-      expect(detailSemantics.label, contains(stopped ? '已停止' : '执行失败'));
-      await tester.pumpWidget(const SizedBox());
-    }
+    await tester.pumpWidget(
+      host(
+        transcript([
+          TranscriptMessage.user('检查'),
+          TranscriptMessage.assistant('先检查配置。', phase: 'commentary'),
+          thought(ActivityState.done),
+          tool(ActivityState.error, id: 'failed', detail: '第一次检查失败'),
+          tool(ActivityState.done, id: 'retry', detail: '重试成功'),
+          TranscriptMessage.assistant('检查通过。', phase: 'final_answer'),
+        ]),
+        reduceMotion: true,
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('查看过程'), findsOneWidget);
+    expect(find.text('1 个失败'), findsNothing);
+    expect(find.text('第一次检查失败'), findsNothing);
+    expect(find.text('检查通过。'), findsOneWidget);
+    expect(
+      hasCurrentFailureEvidence([
+        tool(ActivityState.error),
+        tool(ActivityState.done),
+      ]),
+      isFalse,
+    );
+    await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
+    await tester.pumpAndSettle();
+    expect(find.text('先检查配置。'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('activity-step-toggle-failed')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('activity-step-toggle-retry')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('thinking-history-toggle')));
+    await tester.pumpAndSettle();
+    expect(find.text('先检查代码。再运行测试。'), findsOneWidget);
   });
 
   testWidgets('reduced motion disables shimmer and inline transitions', (

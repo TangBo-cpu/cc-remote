@@ -1,22 +1,26 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { createHash } from 'node:crypto';
 import type {
   ClaudeActivity,
   ClaudePermissionMode,
   ClaudePermissionRequest,
   ClaudeSessionInfo,
 } from './claudeBridge.js';
-import type { CodexSandboxMode } from './engineBridge.js';
+import { assistantPhase, type AssistantPhase, type CodexSandboxMode, type EngineTextMetadata } from './engineBridge.js';
 import type { AttachmentDescriptor } from './attachmentStore.js';
 import { mergeNativeMessages, type NativeBinding, type NativeHistory } from './nativeHistory.js';
 
 const SCHEMA_VERSION = 1;
 const SAVE_DELAY_MS = 200;
 const INTERRUPTED_MESSAGE = '电脑端重启，任务已中断';
+export const TRANSCRIPT_PAGE_SIZE = 10;
 
 export type TranscriptMessage = {
   role: 'user' | 'assistant' | 'system' | 'activity';
   text: string;
+  messageId?: string;
+  phase?: AssistantPhase;
   native?: NativeBinding;
   nativePrompt?: string;
   nativeLocalOnly?: boolean;
@@ -41,6 +45,12 @@ export type TranscriptSnapshot = {
   pendingPermissions: TranscriptPermissionRequest[];
   sessionInfo: ClaudeSessionInfo;
   messages: TranscriptMessage[];
+  history?: {
+    start: number;
+    total: number;
+    before: string | null;
+    token: string;
+  };
 };
 
 export type TranscriptPermissionRequest = Omit<ClaudePermissionRequest, 'input'>;
@@ -57,7 +67,7 @@ export type TranscriptSummary = {
 };
 
 export type TranscriptState = {
-  snapshot(): TranscriptSnapshot;
+  snapshot(page?: { before?: string }): TranscriptSnapshot;
   summary(): TranscriptSummary;
   beginPrompt(
     prompt: string,
@@ -67,7 +77,7 @@ export type TranscriptState = {
     nativePrompt?: string,
     nativeLocalOnly?: boolean,
   ): void;
-  appendText(text: string): void;
+  appendText(text: string, metadata?: EngineTextMetadata): void;
   setAssistantAttachments(index: number, attachments: AttachmentDescriptor[]): boolean;
   mergeActivity(activity: ClaudeActivity): void;
   setSessionInfo(info: ClaudeSessionInfo): void;
@@ -84,8 +94,9 @@ export type TranscriptState = {
   flush(): Promise<void>;
 };
 
-function clearPendingAssistantPrefix(holder: { pendingAssistantPrefix: string }): void {
+function clearPendingAssistantPrefix(holder: { pendingAssistantPrefix: string; messageId?: string }): void {
   holder.pendingAssistantPrefix = '';
+  holder.messageId = undefined;
 }
 
 export async function createTranscriptState(
@@ -97,7 +108,7 @@ export async function createTranscriptState(
   let tmpCounter = 0;
   // Whitespace-only stream fragments may arrive before visible text; keep them
   // until a non-whitespace delta arrives so indent/code fences are not lost.
-  const pending = { pendingAssistantPrefix: '' };
+  const pending: { pendingAssistantPrefix: string; messageId?: string } = { pendingAssistantPrefix: '' };
 
   async function saveSnapshot(snapshot: TranscriptSnapshot): Promise<void> {
     const write = saveQueue.catch(() => undefined).then(async () => {
@@ -164,8 +175,8 @@ export async function createTranscriptState(
   }
 
   return {
-    snapshot(): TranscriptSnapshot {
-      return cloneSnapshot(state);
+    snapshot(page): TranscriptSnapshot {
+      return page ? transcriptPage(state, page.before) : cloneSnapshot(state);
     },
 
     summary(): TranscriptSummary {
@@ -213,16 +224,23 @@ export async function createTranscriptState(
       });
     },
 
-    appendText(text: string): void {
-      if (!text || !state.running) return;
-      const last = state.messages.at(-1);
-      if (last?.role === 'assistant') {
+    appendText(text: string, metadata: EngineTextMetadata = {}): void {
+      if ((!text && !metadata.replace) || !state.running) return;
+      const { messageId, phase, replace } = metadata;
+      const start = currentTurnStart(state.messages);
+      const last = messageId
+        ? state.messages.slice(start).find(message => message.role === 'assistant' && message.messageId === messageId)
+        : state.messages.at(-1);
+      if (last?.role === 'assistant' && last.messageId === messageId) {
         mutate(() => {
-          last.text += text;
+          last.text = replace ? text : last.text + text;
+          if (phase) last.phase = phase;
         });
         return;
       }
 
+      if (replace || pending.messageId !== messageId) clearPendingAssistantPrefix(pending);
+      pending.messageId = messageId;
       // Hold leading whitespace until visible text arrives; never paint blank bubbles.
       if (!text.trim()) {
         pending.pendingAssistantPrefix += text;
@@ -233,7 +251,8 @@ export async function createTranscriptState(
       clearPendingAssistantPrefix(pending);
       mutate(() => {
         finishActivities(state.messages, 'done', 'thinking');
-        state.messages.push({ role: 'assistant', text: nextText });
+        state.messages.push({ role: 'assistant', text: nextText,
+          ...(messageId ? { messageId } : {}), ...(phase ? { phase } : {}) });
       });
     },
 
@@ -444,13 +463,15 @@ async function loadState(statePath: string): Promise<TranscriptSnapshot> {
         : [],
       sessionInfo: isRecord(parsed.sessionInfo) ? parsed.sessionInfo as ClaudeSessionInfo : {},
       messages: parsed.messages.map(message => {
-        const { native, nativePrompt, nativeLocalOnly, ...rest } = message;
+        const { native, nativePrompt, nativeLocalOnly, messageId, phase, ...rest } = message;
         const validBinding = message.role === 'user' && isRecord(native)
           && Array.isArray(native.ids) && native.ids.length > 0
           && native.ids.every(id => typeof id === 'string' && id.length > 0)
           && typeof native.hash === 'string' && /^[a-f0-9]{64}$/.test(native.hash);
         return {
           ...rest,
+          ...(message.role === 'assistant' && typeof messageId === 'string' && messageId ? { messageId } : {}),
+          ...(message.role === 'assistant' && assistantPhase(phase) ? { phase } : {}),
           ...(validBinding ? { native: native as NativeBinding } : {}),
           ...(typeof nativePrompt === 'string' ? { nativePrompt } : {}),
           ...(nativeLocalOnly === true ? { nativeLocalOnly: true } : {}),
@@ -529,6 +550,41 @@ function hasAssistantReplyAfterLastUser(messages: TranscriptMessage[]): boolean 
 
 function cloneSnapshot(snapshot: TranscriptSnapshot): TranscriptSnapshot {
   return structuredClone(snapshot);
+}
+
+function transcriptPage(snapshot: TranscriptSnapshot, before?: string): TranscriptSnapshot {
+  const messages = snapshot.messages;
+  const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('base64url');
+  let end = messages.length;
+  if (before !== undefined) {
+    let cursor: { index?: unknown; anchor?: unknown };
+    try {
+      if (!/^[\w-]{1,2048}$/.test(before)) throw new Error();
+      cursor = JSON.parse(Buffer.from(before, 'base64url').toString('utf8'));
+      if (!cursor || !Number.isSafeInteger(cursor.index) || Number(cursor.index) < 1
+        || typeof cursor.anchor !== 'string') throw new Error();
+    } catch {
+      throw new Error('invalid_transcript_cursor');
+    }
+    end = Number(cursor.index);
+    if (end >= messages.length || hash(messages[end]) !== cursor.anchor) {
+      throw new Error('transcript_history_changed');
+    }
+  }
+  const start = Math.max(0, end - TRANSCRIPT_PAGE_SIZE);
+  const page = messages.slice(start, end);
+  return structuredClone({
+    ...snapshot,
+    messages: page,
+    history: {
+      start,
+      total: messages.length,
+      before: start > 0
+        ? Buffer.from(JSON.stringify({ index: start, anchor: hash(messages[start]) })).toString('base64url')
+        : null,
+      token: hash({ revision: snapshot.revision, start, messages: page }),
+    },
+  });
 }
 
 function isTranscriptMessage(value: unknown): value is TranscriptMessage {

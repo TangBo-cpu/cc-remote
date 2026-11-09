@@ -1,6 +1,6 @@
 type ServerMessage =
   | { type: 'status'; running: boolean; hasClaudeSessionId: boolean }
-  | { type: 'text'; text: string }
+  | { type: 'text'; text: string; messageId?: string; replace?: boolean }
   | { type: 'done'; exitCode: number | null; claudeSessionId?: string }
   | { type: 'stopped' }
   | { type: 'error'; message: string }
@@ -18,6 +18,7 @@ const TOKEN_KEY = 'cc_remote_token';
 let ws: WebSocket | undefined;
 let running = false;
 let assistantBubble: HTMLElement | undefined;
+const assistantMessages = new Map<string, HTMLElement>();
 
 void boot();
 
@@ -28,6 +29,7 @@ form.addEventListener('submit', event => {
   appendBubble('user', text);
   promptEl.value = '';
   assistantBubble = undefined;
+  assistantMessages.clear();
   ws.send(JSON.stringify({ type: 'prompt', text }));
 });
 
@@ -159,12 +161,13 @@ function handleServerMessage(message: ServerMessage): void {
     return;
   }
   if (message.type === 'text') {
-    appendAssistantText(message.text);
+    appendAssistantText(message.text, message.messageId, message.replace);
     return;
   }
   if (message.type === 'done') {
     running = false;
     assistantBubble = undefined;
+    assistantMessages.clear();
     appendBubble('system', `完成，退出码 ${message.exitCode ?? 'unknown'}`);
     setControls(true);
     return;
@@ -172,6 +175,7 @@ function handleServerMessage(message: ServerMessage): void {
   if (message.type === 'stopped') {
     running = false;
     assistantBubble = undefined;
+    assistantMessages.clear();
     appendBubble('system', '已停止');
     setControls(true);
     return;
@@ -209,9 +213,12 @@ function authHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-function appendAssistantText(text: string): void {
-  if (!assistantBubble) assistantBubble = appendBubble('assistant', '');
-  assistantBubble.textContent = (assistantBubble.textContent || '') + text;
+function appendAssistantText(text: string, messageId?: string, replace = false): void {
+  const bubble = (messageId ? assistantMessages.get(messageId) : assistantBubble)
+    ?? appendBubble('assistant', '');
+  if (messageId) assistantMessages.set(messageId, bubble);
+  assistantBubble = bubble;
+  bubble.textContent = replace ? text : (bubble.textContent || '') + text;
   scrollToBottom();
 }
 
