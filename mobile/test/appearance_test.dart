@@ -85,7 +85,12 @@ void main() {
           greaterThanOrEqualTo(4.5),
         );
       }
-      for (final background in [colors.paper, colors.surface]) {
+      for (final background in [
+        colors.paper,
+        colors.surface,
+        colors.bgTop,
+        colors.bgBottom,
+      ]) {
         for (final foreground in [
           colors.messageInk,
           colors.messageMuted,
@@ -111,6 +116,7 @@ void main() {
       }
       expect(_contrast(colors.onCta, colors.cta), greaterThanOrEqualTo(4.5));
       expect(_contrast(colors.onStop, colors.stop), greaterThanOrEqualTo(4.5));
+      expect(_contrast(colors.ink, colors.userBubble), greaterThanOrEqualTo(4.5));
     }
   });
 

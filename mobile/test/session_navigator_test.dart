@@ -79,6 +79,7 @@ Widget page({
   SessionSearch? search,
   Brightness brightness = Brightness.light,
   double scale = 1,
+  bool highContrast = false,
 }) {
   var theme = buildSignalConsoleTheme(brightness);
   if (const bool.fromEnvironment('CAPTURE_SESSION_CENTER')) {
@@ -105,6 +106,7 @@ Widget page({
         data: MediaQuery.of(context).copyWith(
           textScaler: TextScaler.linear(scale),
           disableAnimations: true,
+          highContrast: highContrast,
         ),
         child: child!,
       ),
@@ -114,6 +116,7 @@ Widget page({
         activeProjectId: 'p1',
         activeSessionId: 'current',
         running: running,
+        onSyncDesktop: () {},
         onSelect: select ?? (_) {},
         onSearchResult: selectSearch ?? (_) {},
         onCreate: create ?? (_, _) {},
@@ -130,32 +133,76 @@ Widget page({
 
 Future<void> capture(WidgetTester tester, String name) async {
   if (!const bool.fromEnvironment('CAPTURE_SESSION_CENTER')) return;
-  final boundary = tester.renderObject<RenderRepaintBoundary>(
-    find.byKey(const ValueKey('preview-boundary')),
-  );
-  await tester.runAsync(() async {
-    final image = await boundary.toImage(pixelRatio: 2);
-    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    await Directory('build/session-center-preview').create(recursive: true);
-    await File(
-      'build/session-center-preview/$name.png',
-    ).writeAsBytes(bytes!.buffer.asUint8List());
-    image.dispose();
-  });
+  void repaintShadows(RenderObject object) {
+    if (object is RenderPhysicalModel || object is RenderPhysicalShape) {
+      object.markNeedsPaint();
+    }
+    object.visitChildren(repaintShadows);
+  }
+
+  final shadowsDisabled = debugDisableShadows;
+  try {
+    debugDisableShadows = false;
+    tester.binding.renderViews.forEach(repaintShadows);
+    await tester.pump();
+    final boundary = tester.renderObject<RenderRepaintBoundary>(
+      find.byKey(const ValueKey('preview-boundary')),
+    );
+    await tester.runAsync(() async {
+      final image = await boundary.toImage(pixelRatio: 2);
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+      await Directory('build/session-center-preview').create(recursive: true);
+      await File(
+        'build/session-center-preview/$name.png',
+      ).writeAsBytes(bytes!.buffer.asUint8List());
+      image.dispose();
+    });
+  } finally {
+    debugDisableShadows = shadowsDisabled;
+    tester.binding.renderViews.forEach(repaintShadows);
+    await tester.pump();
+  }
+}
+
+Future<void> openOptions(WidgetTester tester) async {
+  await tester.tap(find.byKey(const ValueKey('session-options-menu')));
+  await tester.pumpAndSettle();
+}
+
+Future<void> chooseProject(WidgetTester tester, String id) async {
+  await tester.tap(find.byKey(const ValueKey('open-project-browser')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(ValueKey('project-$id')));
+  await tester.pumpAndSettle();
+}
+
+Future<void> chooseEngine(WidgetTester tester, String engine) async {
+  if (find.byKey(const ValueKey('session-engine-filter')).evaluate().isEmpty) {
+    await openOptions(tester);
+  }
+  await tester.tap(find.byKey(const ValueKey('session-engine-filter')));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byKey(ValueKey('session-filter-$engine')));
+  await tester.pumpAndSettle();
+}
+
+Future<void> openSearch(WidgetTester tester) async {
+  await tester.tap(find.byKey(const ValueKey('session-search-open')));
+  await tester.pumpAndSettle();
 }
 
 void main() {
-  testWidgets('sidebar expansion reuses catalog sorting', (tester) async {
+  testWidgets('opening and closing search reuses catalog sorting', (
+    tester,
+  ) async {
     final sessions = CountingSessions([
       for (var i = 0; i < 400; i++) item('session-$i', updatedAt: 400 - i),
     ]);
     await tester.pumpWidget(page(sessions: sessions));
     await tester.pumpAndSettle();
     sessions.reads = 0;
-    await tester.tap(find.byKey(const ValueKey('session-project-p1')));
-    await tester.pumpAndSettle();
-    expect(sessions.reads, 0);
-    await tester.tap(find.byKey(const ValueKey('session-project-p1')));
+    await openSearch(tester);
+    await tester.tap(find.byKey(const ValueKey('session-view-back')));
     await tester.pumpAndSettle();
     expect(sessions.reads, 0);
   });
@@ -171,6 +218,7 @@ void main() {
     await tester.pumpWidget(page(sessions: sessions));
     await tester.pumpAndSettle();
     titleReads = 0;
+    await openOptions(tester);
     await tester.tap(find.byKey(const ValueKey('session-archive-toggle')));
     await tester.pumpAndSettle();
     expect(titleReads, lessThan(100));
@@ -232,52 +280,48 @@ void main() {
     },
   );
 
-  testWidgets(
-    'shows pinned then projects then recent and keeps archived sessions separate',
-    (tester) async {
-      await tester.binding.setSurfaceSize(const Size(390, 844));
-      addTearDown(() => tester.binding.setSurfaceSize(null));
-      String? selected;
-      await tester.pumpWidget(
-        page(
-          sessions: [
-            item('current', pinned: true),
-            item('waiting', project: 'p2', attention: true, running: true),
-            item('old', updatedAt: 1),
-            item('archive', archived: true),
-          ],
-          select: (id) => selected = id,
-        ),
-      );
-      expect(find.text('会话中心'), findsOneWidget);
-      expect(find.text('置顶'), findsOneWidget);
-      expect(find.text('项目'), findsOneWidget);
-      expect(find.text('最近'), findsOneWidget);
-      expect(find.byKey(const ValueKey('session-archive')), findsNothing);
-      expect(
-        tester.getTopLeft(find.text('置顶')).dy,
-        lessThan(tester.getTopLeft(find.text('项目')).dy),
-      );
-      expect(find.byKey(const ValueKey('session-waiting')), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('session-project-p2')));
-      await tester.pumpAndSettle();
-      expect(find.byTooltip('等待授权'), findsOneWidget);
-      expect(
-        tester.getTopLeft(find.text('项目')).dy,
-        lessThan(tester.getTopLeft(find.text('最近')).dy),
-      );
-      await tester.tap(find.byKey(const ValueKey('session-current')));
-      expect(selected, 'current');
-      await tester.tap(find.byKey(const ValueKey('session-archive-toggle')));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('session-archive')), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('session-archive')));
-      expect(selected, 'archive');
-    },
-  );
+  testWidgets('current project shows pinned then recent without duplicates', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    String? selected;
+    await tester.pumpWidget(
+      page(
+        sessions: [
+          item('current', pinned: true),
+          item('waiting', project: 'p2', attention: true, running: true),
+          item('old', updatedAt: 1),
+          item('archive', archived: true),
+        ],
+        select: (id) => selected = id,
+      ),
+    );
+    expect(find.text('CC Remote'), findsOneWidget);
+    expect(find.byKey(const ValueKey('session-search-field')), findsNothing);
+    expect(find.text('置顶'), findsOneWidget);
+    expect(find.text('最近'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('置顶')).dy,
+      lessThan(tester.getTopLeft(find.text('最近')).dy),
+    );
+    expect(find.byKey(const ValueKey('session-waiting')), findsNothing);
+    await chooseProject(tester, 'all');
+    expect(find.byTooltip('等待授权'), findsOneWidget);
+    expect(find.text('待授权'), findsOneWidget);
+    expect(find.byKey(const ValueKey('session-current')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('session-current')));
+    expect(selected, 'current');
+    await openOptions(tester);
+    await tester.tap(find.byKey(const ValueKey('session-archive-toggle')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('session-archive')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('session-archive')));
+    expect(selected, 'archive');
+  });
 
   testWidgets(
-    'compact project rows expand in batches and recent opens across projects',
+    'recent list scrolls through every session and project selection only filters',
     (tester) async {
       await tester.binding.setSurfaceSize(const Size(390, 844));
       addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -286,7 +330,7 @@ void main() {
         page(
           sessions: [
             item('current', updatedAt: 1000),
-            for (var index = 0; index < 7; index++)
+            for (var index = 0; index < 20; index++)
               item('extra-$index', updatedAt: 900 - index),
             item('other', project: 'p2', updatedAt: 1100),
           ],
@@ -295,32 +339,25 @@ void main() {
       );
       expect(
         tester.getSize(find.byKey(const ValueKey('session-current'))).height,
-        48,
+        52,
       );
       expect(find.text('已完成消息同步检查，保留当前会话的草稿与阅读位置。'), findsNothing);
-      expect(find.byKey(const ValueKey('session-extra-3')), findsOneWidget);
-      expect(find.byKey(const ValueKey('session-extra-4')), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('session-more-p1')));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('session-extra-6')), findsOneWidget);
-      await tester.tap(find.byKey(const ValueKey('session-project-p1')));
-      await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('session-current')), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('session-project-p2')));
-      await tester.pumpAndSettle();
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('session-extra-19')),
+        300,
+        scrollable: find.descendant(
+          of: find.byType(ListView),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      expect(find.byKey(const ValueKey('session-extra-19')), findsOneWidget);
+      await chooseProject(tester, 'p2');
       expect(find.byKey(const ValueKey('session-other')), findsOneWidget);
       expect(selected, isNull);
-      await tester.tap(find.byKey(const ValueKey('session-recent-toggle')));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const ValueKey('recent-session-other')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const ValueKey('recent-session-current')),
-        findsOneWidget,
-      );
-      await tester.tap(find.byKey(const ValueKey('recent-session-other')));
+      await chooseProject(tester, 'all');
+      expect(find.byKey(const ValueKey('session-other')), findsOneWidget);
+      expect(find.byKey(const ValueKey('session-current')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('session-other')));
       expect(selected, 'other');
       expect(tester.takeException(), isNull);
     },
@@ -346,10 +383,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('session-current')), findsNothing);
       expect(find.byKey(const ValueKey('session-codex')), findsOneWidget);
-      await tester.ensureVisible(
-        find.byKey(const ValueKey('session-filter-claude')),
-      );
-      await tester.tap(find.byKey(const ValueKey('session-filter-claude')));
+      await chooseEngine(tester, 'claude');
       await tester.pump();
       expect(find.text('没有符合条件的会话'), findsOneWidget);
       await tester.tap(find.byKey(const ValueKey('session-filter-clear')));
@@ -436,6 +470,7 @@ void main() {
           },
         ),
       );
+      await openSearch(tester);
       await tester.enterText(
         find.byKey(const ValueKey('session-search-field')),
         'old',
@@ -464,10 +499,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('project-p2')));
       await tester.pumpAndSettle();
-      await tester.ensureVisible(
-        find.byKey(const ValueKey('session-filter-codex')),
-      );
-      await tester.tap(find.byKey(const ValueKey('session-filter-codex')));
+      await chooseEngine(tester, 'codex');
       await tester.pumpAndSettle();
       expect(requests.last, 'reconnect:p2:codex');
       await tester.tap(find.byKey(const ValueKey('session-search-clear')));
@@ -504,9 +536,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(pinned, 'current');
       expect(find.byType(SessionNavigatorPage), findsOneWidget);
+      await openOptions(tester);
       await tester.tap(find.byKey(const ValueKey('session-archive-toggle')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('session-menu-archive')));
+      await tester.longPress(find.byKey(const ValueKey('session-archive')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('恢复会话'));
       await tester.pumpAndSettle();
@@ -529,11 +562,10 @@ void main() {
             .onPressed,
         isNull,
       );
-      await tester.tap(find.byKey(const ValueKey('session-project-p2')));
-      await tester.pumpAndSettle();
+      await chooseProject(tester, 'p2');
       await tester.tap(find.byKey(const ValueKey('session-other')));
       expect(selected, 'other');
-      await tester.tap(find.byKey(const ValueKey('session-menu-other')));
+      await tester.longPress(find.byKey(const ValueKey('session-other')));
       await tester.pumpAndSettle();
       expect(find.text('任务或附件操作中，暂不能整理会话'), findsOneWidget);
       final entry = tester.widget<PopupMenuItem<dynamic>>(
@@ -582,15 +614,7 @@ void main() {
         ),
       ),
     );
-    final list = find.byKey(
-      const PageStorageKey('session-list-false-null-null'),
-    );
-    for (var i = 0; i < 2; i++) {
-      await tester.ensureVisible(find.byKey(const ValueKey('session-more-p1')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('session-more-p1')));
-      await tester.pumpAndSettle();
-    }
+    final list = find.byKey(const PageStorageKey('session-list-false-p1-null'));
     await tester.scrollUntilVisible(
       find.byKey(const ValueKey('session-session-14')),
       180,
@@ -603,13 +627,14 @@ void main() {
     );
     final before = scroll.position.pixels;
     expect(before, greaterThan(0));
+    await openSearch(tester);
     await tester.enterText(
       find.byKey(const ValueKey('session-search-field')),
       'missing',
     );
     await tester.pump(const Duration(milliseconds: 300));
     await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('session-search-clear')));
+    await tester.tap(find.byKey(const ValueKey('session-view-back')));
     await tester.pumpAndSettle();
     final restored = tester.state<ScrollableState>(
       find.descendant(of: list, matching: find.byType(Scrollable)),
@@ -638,7 +663,7 @@ void main() {
       );
       await tester.pumpAndSettle();
       final list = find.byKey(
-        const PageStorageKey('session-list-false-null-null'),
+        const PageStorageKey('session-list-false-p1-null'),
       );
       await tester.scrollUntilVisible(
         find.byKey(const ValueKey('session-current')),
@@ -661,7 +686,7 @@ void main() {
       expect(tester.getSize(menu).height, greaterThanOrEqualTo(48));
       expect(
         tester.getSize(find.byKey(const ValueKey('session-current'))).height,
-        48,
+        greaterThanOrEqualTo(50),
       );
       expect(find.text('1/1/1970'), findsNothing);
       expect(tester.takeException(), isNull);
@@ -764,27 +789,104 @@ void main() {
       );
       await tester.tap(find.byTooltip('关闭'));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('session-drawer-close')));
+      await openOptions(tester);
+      await tester.tap(find.byKey(const ValueKey('session-archive-toggle')));
       await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('create-session')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('create-session-confirm')));
+      await tester.pumpAndSettle();
+      expect(find.byType(SessionNavigatorPage), findsNothing);
     },
   );
 
-  testWidgets(
-    'the sidebar keeps a chat strip exposed that closes on tap',
-    (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          theme: buildSignalConsoleTheme(),
+  testWidgets('the sidebar keeps a chat strip exposed that closes on tap', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: buildSignalConsoleTheme(),
+        home: Builder(
+          builder: (context) => Scaffold(
+            body: TextButton(
+              onPressed: () => showSessionNavigator(
+                context,
+                projects: projects,
+                sessions: [item('current')],
+                activeProjectId: 'p1',
+                activeSessionId: 'current',
+                running: false,
+                onSelect: (_) {},
+                onSearchResult: (_) {},
+                onCreate: (_, _) {},
+                onRename: (_, _) async {},
+                onArchive: (_) async {},
+                onRestore: (_) async {},
+                onPin: (_, _) async {},
+                onDelete: (_) async {},
+                onSearch: (_, {projectId, engine, archived}) async => [],
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    // The 800-point test window leaves a 64-point chat strip beside the
+    // 400-point sidebar.
+    final panel = find.byType(SessionNavigatorPage);
+    expect(tester.getSize(panel).width, 400);
+    expect(tester.getTopLeft(panel).dx, 0);
+    await tester.tapAt(const Offset(780, 300));
+    await tester.pumpAndSettle();
+    expect(panel, findsNothing);
+  });
+
+  testWidgets('rounded chat corners continue the sidebar background', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      RepaintBoundary(
+        key: const ValueKey('preview-boundary'),
+        child: MaterialApp(
+          theme: buildSignalConsoleTheme().copyWith(
+            textTheme: const bool.fromEnvironment('CAPTURE_SESSION_CENTER')
+                ? buildSignalConsoleTheme().textTheme.apply(
+                    fontFamily: 'SessionPreview',
+                  )
+                : null,
+          ),
+          debugShowCheckedModeBanner: false,
+          builder: (_, child) => MediaQuery(
+            data: const MediaQueryData(
+              size: Size(390, 844),
+              padding: EdgeInsets.only(top: 24, bottom: 20),
+            ),
+            child: child!,
+          ),
           home: Builder(
             builder: (context) => Scaffold(
+              backgroundColor: const Color(0xFFEBF1FE),
               body: TextButton(
+                child: const Text('open'),
                 onPressed: () => showSessionNavigator(
                   context,
                   projects: projects,
-                  sessions: [item('current')],
+                  sessions: [
+                    item('current', title: '会话列表重新设计', pinned: true),
+                    item('running', title: '修复 Android 键盘遮挡', running: true),
+                    item('waiting', title: '检查文件上传权限', attention: true),
+                    item('messages', title: '调整消息渲染'),
+                    item('docs', title: '整理项目文档'),
+                  ],
                   activeProjectId: 'p1',
                   activeSessionId: 'current',
                   running: false,
+                  onSyncDesktop: () {},
                   onSelect: (_) {},
                   onSearchResult: (_) {},
                   onCreate: (_, _) {},
@@ -795,24 +897,82 @@ void main() {
                   onDelete: (_) async {},
                   onSearch: (_, {projectId, engine, archived}) async => [],
                 ),
-                child: const Text('open'),
               ),
             ),
           ),
         ),
+      ),
+    );
+    await tester.tap(find.text('open'));
+    await tester.pumpAndSettle();
+    expect(tester.getSize(find.byType(SessionNavigatorPage)).width, 326);
+    await capture(tester, 'sidebar-light');
+    final boundary = tester.renderObject<RenderRepaintBoundary>(
+      find.byKey(const ValueKey('preview-boundary')),
+    );
+    await tester.runAsync(() async {
+      final image = await boundary.toImage();
+      final bytes = await image.toByteData(format: ui.ImageByteFormat.rawRgba);
+      List<int> pixel(int x, int y) =>
+          bytes!.buffer.asUint8List((y * image.width + x) * 4, 4);
+      expect(pixel(327, 25), [245, 246, 248, 255]);
+      expect(pixel(327, 818), [245, 246, 248, 255]);
+      expect(pixel(360, 100), isNot([245, 246, 248, 255]));
+      image.dispose();
+    });
+    await tester.tapAt(const Offset(360, 100));
+    await tester.pumpAndSettle();
+    expect(find.byType(SessionNavigatorPage), findsNothing);
+  });
+
+  testWidgets('search keeps its input and filters usable above the keyboard', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(360, 640));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(page());
+    await openSearch(tester);
+    tester.view.viewInsets = const FakeViewPadding(bottom: 280);
+    addTearDown(tester.view.resetViewInsets);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('create-session')), findsNothing);
+    expect(
+      tester
+          .getBottomLeft(find.byKey(const ValueKey('session-engine-filter')))
+          .dy,
+      lessThan(360),
+    );
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byKey(const ValueKey('session-view-back')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('session-search-open')), findsOneWidget);
+  });
+
+  testWidgets('high contrast keeps the current session distinguishable', (
+    tester,
+  ) async {
+    for (final brightness in Brightness.values) {
+      await tester.pumpWidget(page(brightness: brightness, highContrast: true));
+      await tester.pumpAndSettle();
+      final material = tester.widget<Material>(
+        find
+            .ancestor(
+              of: find.byKey(const ValueKey('session-current')),
+              matching: find.byType(Material),
+            )
+            .first,
       );
-      await tester.tap(find.text('open'));
-      await tester.pumpAndSettle();
-      // The 800-point test window leaves a 64-point chat strip beside the
-      // 400-point sidebar.
-      final panel = find.byType(SessionNavigatorPage);
-      expect(tester.getSize(panel).width, 400);
-      expect(tester.getTopLeft(panel).dx, 0);
-      await tester.tapAt(const Offset(780, 300));
-      await tester.pumpAndSettle();
-      expect(panel, findsNothing);
-    },
-  );
+      final side = (material.shape! as RoundedRectangleBorder).side;
+      final foreground = side.color.computeLuminance();
+      final background = material.color!.computeLuminance();
+      final ratio = foreground > background
+          ? (foreground + 0.05) / (background + 0.05)
+          : (background + 0.05) / (foreground + 0.05);
+      expect(side.width, greaterThanOrEqualTo(1));
+      expect(ratio, greaterThanOrEqualTo(3));
+      expect(tester.takeException(), isNull);
+    }
+  });
 
   for (final brightness in Brightness.values) {
     for (final large in [false, true]) {
@@ -832,7 +992,6 @@ void main() {
                 item(
                   'waiting',
                   title: '检查发布流程中的权限请求',
-                  project: 'p2',
                   attention: true,
                   running: true,
                 ),
@@ -853,10 +1012,6 @@ void main() {
             ),
           );
           await tester.pumpAndSettle();
-          if (!large) {
-            await tester.tap(find.byKey(const ValueKey('session-project-p2')));
-            await tester.pumpAndSettle();
-          }
           expect(tester.takeException(), isNull);
           await capture(tester, brightness.name + (large ? '-large' : ''));
           if (const bool.fromEnvironment('CAPTURE_SESSION_CENTER')) {

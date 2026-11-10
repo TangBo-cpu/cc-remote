@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:cc_remote/chat_surfaces.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:phosphor_icons/phosphor_icons.dart';
@@ -805,15 +806,16 @@ void main() {
           ?.duration,
       AppMotion.standard,
     );
-    final settingsDecoration =
-        tester.widget<Container>(settingsSurface).decoration! as BoxDecoration;
-    expect(settingsDecoration.gradient, AppLiquidGlass.strongGradient);
     expect(
-      find.descendant(
-        of: settingsSurface,
-        matching: find.byType(BackdropFilter),
-      ),
-      findsNothing,
+      tester
+          .widget<BackdropFilter>(
+            find.descendant(
+              of: settingsSurface,
+              matching: find.byType(BackdropFilter),
+            ),
+          )
+          .enabled,
+      isFalse,
     );
     expect(tester.testTextInput.isVisible, isFalse);
     expect(
@@ -975,10 +977,8 @@ void main() {
       ).first,
     );
     expect(
-      (selectedCard.decoration as BoxDecoration).gradient!.colors.every(
-        (color) => color.a > 0 && color.a < 1,
-      ),
-      isTrue,
+      (selectedCard.decoration as BoxDecoration).color,
+      AppPalette.light.control,
     );
 
     final unselectedOption = tester.widget<Material>(
@@ -1020,8 +1020,8 @@ void main() {
     await tester.tap(find.byTooltip('项目与会话'));
     await tester.pumpAndSettle();
     expect(find.byType(SessionNavigatorPage), findsOneWidget);
-    expect(find.text('会话中心'), findsOneWidget);
-    expect(find.byKey(const ValueKey('session-search-field')), findsOneWidget);
+    expect(find.text('CC Remote'), findsOneWidget);
+    expect(find.byKey(const ValueKey('session-search-open')), findsOneWidget);
   });
 
   testWidgets('creating a session applies the HTTP catalog without a WS push', (
@@ -1112,6 +1112,8 @@ void main() {
       expect(find.byTooltip('当前会话'), findsOneWidget);
       expect(find.text('mobile'), findsOneWidget);
       expect(find.text('暂无消息'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('session-options-menu')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('session-drawer-close')));
       await tester.pumpAndSettle();
       expect(find.byType(PromptBar), findsOneWidget);
@@ -1455,12 +1457,12 @@ void main() {
     await tester.tap(find.byType(TextField));
     await tester.pumpAndSettle();
     final composer = find.byKey(const ValueKey('composer'));
-    final composerBefore = tester.widget<SignalLiquidGlass>(composer);
+    final composerBefore = tester.widget<ChatGlass>(composer);
 
     for (final text in const ['p', 'pi', 'ping']) {
       await tester.enterText(find.byType(TextField), text);
       await tester.pump();
-      expect(tester.widget<SignalLiquidGlass>(composer), same(composerBefore));
+      expect(tester.widget<ChatGlass>(composer), same(composerBefore));
     }
 
     expect(tester.widget<AnimatedSwitcher>(shell), same(shellBefore));
@@ -1505,19 +1507,18 @@ void main() {
       tester.widget<PromptBar>(find.byType(PromptBar)),
       same(promptDuringKeyboardAnimation),
     );
-    final composer = tester.widget<SignalLiquidGlass>(
+    final composer = tester.widget<ChatGlass>(
       find.byKey(const ValueKey('composer')),
     );
-    final composerDecoration = composer.decoration;
     expect(
-      composerDecoration.borderRadius,
+      (composer.shape as RoundedSuperellipseBorder).borderRadius,
       const BorderRadius.vertical(top: Radius.circular(AppRadii.composerFloat)),
     );
-    expect(composerDecoration.boxShadow, isEmpty);
+    expect(composer.elevated, isFalse);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('keyboard resize keeps the plain background stationary', (
+  testWidgets('keyboard resize keeps the gradient background stationary', (
     tester,
   ) async {
     Widget buildScreen(double keyboardInset) {
@@ -1536,7 +1537,7 @@ void main() {
     }
 
     await tester.pumpWidget(buildScreen(0));
-    final backgroundBefore = tester.widget<DecoratedBox>(
+    final backgroundBounds = tester.getRect(
       find.byKey(const ValueKey('chat-background-layer')),
     );
     final contentHeightBefore = tester
@@ -1545,14 +1546,14 @@ void main() {
 
     await tester.pumpWidget(buildScreen(300));
 
-    final beforeDecoration = backgroundBefore.decoration as BoxDecoration;
-    final backgroundAfter = tester.widget<DecoratedBox>(
+    final backgroundAfter = tester.widget<ChatBackdrop>(
       find.byKey(const ValueKey('chat-background-layer')),
     );
-    final afterDecoration = backgroundAfter.decoration as BoxDecoration;
-    expect(beforeDecoration.color, afterDecoration.color);
-    expect(afterDecoration.gradient, isNull);
-    expect(afterDecoration.color, AppColors.paper);
+    expect(backgroundAfter.veil, isFalse);
+    expect(
+      tester.getRect(find.byKey(const ValueKey('chat-background-layer'))),
+      backgroundBounds,
+    );
     expect(
       tester.getSize(find.byKey(const ValueKey('keyboard-content'))).height,
       contentHeightBefore - 300,
@@ -1566,12 +1567,12 @@ void main() {
       ),
     );
 
-    expect(find.byType(BackdropFilter), findsNothing);
-    final surface = tester.widget<Container>(find.byType(Container).first);
-    final decoration = surface.decoration! as BoxDecoration;
-    expect(decoration.gradient, AppLiquidGlass.strongGradient);
-    expect(decoration.color, isNull);
-    expect(decoration.boxShadow, isNotEmpty);
+    final glass = tester.widget<ChatGlass>(find.byType(ChatGlass));
+    expect(glass.translucent, isFalse);
+    expect(
+      tester.widget<BackdropFilter>(find.byType(BackdropFilter)).enabled,
+      isFalse,
+    );
   });
 
   testWidgets('chat routes do not restore the composer keyboard', (
@@ -3613,17 +3614,9 @@ void main() {
       find.byKey(const ValueKey('user-message')),
     );
     final userDecoration = user.decoration as BoxDecoration;
-    expect(userDecoration.gradient, isA<LinearGradient>());
-    expect(userDecoration.border, isNotNull);
-    expect(
-      userDecoration.borderRadius,
-      const BorderRadius.only(
-        topLeft: Radius.circular(AppRadii.bubble),
-        topRight: Radius.circular(AppRadii.bubble),
-        bottomLeft: Radius.circular(AppRadii.bubble),
-        bottomRight: Radius.circular(AppRadii.control),
-      ),
-    );
+    expect(userDecoration.color, AppColors.userBubble);
+    expect(userDecoration.border, isNull);
+    expect(userDecoration.borderRadius, BorderRadius.circular(22));
     expect(AppColors.assistantBubble.a, 1.0);
     expect(AppColors.userBubble.a, 1.0);
   });
@@ -3818,7 +3811,7 @@ void main() {
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('composer-expand-visual'))),
-      const Size.square(34),
+      const Size.square(AppSizes.iconControl),
     );
     expect(
       tester.getSize(find.byKey(const ValueKey('composer-primary-action'))),
@@ -3867,7 +3860,7 @@ void main() {
       find.byKey(const ValueKey('composer-expand-visual')),
     );
     final expandDecoration = expandSurface.decoration as BoxDecoration;
-    expect(expandDecoration.gradient, isNotNull);
+    expect(expandDecoration.color, Colors.transparent);
     expect(expandDecoration.boxShadow, isNull);
 
     final modelSurface = tester.widget<SignalAnimatedSurface>(
@@ -3888,23 +3881,19 @@ void main() {
                   )
                   .decoration
               as BoxDecoration)
-          .gradient,
-      isNotNull,
+          .color,
+      isNot(Colors.transparent),
     );
     await press.up();
     await tester.pump();
-    final composer = tester.widget<SignalLiquidGlass>(
+    final composer = tester.widget<ChatGlass>(
       find.byKey(const ValueKey('composer')),
     );
-    final decoration = composer.decoration;
-    expect(composer.lens, isTrue);
-    expect(decoration.gradient, isNotNull);
-    expect(decoration.border, isNotNull);
     expect(
-      decoration.borderRadius,
+      (composer.shape as RoundedSuperellipseBorder).borderRadius,
       BorderRadius.circular(AppRadii.composerFloat),
     );
-    expect(decoration.boxShadow, isNotEmpty);
+    expect(composer.elevated, isTrue);
     expect(
       find.descendant(
         of: find.byKey(const ValueKey('composer')),
@@ -3915,12 +3904,10 @@ void main() {
 
     await tester.showKeyboard(find.byType(TextField));
     await tester.pump();
-    final focusedDecoration = tester
-        .widget<SignalLiquidGlass>(find.byKey(const ValueKey('composer')))
-        .decoration;
-    final focusedBorder = focusedDecoration.border! as Border;
-    expect(focusedBorder.top.color, AppPalette.light.liquidFocus);
-    expect(focusedBorder.top.width, 2);
+    expect(
+      tester.widget<ChatGlass>(find.byKey(const ValueKey('composer'))).focused,
+      isTrue,
+    );
   });
 
   test('transcript spacing groups supporting rows within each turn', () {
@@ -4212,7 +4199,7 @@ void main() {
       find.descendant(
         of: find.byKey(const ValueKey('activity-step-toggle-skill-1')),
         matching: find.byWidgetPredicate(
-          (widget) => widget is Icon && widget.icon == LucideIcons.sparkles,
+          (widget) => widget is SmartIcon && widget.icon == LucideIcons.sparkles,
         ),
       ),
       findsOneWidget,
@@ -4481,7 +4468,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final list = tester.widget<ListView>(
+      final list = tester.widget<ScrollView>(
         find.byKey(const ValueKey('transcript-list')),
       );
       final position = list.controller!.position;
@@ -4532,7 +4519,7 @@ void main() {
     await tester.pump();
 
     final controller = tester
-        .widget<ListView>(find.byKey(const ValueKey('transcript-list')))
+        .widget<ScrollView>(find.byKey(const ValueKey('transcript-list')))
         .controller!;
     controller.jumpTo(0);
     await tester.pump();

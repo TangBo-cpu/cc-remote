@@ -366,8 +366,8 @@ void main() {
     );
     final first = find.byKey(const ValueKey('activity-step-toggle-first'));
     final second = find.byKey(const ValueKey('activity-step-toggle-second'));
-    expect(tester.getSize(first).height, 40);
-    expect(tester.getSize(second).height, 40);
+    expect(tester.getSize(first).height, 32);
+    expect(tester.getSize(second).height, 32);
     expect(
       tester.getTopLeft(second).dy - tester.getBottomLeft(first).dy,
       inInclusiveRange(0, 2),
@@ -586,7 +586,7 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      final list = tester.widget<ListView>(
+      final list = tester.widget<ScrollView>(
         find.byKey(const ValueKey('transcript-list')),
       );
       final scroll = list.controller!;
@@ -785,8 +785,7 @@ void main() {
     expect(find.text('flutter test --no-pub'), findsNothing);
     await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
     await tester.pumpAndSettle();
-    expect(find.text('4 秒'), findsOneWidget);
-    expect(find.text('已完成 · 4 秒'), findsNothing);
+    expect(find.text('已完成 · 4 秒'), findsOneWidget);
     expect(find.text('flutter test --no-pub'), findsOneWidget);
     expect(find.byKey(const ValueKey('tool-activity-sheet')), findsNothing);
     expect(tester.takeException(), isNull);

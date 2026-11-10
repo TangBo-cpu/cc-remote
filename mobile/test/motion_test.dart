@@ -335,7 +335,7 @@ void main() {
       await tester.pumpWidget(host(transcript(motion, messages)));
       await tester.pumpAndSettle();
       final controller = tester
-          .widget<ListView>(find.byKey(const ValueKey('transcript-list')))
+          .widget<ScrollView>(find.byKey(const ValueKey('transcript-list')))
           .controller!;
       controller.jumpTo(0);
       await tester.pumpAndSettle();

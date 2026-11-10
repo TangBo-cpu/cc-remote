@@ -4,9 +4,9 @@
 
 扫码或输入配对码后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 继续运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v2.0.20](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.20/cc-remote-v2.0.20-android.apk)
+[下载 Android APK · v2.0.21](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.21/cc-remote-v2.0.21-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.20)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.21)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -125,11 +125,11 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v2.0.20 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.20/cc-remote-v2.0.20-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v2.0.21 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.21/cc-remote-v2.0.21-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫启动器窗口或终端中的二维码 → 确认电脑名与服务地址 → 进入控制台
 
-Android App 版本为 v2.0.20。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
+Android App 版本为 v2.0.21。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
 
 ### 4. 开始对话
 
@@ -279,7 +279,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v2.0.20](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.20)**
-APK：[`cc-remote-v2.0.20-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.20/cc-remote-v2.0.20-android.apk)
+当前公开版：**[v2.0.21](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.21)**
+APK：[`cc-remote-v2.0.21-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.21/cc-remote-v2.0.21-android.apk)
 
-v2.0.20 新增可选的自建公网入口、WebRTC 直连与 TURN 中继，改进会话切换、原生消息分段和长历史分页。Android 版本为 `2.0.20+30`，电脑端 package 版本为 `2.0.20`。安装包沿用旧版测试签名，适合个人使用；请覆盖安装，不要卸载旧版。WebRTC 需要同时更新 App、daemon 和桌面启动器，并配置服务器；未启用时仍使用原有 WSS。部署说明见 [`deploy/relay/README.md`](deploy/relay/README.md)。
+v2.0.21 改进长工具过程的按需构建、超长回复的流式渲染和聊天快照保存，并更新会话侧栏、聊天玻璃材质及选择面板。Android 版本为 `2.0.21+31`，电脑端 package 版本为 `2.0.21`。安装包沿用旧版测试签名，适合个人使用；请覆盖安装，不要卸载旧版。已使用 v2.0.20 电脑端的用户可直接更新 APK。WebRTC 仍需配置自建入口与 TURN 服务；未启用时继续使用原有 WSS。部署说明见 [`deploy/relay/README.md`](deploy/relay/README.md)。

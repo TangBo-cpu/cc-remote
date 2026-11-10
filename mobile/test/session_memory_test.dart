@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:isolate';
 
 import 'package:cc_remote/data/remote_models.dart';
 import 'package:cc_remote/main.dart' show TranscriptStore;
@@ -61,6 +62,48 @@ void main() {
     expect(storage.writes, hasLength(2));
     expect(storage.value, contains('retry'));
   });
+
+  for (final manyMessages in [false, true]) {
+    test(
+      'large transcript encodes off the UI isolate ($manyMessages)',
+      () async {
+        final storage = _RecordingStorage();
+        final store = TranscriptStore(storage: storage);
+        final snapshot = TranscriptSnapshot(
+          sessionId: 'large-session',
+          running: true,
+          messages: manyMessages
+              ? List.generate(200, (i) => _WorkerOnlyMessage('message $i'))
+              : [_WorkerOnlyMessage('large reply ' * 6000)],
+        );
+        await store.save(snapshot);
+        final restored = TranscriptSnapshot.fromJson(
+          jsonDecode(storage.value!),
+        );
+        expect(restored.sessionId, 'large-session');
+        expect(restored.running, isTrue);
+        expect(
+          restored.messages.map((m) => m.text),
+          snapshot.messages.map((m) => m.text),
+        );
+      },
+    );
+  }
+
+  test(
+    'clearing during a large save cannot restore the old transcript',
+    () async {
+      final storage = _RecordingStorage();
+      final store = TranscriptStore(storage: storage);
+      final old = store.save(transcript('old reply ' * 10000));
+      await Future<void>.delayed(Duration.zero);
+      final clearing = store.clear();
+      final latest = store.save(transcript('new session'));
+      await Future.wait([old, clearing, latest]);
+      expect(storage.value, contains('new session'));
+      expect(storage.value, isNot(contains('old reply')));
+    },
+  );
 
   test('unchanged session memory is written only once', () async {
     final storage = _RecordingStorage();
@@ -126,6 +169,18 @@ void main() {
       expect(json['sessions']['new']['text'], 'new');
     },
   );
+}
+
+class _WorkerOnlyMessage extends TranscriptMessage {
+  const _WorkerOnlyMessage(String text) : super(MessageRole.assistant, text);
+
+  @override
+  Map<String, dynamic> toJson() {
+    if (Isolate.current.debugName != 'transcript encoding') {
+      throw StateError('Large snapshots must encode outside the UI isolate');
+    }
+    return super.toJson();
+  }
 }
 
 class _RecordingStorage extends FlutterSecureStorage {

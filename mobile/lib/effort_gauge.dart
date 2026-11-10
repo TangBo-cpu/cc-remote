@@ -358,12 +358,13 @@ class _EffortGaugePainter extends CustomPainter {
     final rect = Rect.fromCircle(center: hub, radius: radius);
     final trackColor = enabled
         ? compact
-              ? palette.inactiveLight
+              ? palette.iconAccent.withValues(alpha: 0.24)
               : Color.lerp(palette.inactiveLight, palette.inactive, 0.22)!
         : palette.line;
-    final activeColor = enabled ? palette.iconAccent : palette.inactiveLight;
-    final inkColor = enabled ? palette.iconAccent : palette.inactive;
-    final strokeWidth = compact ? 2.8 : 7.0;
+    final iconColor = palette.iconAccent;
+    final activeColor = enabled ? iconColor : palette.inactiveLight;
+    final inkColor = enabled ? iconColor : palette.inactive;
+    final strokeWidth = compact ? 1.8 : 7.0;
     final dotRadius = compact ? 1.25 : 5.2;
 
     if (!compact) {
@@ -470,7 +471,7 @@ class _EffortGaugePainter extends CustomPainter {
     final direction = Offset(math.cos(needleAngle), math.sin(needleAngle));
     final normal = Offset(-direction.dy, direction.dx);
     final needleLength = radius * (compact ? 0.70 : 0.90);
-    final needleHalfWidth = compact ? 1.6 : 4.2;
+    final needleHalfWidth = compact ? 1.0 : 4.2;
     final needle = Path()
       ..moveTo(
         hub.dx + normal.dx * needleHalfWidth,
@@ -501,10 +502,10 @@ class _EffortGaugePainter extends CustomPainter {
       );
     }
     canvas.drawPath(needle, Paint()..color = inkColor);
-    canvas.drawCircle(hub, compact ? 4.8 : 11.5, Paint()..color = inkColor);
+    canvas.drawCircle(hub, compact ? 2.7 : 11.5, Paint()..color = inkColor);
     canvas.drawCircle(
       hub,
-      compact ? 2.0 : 4.4,
+      compact ? 1.0 : 4.4,
       Paint()..color = compact ? palette.surface : trackColor,
     );
 

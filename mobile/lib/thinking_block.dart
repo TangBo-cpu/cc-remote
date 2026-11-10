@@ -7,6 +7,7 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'activity_disclosure.dart';
 import 'data/remote_models.dart';
+import 'noto_icon.dart';
 import 'signal_console_theme.dart';
 
 String thinkingDurationLabel(int? durationMs) {
@@ -106,12 +107,7 @@ class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
           : null,
       leading: running
           ? null
-          : ActivityIconBadge(
-              color: message.activityState == ActivityState.error
-                  ? palette.danger
-                  : palette.iconAccent,
-              child: const Icon(LucideIcons.brain),
-            ),
+          : const SmartIcon(LucideIcons.brain, size: AppIconSizes.inline),
       compact: true,
       tone: message.activityState == ActivityState.error
           ? palette.danger
@@ -128,14 +124,8 @@ class _ThinkingHistoryBlockState extends State<ThinkingHistoryBlock> {
       child: Container(
         key: const ValueKey('thinking-history-content'),
         width: double.infinity,
-        padding: const EdgeInsetsDirectional.only(
-          start:
-              ActivityIconBadge.contentInset - ActivityIconBadge.size / 2 - 1,
-        ),
-        margin: const EdgeInsetsDirectional.only(
-          start: ActivityIconBadge.size / 2,
-          bottom: 4,
-        ),
+        padding: const EdgeInsetsDirectional.only(start: 19),
+        margin: const EdgeInsetsDirectional.only(start: 12, bottom: 4),
         decoration: BoxDecoration(
           border: BorderDirectional(
             start: BorderSide(color: palette.lineStrong),
@@ -289,24 +279,27 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
       mainAxisSize: MainAxisSize.min,
       children: [
         ExcludeSemantics(
-          child: ActivityIconBadge(
-            child: RepaintBoundary(
-              child: AnimatedBuilder(
-                animation: animation,
-                builder: (context, _) => CustomPaint(
-                  key: const ValueKey('thinking-icon'),
-                  size: const Size.square(AppIconSizes.control),
-                  painter: _ThinkingBloomPainter(
-                    (animation.value * 12).floor() % 12,
-                    palette.iconAccent,
+          child: SizedBox.square(
+            dimension: 24,
+            child: Center(
+              child: RepaintBoundary(
+                child: AnimatedBuilder(
+                  animation: animation,
+                  builder: (context, _) => CustomPaint(
+                    key: const ValueKey('thinking-icon'),
+                    size: const Size.square(18),
+                    painter: _ThinkingBloomPainter(
+                      (animation.value * 12).floor() % 12,
+                      palette.muted,
+                    ),
                   ),
                 ),
               ),
             ),
           ),
         ),
-        const SizedBox(width: 10),
-        ActivityShimmerText('思考中', color: palette.messageMuted),
+        const SizedBox(width: 8),
+        ActivityShimmerText('思考中', color: palette.muted),
         const SizedBox(width: 8),
         Flexible(
           child: Text(
@@ -316,7 +309,7 @@ class _ThinkingIndicatorState extends State<ThinkingIndicator>
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: palette.muted,
-              fontSize: 13,
+              fontSize: 12,
               height: 1.4,
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
@@ -344,13 +337,10 @@ class _ThinkingBloomPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    canvas.save();
-    canvas.scale(size.width / 14, size.height / 14);
     final stage = frame <= 5 ? frame : 11 - frame;
-    const center = Offset(7, 7);
+    final center = size.center(Offset.zero);
     if (stage == 0) {
       canvas.drawCircle(center, 1.45, Paint()..color = color);
-      canvas.restore();
       return;
     }
     final spokes = switch (stage) {
@@ -386,7 +376,6 @@ class _ThinkingBloomPainter extends CustomPainter {
       );
     }
     canvas.drawCircle(center, 1.05, Paint()..color = color);
-    canvas.restore();
   }
 
   @override

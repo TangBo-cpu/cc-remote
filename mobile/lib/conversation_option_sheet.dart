@@ -80,7 +80,7 @@ class _ConversationLensRoute<T> extends RawDialogRoute<T> {
          traversalEdgeBehavior: TraversalEdgeBehavior.closedLoop,
          transitionDuration: reduceMotion
              ? Duration.zero
-             : const Duration(milliseconds: 420),
+             : AppMotion.feedback,
          transitionBuilder: (context, animation, secondaryAnimation, child) =>
              child,
        );
@@ -89,7 +89,7 @@ class _ConversationLensRoute<T> extends RawDialogRoute<T> {
 
   @override
   Duration get reverseTransitionDuration =>
-      reduceMotion ? Duration.zero : AppMotion.standard;
+      reduceMotion ? Duration.zero : AppMotion.fast;
 }
 
 class _ConversationLensFlow extends FlowDelegate {
@@ -196,7 +196,6 @@ class ConversationOptionSheet<T> extends StatefulWidget {
     required this.options,
     this.headerAction,
     this.status,
-    this.lens = false,
   });
 
   final String title;
@@ -205,7 +204,6 @@ class ConversationOptionSheet<T> extends StatefulWidget {
   final List<ConversationPickerOption<T>> options;
   final Widget? headerAction;
   final Widget? status;
-  final bool lens;
 
   @override
   State<ConversationOptionSheet<T>> createState() =>
@@ -311,8 +309,8 @@ class _ConversationOptionSheetState<T>
                         widget.options[index].group,
                         style: TextStyle(
                           color: palette.muted,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
                         ),
                       ),
                     ),
@@ -320,12 +318,11 @@ class _ConversationOptionSheetState<T>
                     key: widget.options[index].value == widget.selected
                         ? _selectedKey
                         : null,
-                    padding: const EdgeInsets.only(bottom: 4),
+                    padding: EdgeInsets.zero,
                     child: _ConversationOptionRow<T>(
                       key: ValueKey(widget.options[index].id),
                       option: widget.options[index],
                       selected: widget.options[index].value == widget.selected,
-                      lens: widget.lens,
                     ),
                   ),
                 ],
@@ -343,163 +340,24 @@ class _ConversationOptionRow<T> extends StatelessWidget {
     super.key,
     required this.option,
     required this.selected,
-    required this.lens,
   });
 
   final ConversationPickerOption<T> option;
   final bool selected;
-  final bool lens;
 
   @override
-  Widget build(BuildContext context) {
-    final palette = AppPalette.of(context);
-    final color = !option.enabled
-        ? palette.muted
-        : option.danger
-        ? palette.stop
-        : palette.ink;
-    return Semantics(
-      selected: selected,
-      enabled: option.enabled,
-      button: true,
-      child: DecoratedBox(
-        decoration: lens
-            ? BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    (selected ? palette.control : palette.surface).withValues(
-                      alpha: MediaQuery.highContrastOf(context)
-                          ? 1
-                          : selected
-                          ? 0.72
-                          : 0.32,
-                    ),
-                    (selected ? palette.control : palette.surface).withValues(
-                      alpha: MediaQuery.highContrastOf(context)
-                          ? 1
-                          : selected
-                          ? 0.42
-                          : 0.08,
-                    ),
-                  ],
-                ),
-                border: Border.all(
-                  color: selected
-                      ? color.withValues(alpha: 0.22)
-                      : option.danger && option.enabled
-                      ? palette.stop.withValues(alpha: 0.12)
-                      : palette.glassHighlight.withValues(
-                          alpha: palette.glassHighlight.a * 0.24,
-                        ),
-                ),
-              )
-            : const BoxDecoration(),
-        child: Material(
-          color: lens
-              ? Colors.transparent
-              : selected
-              ? palette.accentSoft
-              : option.danger && option.enabled
-              ? palette.stop.withValues(alpha: 0.06)
-              : Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-            side: BorderSide(
-              color: selected
-                  ? color.withValues(alpha: 0.18)
-                  : Colors.transparent,
-            ),
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: InkWell(
-            onTap: option.enabled
-                ? () => Navigator.pop(context, option.value)
-                : null,
-            child: ConstrainedBox(
-              // Cherry Studio parity: a 48pt floor and one 32pt avatar keep a long
-              // catalogue scannable without a tall icon seat on every row.
-              constraints: const BoxConstraints(minHeight: 48),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 32,
-                      height: 32,
-                      child: IconTheme(
-                        data: IconThemeData(
-                          size: AppIconSizes.control,
-                          color: color,
-                        ),
-                        child: Center(child: option.leading),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            option.title,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: color,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              height: 1.25,
-                            ),
-                          ),
-                          if (option.description.isNotEmpty) ...[
-                            const SizedBox(height: 2),
-                            Text(
-                              option.description,
-                              style: TextStyle(
-                                color: palette.muted,
-                                fontSize: 12,
-                                height: 1.4,
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                    if (option.badge != null) ...[
-                      const SizedBox(width: 8),
-                      option.badge!,
-                    ],
-                    if (selected) ...[
-                      const SizedBox(width: 8),
-                      ExcludeSemantics(
-                        child: SmartIcon(
-                          LucideIcons.circleCheck,
-                          size: AppIconSizes.control,
-                          color: color,
-                        ),
-                      ),
-                    ] else if (!option.enabled) ...[
-                      const SizedBox(width: 8),
-                      ExcludeSemantics(
-                        child: SmartIcon(
-                          LucideIcons.lockKeyhole,
-                          size: AppIconSizes.control,
-                          color: palette.muted,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
+  Widget build(BuildContext context) => AppOptionRow(
+    title: option.title,
+    description: option.description,
+    selected: selected,
+    enabled: option.enabled,
+    danger: option.danger,
+    boxedLeading: false,
+    showDisclosure: false,
+    leading: option.leading,
+    badge: option.badge,
+    onTap: option.enabled ? () => Navigator.pop(context, option.value) : null,
+  );
 }
 
 /// A compact capability mark on an option row, in the Cherry Studio mobile

@@ -1,4 +1,5 @@
 import 'package:cc_remote/codex_model_picker.dart';
+import 'package:cc_remote/chat_surfaces.dart';
 import 'package:cc_remote/data/permission_mode.dart';
 import 'package:cc_remote/data/remote_models.dart';
 import 'package:cc_remote/effort_gauge.dart';
@@ -12,6 +13,54 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  testWidgets('glass stays readable when scrolling or using high contrast', (
+    tester,
+  ) async {
+    for (final brightness in Brightness.values) {
+      for (final mode in ['rest', 'scrolling', 'highContrast']) {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: buildSignalConsoleTheme(brightness),
+            home: MediaQuery(
+              data: MediaQueryData(highContrast: mode == 'highContrast'),
+              child: SignalScrollBlurState(
+                scrolling: mode == 'scrolling',
+                child: Builder(
+                  builder: (context) => Center(
+                    child: SignalLiquidGlass(
+                      decoration: AppLiquidGlass.lens(
+                        context: context,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: const SizedBox(width: 100, height: 60),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final fill = tester.widget<DecoratedBox>(
+          find.descendant(
+            of: find.byType(ClipRRect),
+            matching: find.byType(DecoratedBox),
+          ),
+        );
+        final decoration = fill.decoration as BoxDecoration;
+        if (mode == 'rest') {
+          expect(decoration.color, isNull);
+          expect(decoration.gradient!.colors.every((c) => c.a < 1), isTrue);
+          expect(find.byType(BackdropFilter), findsOneWidget);
+        } else {
+          expect(decoration.color!.a, 1);
+          expect(find.byType(BackdropFilter), findsNothing);
+        }
+        expect(tester.takeException(), isNull);
+      }
+    }
+  });
+
   for (final brightness in Brightness.values) {
     testWidgets('lens keeps the composer controls intact in $brightness', (
       tester,
@@ -81,16 +130,14 @@ void main() {
       final plus = tester.widget<SmartIcon>(
         find.descendant(of: controls.first, matching: find.byType(SmartIcon)),
       );
-      expect(plus.size, 18);
+      expect(plus.size, 20);
       final gauge = tester.widget<EffortGaugeIcon>(
         find.byKey(const ValueKey('composer-effort-visual')),
       );
       expect(gauge.effort, ClaudeEffortPreference.xhigh);
       expect(
-        tester
-            .widget<SignalLiquidGlass>(find.byKey(const ValueKey('composer')))
-            .lens,
-        isTrue,
+        tester.widget<ChatGlass>(find.byKey(const ValueKey('composer'))).shape,
+        isA<RoundedSuperellipseBorder>(),
       );
       await tester.tap(controls[2]);
       await tester.pumpAndSettle();
@@ -163,8 +210,11 @@ void main() {
       await tester.pump(const Duration(milliseconds: 10));
       final surface = find.byType(AppSheetSurface);
       final early = tester.getRect(surface);
+      final glass = find.descendant(of: surface, matching: find.byType(ChatGlass));
+      expect(tester.widget<ChatGlass>(glass).translucent, isFalse);
       await tester.pumpAndSettle();
       final settled = tester.getRect(surface);
+      expect(tester.widget<ChatGlass>(glass).translucent, isTrue);
       expect(early.width, lessThan(settled.width * 0.5));
       expect(
         (early.center - source.center).distance,
@@ -182,6 +232,8 @@ void main() {
       );
       expect(scrim.color, AppPalette.light.scrim);
       await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pump();
+      expect(tester.widget<ChatGlass>(glass).translucent, isFalse);
       await tester.pumpAndSettle();
       expect(surface, findsNothing);
       expect(focus.hasFocus, isTrue);
@@ -220,13 +272,26 @@ void main() {
       final bounds = tester.getRect(sheet);
       await tester.pump(const Duration(milliseconds: 20));
       expect(tester.getRect(sheet), bounds);
-      final glass = tester.widget<SignalLiquidGlass>(
-        find.descendant(of: sheet, matching: find.byType(SignalLiquidGlass)),
+      final glass = find.descendant(
+        of: sheet,
+        matching: find.byType(ChatGlass),
       );
       expect(
-        glass.decoration.gradient!.colors.every((color) => color.a == 1),
-        isTrue,
+        tester
+            .widget<BackdropFilter>(
+              find.descendant(of: glass, matching: find.byType(BackdropFilter)),
+            )
+            .enabled,
+        isFalse,
       );
+      final fill = tester
+          .widgetList<DecoratedBox>(
+            find.descendant(of: glass, matching: find.byType(DecoratedBox)),
+          )
+          .map((widget) => widget.decoration)
+          .whereType<ShapeDecoration>()
+          .first;
+      expect(fill.color!.a, 1);
       expect(
         ModalRoute.of(tester.element(sheet))!.transitionDuration,
         Duration.zero,

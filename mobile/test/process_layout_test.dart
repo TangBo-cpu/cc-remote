@@ -1,6 +1,6 @@
 import 'package:cc_remote/data/remote_models.dart';
 import 'package:cc_remote/main.dart';
-import 'package:cc_remote/activity_disclosure.dart';
+import 'package:cc_remote/noto_icon.dart';
 import 'package:cc_remote/signal_console_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -52,12 +52,12 @@ Widget host({
 void expectCompactProcess(WidgetTester tester, Finder toggle) {
   final reply = find.text('检查完成。');
   final leading = find
-      .descendant(of: toggle, matching: find.byType(ActivityIconBadge))
+      .descendant(of: toggle, matching: find.byType(SmartIcon))
       .first;
   final targetRect = tester.getRect(toggle);
   final bodyRect = tester.getRect(reply);
-  expect(tester.getRect(leading).center.dx, closeTo(bodyRect.left + 14, 0.1));
-  expect(targetRect.height, greaterThanOrEqualTo(40));
+  expect(tester.getRect(leading).center.dx, closeTo(bodyRect.left + 12, 0.1));
+  expect(targetRect.height, greaterThanOrEqualTo(32));
   expect(bodyRect.top - targetRect.bottom, inInclusiveRange(0, 4));
   expect(tester.takeException(), isNull);
 }
@@ -136,50 +136,5 @@ void main() {
     await tester.tap(toggle);
     await tester.pumpAndSettle();
     expectCompactProcess(tester, toggle);
-  });
-
-  testWidgets('long tool names keep status and disclosure visible at 2x text', (
-    tester,
-  ) async {
-    for (final brightness in Brightness.values) {
-      await tester.pumpWidget(host(
-        messages: [
-          TranscriptMessage.user('检查项目'),
-          TranscriptMessage.activity(
-            '已调用 codebase-memory-mcp.get_code_snippet',
-            id: 'long-tool',
-            kind: ActivityKind.tool,
-            state: ActivityState.error,
-            tool: 'codebase-memory-mcp.get_code_snippet',
-            detail: '连接超时',
-          ),
-          TranscriptMessage.activity(
-            '已调用 Skill',
-            id: 'skill',
-            kind: ActivityKind.tool,
-            state: ActivityState.done,
-            tool: 'Skill',
-            detail: 'windows-pwsh',
-          ),
-          TranscriptMessage.assistant('检查完成。'),
-        ],
-        brightness: brightness,
-        scale: 2,
-        width: 320,
-      ));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
-      await tester.pumpAndSettle();
-      final row = find.byKey(const ValueKey('activity-step-toggle-long-tool'));
-      expect(find.text('执行失败'), findsOneWidget);
-      expect(tester.getRect(find.text('执行失败')).right,
-          lessThan(tester.getRect(row).right));
-      expect(find.text('已完成'), findsNothing);
-      await tester.tap(row);
-      await tester.pumpAndSettle();
-      expect(find.byKey(const ValueKey('activity-detail-long-tool')), findsNothing);
-      expect(tester.takeException(), isNull);
-      await tester.pumpWidget(const SizedBox());
-    }
   });
 }

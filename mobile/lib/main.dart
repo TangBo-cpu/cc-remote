@@ -21,6 +21,7 @@ import 'activity_disclosure.dart';
 import 'assistant_citations.dart';
 import 'attachments.dart';
 import 'camera_permission.dart';
+import 'chat_surfaces.dart';
 import 'conversation_option_sheet.dart';
 import 'codex_model_picker.dart';
 import 'appearance_preference.dart';
@@ -368,8 +369,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final SessionMemoryStore sessionMemoryStore = SessionMemoryStore();
   late final Future<void> sessionMemoryInitialization;
   bool restoringPromptDraft = false;
-  late final RemoteApiClient apiClient =
-      widget.apiClient ??
+  late final RemoteApiClient apiClient = widget.apiClient ??
       RemoteApiClient(client: PeerHttpClient(() => wsClient.peerTransport));
   final TextEditingController promptController = TextEditingController();
   final AttachmentPicker attachmentPicker = AttachmentPicker();
@@ -436,14 +436,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   final historyReads = <(Uri, String, String)>{};
   final historyReadFailures = <(Uri, String, String)>{};
   final sessionTranscriptCache =
-      <
-        (Uri, String, String),
-        ({
-          int revision,
-          List<TranscriptMessage> messages,
-          RemoteTranscriptSnapshot? snapshot,
-        })
-      >{};
+      <(Uri, String, String), ({
+        int revision,
+        List<TranscriptMessage> messages,
+        RemoteTranscriptSnapshot? snapshot,
+      })>{};
 
   bool get canAnimateLiveFeedback =>
       viewingSessionId == null &&
@@ -1333,9 +1330,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         onState: handleWsConnectionState,
         transcriptResume: () {
           final id = activeSessionId;
-          final token = id == null
-              ? null
-              : cachedSessionTranscript(id)?.snapshot?.windowToken;
+          final token = id == null ? null : cachedSessionTranscript(id)?.snapshot?.windowToken;
           return token == null ? null : {'sessionId': id, 'token': token};
         },
       );
@@ -1345,8 +1340,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   }
 
   void handleWsConnectionState(RemoteConnectionSnapshot snapshot) {
-    final reconnected =
-        snapshot.phase == RemoteConnectionPhase.connected &&
+    final reconnected = snapshot.phase == RemoteConnectionPhase.connected &&
         reconnectSnapshot.phase != RemoteConnectionPhase.connected;
     reconnectSnapshot = snapshot;
     if (!mounted || route != ShellRoute.chat) return;
@@ -1362,10 +1356,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       }
     });
     if (reconnected && selectingSessionId != null && !peekFailed) {
-      wsClient.send({
-        'type': 'select_session',
-        'sessionId': selectingSessionId,
-      });
+      wsClient.send({'type': 'select_session', 'sessionId': selectingSessionId});
     }
   }
 
@@ -1397,22 +1388,15 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       return;
     }
 
-    if (decoded['type'] == 'transcript_snapshot' &&
-        decoded['unchanged'] == true) {
+    if (decoded['type'] == 'transcript_snapshot' && decoded['unchanged'] == true) {
       final id = decoded['sessionId'];
-      final cached = id is String
-          ? cachedSessionTranscript(id)?.snapshot
-          : null;
+      final cached = id is String ? cachedSessionTranscript(id)?.snapshot : null;
       final history = decoded['history'];
-      if (cached == null ||
-          history is! Map ||
-          history['token'] != cached.windowToken) {
+      if (cached == null || history is! Map || history['token'] != cached.windowToken) {
         wsClient.send({'type': 'get_transcript', 'sessionId': id});
         return;
       }
-      decoded['messages'] = cached.messages
-          .map((message) => message.toJson())
-          .toList();
+      decoded['messages'] = cached.messages.map((message) => message.toJson()).toList();
       decoded['history'] = {
         ...history,
         'start': cached.messageStart,
@@ -1484,18 +1468,16 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         return;
       case 'transcript_snapshot':
         if (receivedSnapshot == null) return;
-        final cached = cachedSessionTranscript(
-          decoded['sessionId'] as String,
-        )?.snapshot;
-        final snapshot =
-            cached != null && cached.revision >= receivedSnapshot.revision
+        final cached =
+            cachedSessionTranscript(decoded['sessionId'] as String)?.snapshot;
+        final snapshot = cached != null && cached.revision >= receivedSnapshot.revision
             ? cached
             : receivedSnapshot;
         if (!shouldApplyRemoteTranscriptSnapshot(
-          snapshot: snapshot,
-          currentRevision: remoteTranscriptRevision,
-          hasLocalMessages: messages.isNotEmpty,
-        )) {
+              snapshot: snapshot,
+              currentRevision: remoteTranscriptRevision,
+              hasLocalMessages: messages.isNotEmpty,
+            )) {
           return;
         }
         final wasRunning = running;
@@ -3100,22 +3082,18 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<SessionPeekPayload?> fetchSessionPeek(
-    String sessionId, {
-    String? before,
-  }) async {
+  Future<SessionPeekPayload?> fetchSessionPeek(String sessionId, {String? before}) async {
     final current = session;
     if (current == null) return null;
     final res = await apiClient.get(
       current.origin,
       '/api/sessions/${Uri.encodeComponent(sessionId)}?cached=1'
-      '${before == null ? '' : '&before=${Uri.encodeQueryComponent(before)}'}',
+          '${before == null ? '' : '&before=${Uri.encodeQueryComponent(before)}'}',
       token: current.token,
       timeout: networkTimeout,
     );
     if (!isCurrentConnection(current)) return null;
-    if (res.statusCode == 409 && before != null)
-      throw StateError('transcript_history_changed');
+    if (res.statusCode == 409 && before != null) throw StateError('transcript_history_changed');
     if (res.statusCode == 401) {
       await recoverUnauthorizedSession();
       return null;
@@ -3287,11 +3265,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     return true;
   }
 
-  ({
-    int revision,
-    List<TranscriptMessage> messages,
-    RemoteTranscriptSnapshot? snapshot,
-  })?
+  ({int revision, List<TranscriptMessage> messages, RemoteTranscriptSnapshot? snapshot})?
   cachedSessionTranscript(String id) {
     final current = session;
     return current == null
@@ -3312,11 +3286,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         return;
       }
       setState(() {
-        cacheSessionTranscript(
-          id,
-          payload.messages,
-          snapshot: payload.snapshot,
-        );
+        cacheSessionTranscript(id, payload.messages, snapshot: payload.snapshot);
         peekMessages = cachedSessionTranscript(id)!.messages;
         peekTitle = payload.title;
         peekLoading = false;
@@ -3335,9 +3305,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     if (current == null) return;
     final key = (current.origin, current.token, id);
     final previousSnapshot = sessionTranscriptCache[key]?.snapshot;
-    snapshot =
-        snapshot?.retainEarlier(previousSnapshot) ??
-        previousSnapshot?.withMessages(transcript);
+    snapshot = snapshot?.retainEarlier(previousSnapshot) ?? previousSnapshot?.withMessages(transcript);
     final nextRevision = snapshot?.revision ?? remoteTranscriptRevision;
     if ((sessionTranscriptCache[key]?.revision ?? -1) > nextRevision) return;
     sessionTranscriptCache.remove(key);
@@ -3379,23 +3347,18 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       }
       final previous = cachedSessionTranscript(id)?.snapshot;
       if (previous == null || previous.olderCursor != cursor) return;
-      final merged = reset
-          ? payload!.snapshot
-          : previous.prepend(payload!.snapshot!);
+      final merged = reset ? payload!.snapshot : previous.prepend(payload!.snapshot!);
       if (merged == null) throw StateError('history_read_failed');
       setState(() {
         sessionTranscriptCache.remove(key);
         cacheSessionTranscript(id, merged.messages, snapshot: merged);
         if (viewingSessionId == id) peekMessages = merged.messages;
         if (activeSessionId == id && selectingSessionId == null) {
-          messages
-            ..clear()
-            ..addAll(merged.messages);
+          messages..clear()..addAll(merged.messages);
         }
       });
     } catch (_) {
-      if (isCurrentConnection(current))
-        setState(() => historyReadFailures.add(key));
+      if (isCurrentConnection(current)) setState(() => historyReadFailures.add(key));
     } finally {
       if (mounted) setState(() => historyReads.remove(key));
     }
@@ -3763,11 +3726,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       connectWs(saved);
     } catch (err) {
       if (mounted) {
-        setState(
-          () => pairError = err is FormatException
-              ? '服务未返回有效的配对信息，请检查服务地址'
-              : errorText(err),
-        );
+        setState(() => pairError = err is FormatException
+            ? '服务未返回有效的配对信息，请检查服务地址'
+            : errorText(err));
       }
     } finally {
       if (mounted) setState(() => pairing = false);
@@ -3783,12 +3744,9 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     }
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     final displayedSessionId = viewingSessionId ?? activeSessionId;
-    final history = displayedSessionId == null
-        ? null
-        : cachedSessionTranscript(displayedSessionId)?.snapshot;
+    final history = displayedSessionId == null ? null : cachedSessionTranscript(displayedSessionId)?.snapshot;
     final historyKey = session == null || displayedSessionId == null
-        ? null
-        : (session!.origin, session!.token, displayedSessionId);
+        ? null : (session!.origin, session!.token, displayedSessionId);
     final screen = switch (route) {
       ShellRoute.boot => BootstrapScreen(phase: bootstrapPhase),
       ShellRoute.pair => PairScreen(
@@ -3804,8 +3762,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       ),
       ShellRoute.chat => ChatScreen(
         messageStart: history?.messageStart ?? 0,
-        onLoadEarlier: history?.olderCursor == null
-            ? null
+        onLoadEarlier: history?.olderCursor == null ? null
             : () => unawaited(loadEarlierMessages(displayedSessionId!)),
         historyLoading: historyReads.contains(historyKey),
         historyFailed: historyReadFailures.contains(historyKey),
@@ -3901,8 +3858,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     };
     // Expanded windows (tablets, landscape desktops) keep the session list
     // mounted as a rail beside the chat instead of a modal sidebar.
-    final showSessionRail =
-        route == ShellRoute.chat &&
+    final showSessionRail = route == ShellRoute.chat &&
         sessionRailVisible &&
         projects.isNotEmpty &&
         isExpandedWindow(context);
@@ -3910,7 +3866,11 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         ? Row(
             key: const ValueKey('chat-session-rail'),
             children: [
-              SafeArea(bottom: false, right: false, child: buildSessionRail()),
+              SafeArea(
+                bottom: false,
+                right: false,
+                child: buildSessionRail(),
+              ),
               Expanded(child: screen),
             ],
           )
@@ -4090,9 +4050,7 @@ class _PairScreenState extends State<PairScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed &&
-        widget.enableCamera &&
-        !codeMode) {
+    if (state == AppLifecycleState.resumed && widget.enableCamera && !codeMode) {
       unawaited(checkCameraPermission());
     }
   }
@@ -5263,7 +5221,9 @@ class ChatScreen extends StatelessWidget {
   final VoidCallback? onCancelQueue;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ChatIconTheme(child: Builder(builder: _build));
+
+  Widget _build(BuildContext context) {
     final peeking = peek != null;
     final switching = peek?.switching == true;
     final evidence = _currentTurnEvidence(messages);
@@ -5495,70 +5455,82 @@ class ChatScreen extends StatelessWidget {
           floatingOverlay: showComposer
               ? Align(
                   alignment: Alignment.bottomCenter,
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(8, 0, 8, composerBottomGap),
-                    child: RepaintBoundary(
-                      // Keep the floating composer aligned with the capped
-                      // transcript column instead of stretching on tablets.
-                      child: ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 760),
-                        child: peeking && !switching
-                            ? SessionPeekDock(
-                                peek: peek!,
-                                onReturn: onExitPeek ?? () {},
-                                onStop: peek!.liveRunning ? onStop : null,
-                              )
-                            : IgnorePointer(
-                                ignoring: switching,
-                                child: ExcludeFocus(
-                                  excluding: switching,
-                                  child: ExcludeSemantics(
+                  child: ChatBackdrop(
+                    key: const ValueKey('chat-composer-backdrop'),
+                    veil: true,
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        12,
+                        0,
+                        12,
+                        composerBottomGap,
+                      ),
+                      child: RepaintBoundary(
+                        // Keep the floating composer aligned with the capped
+                        // transcript column instead of stretching on tablets.
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 760),
+                          child: peeking && !switching
+                              ? SessionPeekDock(
+                                  peek: peek!,
+                                  onReturn: onExitPeek ?? () {},
+                                  onStop: peek!.liveRunning ? onStop : null,
+                                )
+                              : IgnorePointer(
+                                  ignoring: switching,
+                                  child: ExcludeFocus(
                                     excluding: switching,
-                                    child: Opacity(
-                                      opacity: switching ? 0.45 : 1,
-                                      child: withSessionInfo(
-                                        (info) => PromptBar(
-                                          controller: promptController,
-                                          attachments: pendingAttachments,
-                                          commands: commands,
-                                          commandsLoading: commandsLoading,
-                                          commandsFailed: commandsFailed,
-                                          onRefreshCommands: onRefreshCommands,
-                                          running: running,
-                                          stopping: stopping,
-                                          uploading: uploadingAttachments,
-                                          connected: connected,
-                                          offline: offline,
-                                          permissionMode: permissionMode,
-                                          allowBypassPermissions:
-                                              allowBypassPermissions,
-                                          modelName: info.modelName,
-                                          contextWindow: info.contextWindow,
-                                          remainingContext:
-                                              info.remainingContext,
-                                          engine: engine,
-                                          selectedModel: selectedModel,
-                                          selectedCodexModel:
-                                              selectedCodexModel,
-                                          selectedEffort: selectedEffort,
-                                          codexSandboxMode: codexSandboxMode,
-                                          presentation: presentation,
-                                          queuedPreview: queuedPreview,
-                                          onCancelQueue: onCancelQueue,
-                                          onPermissionModeSelected:
-                                              onPermissionModeSelected,
-                                          onCodexSandboxModeSelected:
-                                              onCodexSandboxModeSelected,
-                                          onCommandSelected: (command) =>
-                                              onFillPrompt('/$command '),
-                                          onAddAttachment: onAddAttachment,
-                                          onRemoveAttachment:
-                                              onRemoveAttachment,
-                                          onModelPressed: onOpenModelPicker,
-                                          onEffortSelected: onEffortSelected,
-                                          onReconnect: onReconnect,
-                                          onSend: onSend,
-                                          onStop: onStop,
+                                    child: ExcludeSemantics(
+                                      excluding: switching,
+                                      child: Opacity(
+                                        opacity: switching ? 0.45 : 1,
+                                        child: withSessionInfo(
+                                          (info) => PromptBar(
+                                            controller: promptController,
+                                            attachments: pendingAttachments,
+                                            commands: commands,
+                                            commandsLoading: commandsLoading,
+                                            commandsFailed: commandsFailed,
+                                            onRefreshCommands:
+                                                onRefreshCommands,
+                                            running: running,
+                                            stopping: stopping,
+                                            uploading: uploadingAttachments,
+                                            connected: connected,
+                                            offline: offline,
+                                            permissionMode: permissionMode,
+                                            allowBypassPermissions:
+                                                allowBypassPermissions,
+                                            modelName: info.modelName,
+                                            contextWindow: info.contextWindow,
+                                            remainingContext:
+                                                info.remainingContext,
+                                            engine: engine,
+                                            selectedModel: selectedModel,
+                                            selectedCodexModel:
+                                                selectedCodexModel,
+                                            selectedEffort: selectedEffort,
+                                            codexSandboxMode:
+                                                codexSandboxMode,
+                                            presentation: presentation,
+                                            queuedPreview: queuedPreview,
+                                            onCancelQueue: onCancelQueue,
+                                            onPermissionModeSelected:
+                                                onPermissionModeSelected,
+                                            onCodexSandboxModeSelected:
+                                                onCodexSandboxModeSelected,
+                                            onCommandSelected: (command) =>
+                                                onFillPrompt('/$command '),
+                                            onAddAttachment: onAddAttachment,
+                                            onRemoveAttachment:
+                                                onRemoveAttachment,
+                                            onModelPressed: onOpenModelPicker,
+                                            onEffortSelected:
+                                                onEffortSelected,
+                                            onReconnect: onReconnect,
+                                            onSend: onSend,
+                                            onStop: onStop,
+                                          ),
                                         ),
                                       ),
                                     ),
@@ -5713,7 +5685,7 @@ class _ChatTopBackdrop extends StatelessWidget {
     final palette = AppPalette.of(context);
     final dark = palette.brightness == Brightness.dark;
     final surface = ColoredBox(
-      color: palette.paper.withValues(alpha: dark ? 0.20 : 0.10),
+      color: palette.bgTop.withValues(alpha: dark ? 0.24 : 0.18),
       // Paint into the backdrop layer; ShaderMask isolates its input.
       child: DecoratedBox(
         key: const ValueKey('chat-top-frost-mask'),
@@ -5804,14 +5776,13 @@ class ConnectionHeader extends StatelessWidget {
             builder: (context, pressed, child) => SignalAnimatedSurface(
               key: const ValueKey('session-menu-surface'),
               duration: appPressAnimationDuration(context, pressed),
-              blurSigma: 8,
-              decoration: AppLiquidGlass.thin(
-                context: context,
+              decoration: BoxDecoration(
+                color: pressed
+                    ? AppPalette.of(context).composerControlPressed
+                    : Colors.transparent,
                 shape: BoxShape.circle,
-                pressed: pressed,
-                backdrop: true,
               ),
-              child: child,
+              child: ChatGlass(shape: const CircleBorder(), child: child),
             ),
             child: _HeaderIconButton(
               tooltip: '项目与会话',
@@ -5838,14 +5809,13 @@ class ConnectionHeader extends StatelessWidget {
             builder: (context, pressed, child) => SignalAnimatedSurface(
               key: const ValueKey('session-actions-surface'),
               duration: appPressAnimationDuration(context, pressed),
-              blurSigma: 8,
-              decoration: AppLiquidGlass.thin(
-                context: context,
+              decoration: BoxDecoration(
+                color: pressed
+                    ? AppPalette.of(context).composerControlPressed
+                    : Colors.transparent,
                 borderRadius: BorderRadius.circular(AppRadii.pill),
-                pressed: pressed,
-                backdrop: true,
               ),
-              child: child,
+              child: ChatGlass(shape: const StadiumBorder(), child: child),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -5854,7 +5824,6 @@ class ConnectionHeader extends StatelessWidget {
                   key: const ValueKey('session-new-button'),
                   tooltip: '新对话',
                   icon: LucideIcons.plus,
-                  filled: true,
                   onPressed: console.canCompose ? onNewConversation : null,
                 ),
                 _SessionMoreButton(
@@ -6345,10 +6314,7 @@ class _RecoveryStatePanelState extends State<RecoveryStatePanel> {
                     minimumSize: const Size.fromHeight(AppSizes.touchTarget),
                     padding: const EdgeInsets.all(AppSpacing.sm),
                   ),
-                  icon: SmartIcon(
-                    content.actionIcon,
-                    size: AppIconSizes.control,
-                  ),
+                  icon: SmartIcon(content.actionIcon, size: AppIconSizes.control),
                   label: Text(content.actionLabel!),
                 ),
               ],
@@ -6669,13 +6635,11 @@ class _HeaderIconButton extends StatelessWidget {
     required this.tooltip,
     required this.icon,
     required this.onPressed,
-    this.filled = false,
   });
 
   final String tooltip;
   final IconData icon;
   final VoidCallback? onPressed;
-  final bool filled;
 
   @override
   Widget build(BuildContext context) {
@@ -6687,7 +6651,7 @@ class _HeaderIconButton extends StatelessWidget {
         padding: EdgeInsets.zero,
         icon: SmartIcon(
           icon,
-          size: filled ? 22 : 20,
+          size: 20,
           color: onPressed == null
               ? AppPalette.of(context).inactive
               : AppPalette.of(context).ink,
@@ -6968,18 +6932,11 @@ class _SettingsModalSurface extends StatelessWidget {
           height: height,
           width: capped ? min(maxWidth, media.size.width - 32) : null,
           margin: expanded ? const EdgeInsets.symmetric(horizontal: 24) : null,
-          decoration: AppLiquidGlass.strong(
-            context: context,
-            borderRadius: borderRadius,
-            shadow: AppElevation.overlay(context: context),
-          ),
-          child: ClipRRect(
-            clipBehavior: Clip.hardEdge,
-            borderRadius: borderRadius,
+          child: ChatGlass(
+            translucent: false,
+            shape: RoundedSuperellipseBorder(borderRadius: borderRadius),
             child: Padding(
-              padding: EdgeInsets.only(
-                bottom: expanded ? 0 : media.padding.bottom,
-              ),
+              padding: EdgeInsets.only(bottom: expanded ? 0 : media.padding.bottom),
               child: RepaintBoundary(child: child),
             ),
           ),
@@ -7503,11 +7460,11 @@ class _SettingsLeadingIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 42,
-      height: 42,
+      width: 36,
+      height: 36,
       decoration: BoxDecoration(
         color: AppPalette.of(context).control,
-        shape: BoxShape.circle,
+        borderRadius: BorderRadius.circular(10),
       ),
       alignment: Alignment.center,
       child: SmartIcon(icon, size: AppIconSizes.control),
@@ -7548,13 +7505,13 @@ class _SettingsPreferenceRow extends StatelessWidget {
         child: InkWell(
           onTap: onTap,
           child: ConstrainedBox(
-            constraints: const BoxConstraints(minHeight: 76),
+            constraints: const BoxConstraints(minHeight: 68),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
               child: Row(
                 children: [
                   _SettingsLeadingIcon(icon: icon!),
-                  const SizedBox(width: 14),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
@@ -7564,7 +7521,7 @@ class _SettingsPreferenceRow extends StatelessWidget {
                           title,
                           style: const TextStyle(
                             fontSize: 15,
-                            fontWeight: FontWeight.w700,
+                            fontWeight: FontWeight.w600,
                             height: 1.3,
                           ),
                         ),
@@ -7604,7 +7561,7 @@ class _SettingsDivider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Divider(height: 1, indent: 70, endIndent: 14);
+    return const Divider(height: 1, indent: 62, endIndent: 14);
   }
 }
 
@@ -7619,7 +7576,6 @@ class _SettingsGroupCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppPalette.of(context).surface,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: AppElevation.surfaceCard(context: context),
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(16),
@@ -7738,7 +7694,6 @@ Future<ClaudeModelPreference?> showClaudeModelPicker(
     lens: true,
     scrollContent: false,
     builder: (sheetContext) => ConversationOptionSheet<ClaudeModelPreference>(
-      lens: true,
       title: '选择模型',
       detail: '用于之后发送的消息，当前任务继续使用原模型。',
       selected: selected,
@@ -7784,33 +7739,39 @@ Future<AttachmentSource?> showAttachmentSourceSheet(
   BuildContext context, {
   bool imagesOnly = false,
 }) {
-  return showModalBottomSheet<AttachmentSource>(
-    context: context,
-    sheetAnimationStyle: appOverlayAnimationStyle(context),
-    showDragHandle: true,
+  return showAppOptionPicker<AttachmentSource>(
+    context,
     builder: (context) => SafeArea(
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        padding: const EdgeInsets.only(bottom: 4),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ListTile(
+            const AppOptionSheetHeader(title: '添加附件'),
+            const SizedBox(height: 12),
+            AppOptionRow(
+              selected: false,
+              boxedLeading: false,
               leading: const SmartIcon(LucideIcons.camera),
-              title: const Text('拍照'),
-              subtitle: const Text('拍一张照片作为附件'),
+              title: '拍照',
+              description: '拍一张照片作为附件',
               onTap: () => Navigator.pop(context, AttachmentSource.camera),
             ),
-            ListTile(
+            AppOptionRow(
+              selected: false,
+              boxedLeading: false,
               leading: const SmartIcon(LucideIcons.image),
-              title: const Text('选择图片'),
-              subtitle: const Text('从相册选择一张或多张图片'),
+              title: '选择图片',
+              description: '从相册选择一张或多张图片',
               onTap: () => Navigator.pop(context, AttachmentSource.photos),
             ),
             if (!imagesOnly)
-              ListTile(
+              AppOptionRow(
+                selected: false,
+                boxedLeading: false,
                 leading: const SmartIcon(LucideIcons.folderOpen),
-                title: const Text('选择文件'),
-                subtitle: const Text('发送代码、日志、文档或压缩包'),
+                title: '选择文件',
+                description: '发送代码、日志、文档或压缩包',
                 onTap: () => Navigator.pop(context, AttachmentSource.files),
               ),
           ],
@@ -7930,6 +7891,7 @@ class _ProcessGroupRow {
 List<Object> _groupTranscriptRows(
   List<_VisibleTranscriptRow> rows, {
   required bool running,
+  int? breakBefore,
 }) {
   final items = <Object>[];
   final lastUserIndex =
@@ -7952,7 +7914,9 @@ List<Object> _groupTranscriptRows(
       continue;
     }
     final segment = <_VisibleTranscriptRow>[];
-    while (index < rows.length && isProcessPart(rows[index].message)) {
+    while (index < rows.length &&
+        isProcessPart(rows[index].message) &&
+        (segment.isEmpty || rows[index].rawIndex != breakBefore)) {
       segment.add(rows[index++]);
     }
     final typed = segment.any((row) => row.message.phase != null);
@@ -7997,11 +7961,17 @@ class _TranscriptProcessBlock extends StatelessWidget {
     required this.group,
     required this.buildPart,
     this.revealRawIndex,
+    this.expanded,
+    this.onExpandedChanged,
+    this.headerOnly = false,
   });
 
   final _ProcessGroupRow group;
   final Widget Function(_VisibleTranscriptRow) buildPart;
   final int? revealRawIndex;
+  final bool? expanded;
+  final ValueChanged<bool>? onExpandedChanged;
+  final bool headerOnly;
 
   @override
   Widget build(BuildContext context) {
@@ -8041,20 +8011,26 @@ class _TranscriptProcessBlock extends StatelessWidget {
         : ActivityTimelineCard(
             activities: tools,
             running: group.running,
-            expanded: reveal ? true : null,
+            expanded: reveal ? true : expanded,
+            onExpandedChanged: onExpandedChanged,
             revealActivityId: reveal
                 ? group.rows
                       .firstWhere((row) => row.rawIndex == revealRawIndex)
                       .message
                       .activityId
                 : null,
-            contentBuilder: (context, buildTool) => buildParts(buildTool),
+            contentBuilder: (context, buildTool) => headerOnly
+                ? const SizedBox.shrink()
+                : buildParts(buildTool),
             preview: narration == null ? null : buildPart(narration),
           );
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [content, if (liveThought != null) buildPart(liveThought)],
+      children: [
+        content,
+        if (liveThought != null && !headerOnly) buildPart(liveThought),
+      ],
     );
   }
 }
@@ -8068,8 +8044,11 @@ class _TranscriptViewState extends State<TranscriptView>
     keepScrollOffset: false,
   );
   final Map<int, PageStorageBucket> activityStorage = {};
+  final Map<(int, bool), bool> processExpansion = {};
   final Map<int, GlobalKey> rowKeys = {};
   final Map<int, GlobalKey> readingRowKeys = {};
+  final transcriptCenterKey = GlobalKey();
+  int? transcriptCenterIndex;
   Map<int, TranscriptMessage> renderedMessages = {};
   List<_VisibleTranscriptRow> transcriptRows = [];
   List<Object> groupedRows = [];
@@ -8131,6 +8110,8 @@ class _TranscriptViewState extends State<TranscriptView>
       readingRowKeys.clear();
       renderedMessages.clear();
       activityStorage.clear();
+      processExpansion.clear();
+      transcriptCenterIndex = null;
       didInitialBottomJump = false;
       bottomJumpScheduled = false;
       readingRestoreScheduled = false;
@@ -8143,16 +8124,31 @@ class _TranscriptViewState extends State<TranscriptView>
       if (prepended) {
         followingBottom = false;
         captureReadingPosition();
-        pendingReadingRestore = readingMemory?.readingPosition;
-        rowKeys.clear();
-        readingRowKeys.clear();
-        activityStorage.clear();
+        final added = oldWidget.messageStart - widget.messageStart;
+        void shiftIndices<T>(Map<int, T> values) {
+          final shifted = {
+            for (final entry in values.entries) entry.key + added: entry.value,
+          };
+          values
+            ..clear()
+            ..addAll(shifted);
+        }
+
+        shiftIndices(rowKeys);
+        shiftIndices(readingRowKeys);
+        shiftIndices(activityStorage);
+        if (highlightedRawIndex != null) {
+          highlightedRawIndex = highlightedRawIndex! + added;
+        }
+      }
+      if (oldWidget.messageStart < widget.messageStart ||
+          (transcriptCenterIndex != null &&
+              transcriptCenterIndex! >=
+                  widget.messageStart + widget.messages.length)) {
+        transcriptCenterIndex = null;
       }
       refreshTranscriptRows(
-        tailOnly:
-            !prepended &&
-            widget.tailOnlyUpdate &&
-            oldWidget.running == widget.running,
+        tailOnly: !prepended && widget.tailOnlyUpdate && oldWidget.running == widget.running,
       );
       observeTranscript(reset: prepended);
     }
@@ -8291,8 +8287,7 @@ class _TranscriptViewState extends State<TranscriptView>
         readingRestoreInFlight) {
       return;
     }
-    if ((pendingReadingRestore?.rawIndex ?? widget.messageStart) <
-            widget.messageStart &&
+    if ((pendingReadingRestore?.rawIndex ?? widget.messageStart) < widget.messageStart &&
         widget.onLoadEarlier != null) {
       if (!widget.historyLoading && !widget.historyFailed) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -8337,11 +8332,9 @@ class _TranscriptViewState extends State<TranscriptView>
           row.message.text.startsWith(saved.textPrefix ?? '');
       final matchesByDistance = rows.where(matches).toList()
         ..sort(
-          (a, b) => (a.rawIndex + widget.messageStart - saved.rawIndex!)
-              .abs()
-              .compareTo(
-                (b.rawIndex + widget.messageStart - saved.rawIndex!).abs(),
-              ),
+          (a, b) => (a.rawIndex + widget.messageStart - saved.rawIndex!).abs().compareTo(
+            (b.rawIndex + widget.messageStart - saved.rawIndex!).abs(),
+          ),
         );
       var target = matchesByDistance.isNotEmpty
           ? matchesByDistance.first
@@ -8352,8 +8345,9 @@ class _TranscriptViewState extends State<TranscriptView>
                   ? a
                   : b,
             );
-      for (final item in _groupTranscriptRows(rows, running: widget.running)) {
+      for (final item in groupedRows) {
         if (item is _ProcessGroupRow &&
+            !usesLazyProcessRows(item) &&
             item.rows.any((row) => row.rawIndex == target.rawIndex)) {
           target = item.rows.first;
           break;
@@ -8481,6 +8475,20 @@ class _TranscriptViewState extends State<TranscriptView>
 
   List<_VisibleTranscriptRow> visibleRows() => transcriptRows;
 
+  bool processExpanded(_ProcessGroupRow group, {int? revealRawIndex}) =>
+      (revealRawIndex != null &&
+          group.rows.any((row) => row.rawIndex == revealRawIndex)) ||
+      processExpansion.putIfAbsent(
+        (group.rawIndex + widget.messageStart, group.running),
+        () =>
+            group.running &&
+            !group.rows.any((row) => row.message.role == MessageRole.assistant),
+      );
+
+  bool usesLazyProcessRows(_ProcessGroupRow group, {int? revealRawIndex}) =>
+      group.rows.length > 24 &&
+      processExpanded(group, revealRawIndex: revealRawIndex);
+
   void refreshTranscriptRows({bool tailOnly = false}) {
     if (tailOnly &&
         transcriptRows.isNotEmpty &&
@@ -8528,7 +8536,15 @@ class _TranscriptViewState extends State<TranscriptView>
       transcriptRows.removeRange(currentTurnRowStart, transcriptRows.length);
       transcriptRows.addAll(rows);
       groupedRows.removeRange(currentTurnGroupStart, groupedRows.length);
-      groupedRows.addAll(_groupTranscriptRows(rows, running: widget.running));
+      groupedRows.addAll(
+        _groupTranscriptRows(
+          rows,
+          running: widget.running,
+          breakBefore: transcriptCenterIndex == null
+              ? null
+              : transcriptCenterIndex! - widget.messageStart,
+        ),
+      );
       for (var index = lastUserIndex + 1; index < rawMessageCount; index++) {
         renderedMessages.remove(index);
       }
@@ -8566,7 +8582,16 @@ class _TranscriptViewState extends State<TranscriptView>
     }
     rawMessageCount = widget.messages.length;
     transcriptRows = rows;
-    groupedRows = _groupTranscriptRows(rows, running: widget.running);
+    if (rows.isNotEmpty) {
+      transcriptCenterIndex ??= widget.messageStart + rows.first.rawIndex;
+    }
+    groupedRows = _groupTranscriptRows(
+      rows,
+      running: widget.running,
+      breakBefore: transcriptCenterIndex == null
+          ? null
+          : transcriptCenterIndex! - widget.messageStart,
+    );
     currentTurnGroupStart =
         groupedRows.lastIndexWhere(
           (item) =>
@@ -8589,7 +8614,7 @@ class _TranscriptViewState extends State<TranscriptView>
   ) {
     final fresh = widget.motion?.takeMessage(message) ?? false;
     return SignalEntrance(
-      key: ValueKey('message-entrance-$rawIndex'),
+      key: ValueKey('message-entrance-${rawIndex + widget.messageStart}'),
       animate:
           fresh &&
           followingBottom &&
@@ -8629,10 +8654,8 @@ class _TranscriptViewState extends State<TranscriptView>
       return;
     }
 
-    if (request.messageIndex < widget.messageStart &&
-        widget.onLoadEarlier != null) {
-      if (!widget.historyLoading && !widget.historyFailed)
-        widget.onLoadEarlier?.call();
+    if (request.messageIndex < widget.messageStart && widget.onLoadEarlier != null) {
+      if (!widget.historyLoading && !widget.historyFailed) widget.onLoadEarlier?.call();
       return;
     }
     final targetRawIndex = resolveTargetRawIndex(request);
@@ -8694,8 +8717,7 @@ class _TranscriptViewState extends State<TranscriptView>
     var closestDistance = 1 << 30;
     for (var index = 0; index < widget.messages.length; index++) {
       if (!matches(index)) continue;
-      final distance = (index + widget.messageStart - request.messageIndex)
-          .abs();
+      final distance = (index + widget.messageStart - request.messageIndex).abs();
       if (distance < closestDistance) {
         closest = index;
         closestDistance = distance;
@@ -8775,7 +8797,9 @@ class _TranscriptViewState extends State<TranscriptView>
         final fraction = rows.length <= 1
             ? 0.0
             : targetRowIndex / (rows.length - 1);
-        nextOffset = position.maxScrollExtent * fraction;
+        nextOffset =
+            position.minScrollExtent +
+            (position.maxScrollExtent - position.minScrollExtent) * fraction;
       } else {
         final firstIndex = builtRows.first.index;
         final lastIndex = builtRows.last.index;
@@ -8792,7 +8816,9 @@ class _TranscriptViewState extends State<TranscriptView>
           final fraction = rows.length <= 1
               ? 0.0
               : targetRowIndex / (rows.length - 1);
-          nextOffset = position.maxScrollExtent * fraction;
+          nextOffset =
+              position.minScrollExtent +
+              (position.maxScrollExtent - position.minScrollExtent) * fraction;
         }
       }
 
@@ -8929,19 +8955,6 @@ class _TranscriptViewState extends State<TranscriptView>
     final echo = widget.onOpenWorkspaceChanges == null
         ? null
         : widget.workspaceChangeEcho;
-    final itemCount =
-        groupedRows.length +
-        widget.pendingPermissions.length +
-        (echo == null ? 0 : 1);
-    Object itemAt(int index) {
-      if (index < groupedRows.length) return groupedRows[index];
-      final permissionIndex = index - groupedRows.length;
-      if (permissionIndex < widget.pendingPermissions.length) {
-        return widget.pendingPermissions[permissionIndex];
-      }
-      return echo!;
-    }
-
     final streamingAssistantIndex =
         widget.running && lastAssistantIndex > lastUserIndex
         ? lastAssistantIndex
@@ -8954,10 +8967,297 @@ class _TranscriptViewState extends State<TranscriptView>
                 jump.generation != handledJumpGeneration
             ? resolveTargetRawIndex(jump)
             : null);
+    final displayRows = <Object>[];
+    for (final item in groupedRows) {
+      displayRows.add(item);
+      if (item is _ProcessGroupRow &&
+          usesLazyProcessRows(item, revealRawIndex: revealRawIndex)) {
+        final liveThought = item.running
+            ? item.rows
+                  .where(
+                    (row) =>
+                        row.message.activityKind == ActivityKind.thinking &&
+                        row.message.activityState == ActivityState.running,
+                  )
+                  .lastOrNull
+            : null;
+        for (final part in item.rows) {
+          if (part != liveThought) displayRows.add((item, part));
+        }
+        if (liveThought != null) displayRows.add((item, liveThought));
+      }
+    }
+    final itemCount =
+        displayRows.length +
+        widget.pendingPermissions.length +
+        (echo == null ? 0 : 1);
+    final earlierCount = displayRows.takeWhile((item) {
+      final index = switch (item) {
+        _ProcessGroupRow group => group.rawIndex,
+        (_ProcessGroupRow group, _VisibleTranscriptRow _) => group.rawIndex,
+        _ => (item as _VisibleTranscriptRow).rawIndex,
+      };
+      return index + widget.messageStart <
+          (transcriptCenterIndex ?? widget.messageStart);
+    }).length;
+    Object itemAt(int index) {
+      if (index < displayRows.length) return displayRows[index];
+      final permissionIndex = index - displayRows.length;
+      if (permissionIndex < widget.pendingPermissions.length) {
+        return widget.pendingPermissions[permissionIndex];
+      }
+      return echo!;
+    }
     final workspaceDir = widget.session?.workspaceDir;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     final newOutputLabel =
         '$unreadOutputCount 条新输出 · ${widget.running ? '仍在运行' : '已更新'}';
+    Widget buildRow(BuildContext context, int index) {
+      final item = itemAt(index);
+      Widget row;
+      int? rawIndex;
+      if (item is _VisibleTranscriptRow) {
+        rawIndex = item.rawIndex;
+        final highlighted = highlightedRawIndex == rawIndex;
+        row = MessageBlock(
+          key: ValueKey(
+            transcriptRowKey(item.message, rawIndex + widget.messageStart),
+          ),
+          message: item.message,
+          session: widget.session,
+          activeSessionId: widget.activeSessionId,
+          runStartedAt: widget.runStartedAt,
+          searchHighlighted: highlighted,
+          isStreaming: item.rawIndex == streamingAssistantIndex,
+          followsProcess:
+              index > 0 &&
+              (itemAt(index - 1) is _ProcessGroupRow ||
+                  itemAt(index - 1) is (_ProcessGroupRow, _VisibleTranscriptRow)),
+        );
+        row = messageEntrance(item.message, rawIndex, row);
+        if (highlighted) {
+          row = Semantics(
+            key: ValueKey('transcript-search-hit-$rawIndex'),
+            label: '搜索命中消息',
+            child: row,
+          );
+        }
+      } else if (item is _ProcessGroupRow) {
+        row = _TranscriptProcessBlock(
+          key: ValueKey(
+            'transcript-process-${item.rawIndex + widget.messageStart}',
+          ),
+          group: item,
+          revealRawIndex: revealRawIndex,
+          expanded: processExpanded(item, revealRawIndex: revealRawIndex),
+          headerOnly: usesLazyProcessRows(item, revealRawIndex: revealRawIndex),
+          onExpandedChanged: (next) => setState(() {
+            followingBottom = false;
+            processExpansion[(item.rawIndex + widget.messageStart, item.running)] =
+                next;
+          }),
+          buildPart: (part) {
+            final highlighted = highlightedRawIndex == part.rawIndex;
+            Widget child = MessageBlock(
+              key: ValueKey(
+                transcriptRowKey(
+                  part.message,
+                  part.rawIndex + widget.messageStart,
+                ),
+              ),
+              message: part.message,
+              session: widget.session,
+              activeSessionId: widget.activeSessionId,
+              runStartedAt: widget.runStartedAt,
+              searchHighlighted: highlighted,
+              isStreaming: part.rawIndex == streamingAssistantIndex,
+              secondary: true,
+            );
+            child = messageEntrance(part.message, part.rawIndex, child);
+            if (highlighted) {
+              child = Semantics(
+                key: ValueKey('transcript-search-hit-${part.rawIndex}'),
+                label: '搜索命中消息',
+                child: child,
+              );
+            }
+            return SizedBox(
+              key: rowKeys.putIfAbsent(part.rawIndex, GlobalKey.new),
+              child: child,
+            );
+          },
+        );
+      } else if (item is (_ProcessGroupRow, _VisibleTranscriptRow)) {
+        final (group, part) = item;
+        rawIndex = part.rawIndex;
+        final highlighted = highlightedRawIndex == rawIndex;
+        row = part.message.activityKind == ActivityKind.tool
+            ? _buildToolActivityRow(
+                context,
+                part.message,
+                running: group.running,
+                reveal: revealRawIndex == rawIndex,
+              )
+            : MessageBlock(
+                key: ValueKey(
+                  transcriptRowKey(part.message, rawIndex + widget.messageStart),
+                ),
+                message: part.message,
+                session: widget.session,
+                activeSessionId: widget.activeSessionId,
+                runStartedAt: widget.runStartedAt,
+                searchHighlighted: highlighted,
+                isStreaming: rawIndex == streamingAssistantIndex,
+                secondary: true,
+              );
+        row = messageEntrance(part.message, rawIndex, row);
+        if (highlighted) {
+          row = Semantics(
+            key: ValueKey('transcript-search-hit-$rawIndex'),
+            label: '搜索命中消息',
+            child: row,
+          );
+        }
+      } else if (item is WorkspaceChangeEcho) {
+        row = WorkspaceChangeEchoChip(
+          key: const ValueKey('workspace-change-echo'),
+          echo: item,
+          onTap: widget.onOpenWorkspaceChanges!,
+        );
+      } else {
+        final request = item as RemotePermissionRequest;
+        row = PermissionRequestCard(
+          key: ValueKey('perm-${request.requestId}'),
+          request: request,
+          responding: widget.respondingPermissionIds.contains(
+            request.requestId,
+          ),
+          connected: widget.connected,
+          workspaceDir: workspaceDir,
+          onAllow: () => widget.onPermissionAllow(request),
+          onDeny: () => widget.onPermissionDeny(request),
+        );
+        final fresh = widget.motion?.takePermission(request.requestId) ?? false;
+        row = SignalEntrance(
+          key: ValueKey('permission-entrance-${request.requestId}'),
+          animate:
+              fresh &&
+              followingBottom &&
+              widget.jumpRequest == null &&
+              widget.connected,
+          distance: 4,
+          child: row,
+        );
+      }
+      final process = switch (item) {
+        _ProcessGroupRow group => group,
+        (_ProcessGroupRow group, _VisibleTranscriptRow _) => group,
+        _ => null,
+      };
+      if (process != null) {
+        row = PageStorage(
+          key: ValueKey(widget.activeSessionId),
+          bucket: activityStorage.putIfAbsent(
+            process.rawIndex,
+            PageStorageBucket.new,
+          ),
+          child: row,
+        );
+      }
+
+      Object gapItem(Object value) {
+        if (value is _VisibleTranscriptRow) {
+          return value.message;
+        }
+        if (value is _ProcessGroupRow) {
+          return value.message;
+        }
+        if (value is (_ProcessGroupRow, _VisibleTranscriptRow)) {
+          return value.$1.message;
+        }
+        return value;
+      }
+
+      final nextItem = index + 1 < itemCount ? itemAt(index + 1) : null;
+      final attachedReply =
+          process != null &&
+          nextItem is _VisibleTranscriptRow &&
+          nextItem.message.role == MessageRole.assistant;
+      final gap = nextItem == null || attachedReply
+          ? 0.0
+          : nextItem is (_ProcessGroupRow, _VisibleTranscriptRow) &&
+              identical(process, nextItem.$1)
+          ? 2.0
+          : transcriptGapBetween(gapItem(item), gapItem(nextItem));
+      // Spacing without ListView.separated (one less child per gap).
+      final paddedRow = Padding(
+        padding: EdgeInsets.only(bottom: gap),
+        child: row,
+      );
+      final child = rawIndex == null
+          ? paddedRow
+          : SizedBox(
+              key: rowKeys.putIfAbsent(rawIndex, GlobalKey.new),
+              child: paddedRow,
+            );
+      final readingIndex = item is _ProcessGroupRow
+          ? (usesLazyProcessRows(item, revealRawIndex: revealRawIndex)
+                ? null
+                : item.rawIndex)
+          : rawIndex;
+      if (readingIndex == null) return child;
+      return SizedBox(
+        key: readingRowKeys.putIfAbsent(readingIndex, GlobalKey.new),
+        child: child,
+      );
+    }
+
+    final slivers = <Widget>[
+      // History grows above the center without moving existing rows.
+      for (final earlier in [true, false])
+        SliverPadding(
+          key: earlier ? null : transcriptCenterKey,
+          padding: earlier
+              ? EdgeInsets.only(top: widget.topPadding)
+              : const EdgeInsets.only(bottom: 188),
+          sliver: SliverList(
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                if (earlier) {
+                  if (index == earlierCount) {
+                    return TextButton(
+                      key: const ValueKey('transcript-load-earlier'),
+                      onPressed: widget.historyLoading
+                          ? null
+                          : widget.onLoadEarlier,
+                      child: Text(
+                        widget.historyLoading
+                            ? '正在读取更早消息'
+                            : widget.historyFailed
+                            ? '读取失败，点击重试'
+                            : '查看更早消息',
+                      ),
+                    );
+                  }
+                  index = earlierCount - 1 - index;
+                } else {
+                  index += earlierCount;
+                }
+                return buildRow(context, index);
+              },
+              childCount: earlier
+                  ? earlierCount + (widget.onLoadEarlier == null ? 0 : 1)
+                  : itemCount - earlierCount,
+              addAutomaticKeepAlives: false,
+              addRepaintBoundaries: true,
+              semanticIndexCallback: (_, index) => earlier
+                  ? (index < earlierCount ? earlierCount - 1 - index : null)
+                  : earlierCount + index,
+            ),
+          ),
+        ),
+    ];
+
     return Stack(
       children: [
         Positioned.fill(
@@ -8968,10 +9268,8 @@ class _TranscriptViewState extends State<TranscriptView>
               onNotification: (notification) {
                 if (notification.direction == ScrollDirection.forward &&
                     scrollController.hasClients &&
-                    scrollController.position.extentBefore <=
-                        widget.topPadding + 100 &&
-                    !widget.historyLoading &&
-                    !widget.historyFailed) {
+                    scrollController.position.extentBefore <= widget.topPadding + 100 &&
+                    !widget.historyLoading && !widget.historyFailed) {
                   widget.onLoadEarlier?.call();
                 }
                 if (notification.direction != ScrollDirection.idle &&
@@ -8981,190 +9279,25 @@ class _TranscriptViewState extends State<TranscriptView>
                 }
                 return false;
               },
-              child: ListView.builder(
-                key: const ValueKey('transcript-list'),
-                controller: scrollController,
-                physics: widget.onLoadEarlier == null
-                    ? null
-                    : const AlwaysScrollableScrollPhysics(),
-                // Tall bottom padding: last bubble can rest above the dock, while
-                // earlier lines still scroll *under* the floating composer.
-                padding: EdgeInsets.fromLTRB(0, widget.topPadding, 0, 188),
-                // Keep prefetch small so long markdown rows are not all built at once.
-                cacheExtent: 180,
-                addAutomaticKeepAlives: false,
-                addRepaintBoundaries: true,
-                itemCount: itemCount + (widget.onLoadEarlier == null ? 0 : 1),
-                itemBuilder: (context, index) {
-                  if (widget.onLoadEarlier != null) {
-                    if (index == 0) {
-                      return TextButton(
-                        key: const ValueKey('transcript-load-earlier'),
-                        onPressed: widget.historyLoading
-                            ? null
-                            : widget.onLoadEarlier,
-                        child: Text(
-                          widget.historyLoading
-                              ? '正在读取更早消息'
-                              : widget.historyFailed
-                              ? '读取失败，点击重试'
-                              : '查看更早消息',
-                        ),
-                      );
-                    }
-                    index--;
-                  }
-                  final item = itemAt(index);
-                  Widget row;
-                  int? rawIndex;
-                  if (item is _VisibleTranscriptRow) {
-                    rawIndex = item.rawIndex;
-                    final highlighted = highlightedRawIndex == rawIndex;
-                    row = MessageBlock(
-                      key: ValueKey(transcriptRowKey(item.message, rawIndex)),
-                      message: item.message,
-                      session: widget.session,
-                      activeSessionId: widget.activeSessionId,
-                      runStartedAt: widget.runStartedAt,
-                      searchHighlighted: highlighted,
-                      isStreaming: item.rawIndex == streamingAssistantIndex,
-                      followsProcess:
-                          index > 0 && itemAt(index - 1) is _ProcessGroupRow,
-                    );
-                    row = messageEntrance(item.message, rawIndex, row);
-                    if (highlighted) {
-                      row = Semantics(
-                        key: ValueKey('transcript-search-hit-$rawIndex'),
-                        label: '搜索命中消息',
-                        child: row,
-                      );
-                    }
-                  } else if (item is _ProcessGroupRow) {
-                    row = _TranscriptProcessBlock(
-                      key: ValueKey('transcript-process-${item.rawIndex}'),
-                      group: item,
-                      revealRawIndex: revealRawIndex,
-                      buildPart: (part) {
-                        final highlighted =
-                            highlightedRawIndex == part.rawIndex;
-                        Widget child = MessageBlock(
-                          key: ValueKey(
-                            transcriptRowKey(part.message, part.rawIndex),
-                          ),
-                          message: part.message,
-                          session: widget.session,
-                          activeSessionId: widget.activeSessionId,
-                          runStartedAt: widget.runStartedAt,
-                          searchHighlighted: highlighted,
-                          isStreaming: part.rawIndex == streamingAssistantIndex,
-                          secondary: true,
-                        );
-                        child = messageEntrance(
-                          part.message,
-                          part.rawIndex,
-                          child,
-                        );
-                        if (highlighted) {
-                          child = Semantics(
-                            key: ValueKey(
-                              'transcript-search-hit-${part.rawIndex}',
-                            ),
-                            label: '搜索命中消息',
-                            child: child,
-                          );
-                        }
-                        return SizedBox(
-                          key: rowKeys.putIfAbsent(
-                            part.rawIndex,
-                            GlobalKey.new,
-                          ),
-                          child: child,
-                        );
-                      },
-                    );
-                  } else if (item is WorkspaceChangeEcho) {
-                    row = WorkspaceChangeEchoChip(
-                      key: const ValueKey('workspace-change-echo'),
-                      echo: item,
-                      onTap: widget.onOpenWorkspaceChanges!,
-                    );
-                  } else {
-                    final request = item as RemotePermissionRequest;
-                    row = PermissionRequestCard(
-                      key: ValueKey('perm-${request.requestId}'),
-                      request: request,
-                      responding: widget.respondingPermissionIds.contains(
-                        request.requestId,
-                      ),
-                      connected: widget.connected,
-                      workspaceDir: workspaceDir,
-                      onAllow: () => widget.onPermissionAllow(request),
-                      onDeny: () => widget.onPermissionDeny(request),
-                    );
-                    final fresh =
-                        widget.motion?.takePermission(request.requestId) ??
-                        false;
-                    row = SignalEntrance(
-                      key: ValueKey('permission-entrance-${request.requestId}'),
-                      animate:
-                          fresh &&
-                          followingBottom &&
-                          widget.jumpRequest == null &&
-                          widget.connected,
-                      distance: 4,
-                      child: row,
-                    );
-                  }
-                  if (item is _ProcessGroupRow) {
-                    row = PageStorage(
-                      key: ValueKey(widget.activeSessionId),
-                      bucket: activityStorage.putIfAbsent(
-                        item.rawIndex,
-                        PageStorageBucket.new,
-                      ),
-                      child: row,
-                    );
-                  }
-
-                  Object gapItem(Object value) {
-                    if (value is _VisibleTranscriptRow) return value.message;
-                    if (value is _ProcessGroupRow) return value.message;
-                    return value;
-                  }
-
-                  final nextItem = index + 1 < itemCount
-                      ? itemAt(index + 1)
-                      : null;
-                  final attachedReply =
-                      item is _ProcessGroupRow &&
-                      nextItem is _VisibleTranscriptRow &&
-                      nextItem.message.role == MessageRole.assistant;
-                  final gap = nextItem == null || attachedReply
-                      ? 0.0
-                      : transcriptGapBetween(gapItem(item), gapItem(nextItem));
-                  // Spacing without ListView.separated (one less child per gap).
-                  final paddedRow = Padding(
-                    padding: EdgeInsets.only(bottom: gap),
-                    child: row,
-                  );
-                  final child = rawIndex == null
-                      ? paddedRow
-                      : SizedBox(
-                          key: rowKeys.putIfAbsent(rawIndex, GlobalKey.new),
-                          child: paddedRow,
-                        );
-                  final readingIndex = item is _ProcessGroupRow
-                      ? item.rawIndex
-                      : rawIndex;
-                  if (readingIndex == null) return child;
-                  return SizedBox(
-                    key: readingRowKeys.putIfAbsent(
-                      readingIndex,
-                      GlobalKey.new,
-                    ),
-                    child: child,
-                  );
-                },
+              child: LayoutBuilder(
+                builder: (context, constraints) => CustomScrollView(
+                  key: const ValueKey('transcript-list'),
+                  controller: scrollController,
+                  center: transcriptCenterKey,
+                  semanticChildCount: itemCount,
+                  anchor: constraints.maxHeight > 0
+                      ? (widget.topPadding / constraints.maxHeight).clamp(
+                          0.0,
+                          1.0,
+                        )
+                      : 0,
+                  physics: widget.onLoadEarlier == null
+                      ? null
+                      : const AlwaysScrollableScrollPhysics(),
+                  // Keep prefetch small so long markdown rows are not all built at once.
+                  cacheExtent: 180,
+                  slivers: slivers,
+                ),
               ),
             ),
           ),
@@ -10627,39 +10760,13 @@ class MessageBlock extends StatelessWidget {
           child: DecoratedBox(
             key: const ValueKey('user-message'),
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  searchHighlighted
-                      ? transcriptSearchHighlightFill(
-                          AppPalette.of(context).userBubble,
-                          accent: AppPalette.of(context).accent,
-                        )
-                      : AppPalette.of(context).userBubble,
-                  Color.alphaBlend(
-                    AppPalette.of(context).glassHighlight.withValues(
-                      alpha: AppPalette.of(context).glassHighlight.a * 0.16,
-                    ),
-                    searchHighlighted
-                        ? transcriptSearchHighlightFill(
-                            AppPalette.of(context).userBubble,
-                            accent: AppPalette.of(context).accent,
-                          )
-                        : AppPalette.of(context).userBubble,
-                  ),
-                ],
-              ),
-              border: Border.all(
-                color: AppPalette.of(context).bubbleOutline,
-                width: 0.6,
-              ),
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(AppRadii.bubble),
-                topRight: Radius.circular(AppRadii.bubble),
-                bottomLeft: Radius.circular(AppRadii.bubble),
-                bottomRight: Radius.circular(AppRadii.control),
-              ),
+              color: searchHighlighted
+                  ? transcriptSearchHighlightFill(
+                      AppPalette.of(context).userBubble,
+                      accent: AppPalette.of(context).accent,
+                    )
+                  : AppPalette.of(context).userBubble,
+              borderRadius: BorderRadius.circular(22),
             ),
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 11, 16, 11),
@@ -10707,7 +10814,9 @@ class _CachedMarkdownBody extends StatefulWidget {
 }
 
 class _CachedMarkdownBodyState extends State<_CachedMarkdownBody> {
-  static const streamRenderInterval = Duration(milliseconds: 160);
+  Duration get streamRenderInterval => Duration(
+    milliseconds: widget.data.length >= 16000 ? 400 : 160,
+  );
   Widget? cached;
   Timer? streamRenderTimer;
   String? renderedMarkdownData;
@@ -11178,7 +11287,7 @@ String createPromptId() {
 IconData activityToolIconData(String? toolName, {bool isSkill = false}) {
   return switch (toolName) {
     'Skill' => LucideIcons.sparkles,
-    'Bash' || 'Shell' => LucideIcons.terminal,
+    'Bash' => LucideIcons.terminal,
     'Read' || 'Write' || 'Edit' || 'FileChange' => LucideIcons.fileCode,
     'WebSearch' || 'WebFetch' => LucideIcons.globe,
     'Grep' || 'Glob' => LucideIcons.search,
@@ -11188,7 +11297,6 @@ IconData activityToolIconData(String? toolName, {bool isSkill = false}) {
 }
 
 Widget buildActivityIcon(TranscriptMessage activity, BuildContext context) {
-  final palette = AppPalette.of(context);
   final state = activity.activityState;
   final tool = activity.activityTool;
   final isSkill =
@@ -11197,29 +11305,78 @@ Widget buildActivityIcon(TranscriptMessage activity, BuildContext context) {
       activity.text.contains('技能');
 
   if (state == ActivityState.running) {
-    return ActivityIconBadge(
-      child: SizedBox.square(
-        dimension: AppIconSizes.control,
-        child: CircularProgressIndicator(
-          strokeWidth: 1.8,
-          value: MediaQuery.disableAnimationsOf(context) ? 0.65 : null,
-          color: palette.iconAccent,
+    return Container(
+      width: 20,
+      height: 20,
+      decoration: BoxDecoration(
+        color: AppPalette.of(context).accentSoft,
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: SizedBox.square(
+          dimension: AppIconSizes.badge,
+          child: CircularProgressIndicator(
+            strokeWidth: 1.8,
+            value: MediaQuery.disableAnimationsOf(context) ? 0.65 : null,
+            color: AppPalette.of(context).accent,
+          ),
         ),
       ),
     );
   }
 
-  final icon = switch (state) {
-    ActivityState.error => LucideIcons.circleAlert,
-    ActivityState.stopped => LucideIcons.square,
-    _ => activityToolIconData(tool, isSkill: isSkill),
-  };
-  final color = switch (state) {
-    ActivityState.error => palette.danger,
-    ActivityState.stopped => palette.warning,
-    _ => isSkill ? palette.warning : palette.iconAccent,
-  };
-  return ActivityIconBadge(color: color, child: Icon(icon));
+  if (state == ActivityState.error) {
+    return Container(
+      width: 20,
+      height: 20,
+      decoration: BoxDecoration(
+        color: AppPalette.of(context).danger.withValues(alpha: 0.12),
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: SmartIcon(
+          LucideIcons.circleAlert,
+          size: AppIconSizes.badge,
+          color: AppPalette.of(context).danger,
+        ),
+      ),
+    );
+  }
+
+  if (state == ActivityState.stopped) {
+    return Container(
+      width: 20,
+      height: 20,
+      decoration: BoxDecoration(
+        color: AppPalette.of(context).control,
+        shape: BoxShape.circle,
+      ),
+      child: Center(
+        child: SmartIcon(
+          LucideIcons.square,
+          size: AppIconSizes.badge,
+          color: AppPalette.of(context).muted,
+        ),
+      ),
+    );
+  }
+
+  final iconData = activityToolIconData(tool, isSkill: isSkill);
+  final badgeColor = AppPalette.of(context).control;
+  final iconColor = AppPalette.of(context).muted;
+
+  return Container(
+    width: 20,
+    height: 20,
+    decoration: BoxDecoration(color: badgeColor, shape: BoxShape.circle),
+    child: Center(
+      child: SmartIcon(
+        iconData,
+        size: AppIconSizes.badge,
+        color: iconColor,
+      ),
+    ),
+  );
 }
 
 Widget buildActivityTitle(TranscriptMessage activity, BuildContext context) {
@@ -11246,7 +11403,7 @@ Widget buildActivityTitle(TranscriptMessage activity, BuildContext context) {
           style: TextStyle(
             color: isError
                 ? AppPalette.of(context).danger
-                : AppPalette.of(context).messageMuted,
+                : AppPalette.of(context).muted,
             fontSize: AppTypography.activityBodySize,
             fontWeight: FontWeight.w400,
             height: 1.35,
@@ -11271,7 +11428,7 @@ Widget buildActivityTitle(TranscriptMessage activity, BuildContext context) {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                fontSize: 13,
+                fontSize: 11,
                 fontFamily: AppTypography.codeFontFamily,
                 fontFamilyFallback: AppTypography.codeFontFamilyFallback,
                 fontWeight: FontWeight.w600,
@@ -11368,10 +11525,7 @@ class ActivityBlock extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(4, 5, 5, 5),
           child: Row(
             children: [
-              SizedBox(
-                width: ActivityIconBadge.size,
-                child: Center(child: icon),
-              ),
+              SizedBox(width: 22, child: Center(child: icon)),
               const SizedBox(width: 6),
               Expanded(child: title),
             ],
@@ -11397,10 +11551,7 @@ class ActivityBlock extends StatelessWidget {
             visualDensity: VisualDensity.compact,
             tilePadding: const EdgeInsets.symmetric(horizontal: 12),
             childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-            leading: SizedBox(
-              width: ActivityIconBadge.size,
-              child: Center(child: icon),
-            ),
+            leading: SizedBox(width: 20, child: Center(child: icon)),
             title: title,
             subtitle: Text(
               detail,
@@ -11449,6 +11600,21 @@ class ActivityBlock extends StatelessWidget {
     );
   }
 }
+
+Widget _buildToolActivityRow(
+  BuildContext context,
+  TranscriptMessage activity, {
+  required bool running,
+  bool reveal = false,
+}) => ToolActivityDetail(
+  key: ValueKey('tool-inline-${activity.activityId}'),
+  activity: activity,
+  title: activityToolTitle(activity),
+  titleWidget: buildActivityTitle(activity, context),
+  leading: buildActivityIcon(activity, context),
+  reveal: reveal,
+  running: running && activity.activityState == ActivityState.running,
+);
 
 class ActivityTimelineCard extends StatefulWidget {
   const ActivityTimelineCard({
@@ -11512,9 +11678,7 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
 
   Object get expansionStorageId => (
     'activity-timeline-expanded',
-    widget.contentBuilder == null
-        ? widget.activities.firstOrNull?.activityId
-        : null,
+    widget.contentBuilder == null ? widget.activities.firstOrNull?.activityId : null,
   );
 
   void restoreExpansion() {
@@ -11616,16 +11780,13 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
           (activity) => activity.activityState == ActivityState.running,
         );
     final isExpanded = widget.expanded ?? expanded;
-    Widget buildToolRow(TranscriptMessage activity) => ToolActivityDetail(
-      key: ValueKey('tool-inline-${activity.activityId}'),
-      activity: activity,
-      title: activityToolTitle(activity),
-      titleWidget: buildActivityTitle(activity, context),
-      leading: buildActivityIcon(activity, context),
+    Widget buildToolRow(TranscriptMessage activity) => _buildToolActivityRow(
+      context,
+      activity,
       reveal:
           activity.activityId == widget.revealActivityId &&
           widget.revealActivityId != null,
-      running: running && activity.activityState == ActivityState.running,
+      running: running,
     );
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1),
@@ -11636,12 +11797,11 @@ class _ActivityTimelineCardState extends State<ActivityTimelineCard> {
           ActivityDisclosure(
             expanded: isExpanded,
             title: displayedTitle,
-            leading: ActivityIconBadge(
-              child: Icon(
-                widget.contentBuilder == null
-                    ? LucideIcons.wrench
-                    : LucideIcons.activity,
-              ),
+            leading: SmartIcon(
+              widget.contentBuilder == null
+                  ? LucideIcons.wrench
+                  : LucideIcons.activity,
+              size: AppIconSizes.inline,
             ),
             compact: true,
             running: running,
@@ -11767,6 +11927,10 @@ class PromptBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return ChatIconTheme(child: Builder(builder: _build));
+  }
+
+  Widget _build(BuildContext context) {
     final keyboardVisible = MediaQuery.viewInsetsOf(context).bottom > 0;
     final composerRadius = BorderRadius.vertical(
       top: const Radius.circular(AppRadii.composerFloat),
@@ -11787,15 +11951,10 @@ class PromptBar extends StatelessWidget {
       return Semantics(
         button: true,
         label: '重新连接电脑',
-        child: SignalLiquidGlass(
+        child: ChatGlass(
           key: const ValueKey('composer'),
-          lens: true,
-          blurSigma: 16,
-          decoration: AppLiquidGlass.lens(
-            context: context,
-            borderRadius: composerRadius,
-            elevated: composerElevated,
-          ).copyWith(color: AppPalette.of(context).surface),
+          shape: RoundedSuperellipseBorder(borderRadius: composerRadius),
+          elevated: composerElevated,
           child: Material(
             color: Colors.transparent,
             child: InkWell(
@@ -11896,16 +12055,13 @@ class PromptBar extends StatelessWidget {
                     );
                   },
                 ),
-                SignalLiquidGlass(
+                ChatGlass(
                   key: const ValueKey('composer'),
-                  lens: true,
-                  blurSigma: 16,
-                  decoration: AppLiquidGlass.lens(
-                    context: context,
+                  shape: RoundedSuperellipseBorder(
                     borderRadius: composerRadius,
-                    focused: composerFocused,
-                    elevated: composerElevated,
-                  ).copyWith(color: AppPalette.of(context).surface),
+                  ),
+                  focused: composerFocused,
+                  elevated: composerElevated,
                   child: Container(
                     constraints: const BoxConstraints(
                       minHeight: AppSizes.composer,
@@ -12358,8 +12514,6 @@ class _ComposerGlassIconButton extends StatelessWidget {
     required this.tooltip,
     required this.onPressed,
     required this.child,
-    this.filled = false,
-    this.lens = false,
   });
 
   final Key? buttonKey;
@@ -12367,8 +12521,6 @@ class _ComposerGlassIconButton extends StatelessWidget {
   final String tooltip;
   final VoidCallback? onPressed;
   final Widget child;
-  final bool filled;
-  final bool lens;
 
   @override
   Widget build(BuildContext context) {
@@ -12384,18 +12536,14 @@ class _ComposerGlassIconButton extends StatelessWidget {
           icon: SignalAnimatedSurface(
             key: visualKey,
             duration: appPressAnimationDuration(context, pressed),
-            decoration: lens && (filled || pressed)
-                ? AppLiquidGlass.lensControl(context: context, pressed: pressed)
-                : BoxDecoration(
-                    color: pressed
-                        ? AppPalette.of(context).composerControlPressed
-                        : filled
-                        ? AppPalette.of(context).glassControl
-                        : Colors.transparent,
-                    shape: BoxShape.circle,
-                  ),
+            decoration: BoxDecoration(
+              color: pressed
+                  ? AppPalette.of(context).composerControlPressed
+                  : Colors.transparent,
+              shape: BoxShape.circle,
+            ),
             child: SizedBox.square(
-              dimension: filled ? 34 : AppSizes.iconControl,
+              dimension: AppSizes.iconControl,
               child: Center(child: child),
             ),
           ),
@@ -12422,14 +12570,12 @@ class _ComposerIconButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final enabled = onPressed != null;
     return _ComposerGlassIconButton(
-      filled: true,
-      lens: true,
       visualKey: const ValueKey('composer-expand-visual'),
       tooltip: tooltip,
       onPressed: onPressed,
       child: SmartIcon(
         icon,
-        size: 18,
+        size: 20,
         color: enabled
             ? AppPalette.of(context).composerControlInk
             : AppPalette.of(context).inactive,
@@ -12494,7 +12640,6 @@ class _ComposerModelButton extends StatelessWidget {
         : selectedModel.label;
     return _ComposerGlassIconButton(
       buttonKey: const ValueKey('composer-model-button'),
-      lens: true,
       visualKey: const ValueKey('composer-model-visual'),
       tooltip: '选择模型：$label',
       onPressed: onPressed == null ? null : () => onPressed!(context),
@@ -12504,8 +12649,8 @@ class _ComposerModelButton extends StatelessWidget {
           engine == SessionEngine.codex
               ? 'assets/brands/openai-mark.png'
               : 'assets/brands/claude-mark.png',
-          width: AppIconSizes.primary,
-          height: AppIconSizes.primary,
+          width: 21,
+          height: 21,
           color: engine == SessionEngine.codex
               ? AppPalette.of(context).composerControlInk
               : null,
@@ -12535,16 +12680,15 @@ class _ComposerPermissionButton extends StatelessWidget {
     final danger =
         mode == PermissionMode.bypassPermissions ||
         sandboxMode == CodexSandboxMode.dangerFullAccess;
-    final icon = sandboxMode?.icon ?? mode?.icon ?? LucideIcons.shield;
+    final icon = danger ? LucideIcons.shieldAlert : LucideIcons.shieldCheck;
     final label = sandboxMode?.label ?? mode?.label ?? '权限';
     final ink = !enabled
         ? AppPalette.of(context).inactive
         : danger
         ? AppPalette.of(context).stop
-        : AppPalette.of(context).composerControlInk;
+        : AppPalette.of(context).success;
     return _ComposerGlassIconButton(
       buttonKey: const ValueKey('permission-mode-chip'),
-      lens: true,
       visualKey: const ValueKey('permission-mode-visual'),
       tooltip: '访问权限：$label',
       onPressed: enabled ? () => onPressed(context) : null,
@@ -12788,7 +12932,6 @@ Future<void> showPermissionModePicker(
     lens: true,
     scrollContent: false,
     builder: (sheetContext) => ConversationOptionSheet<PermissionMode>(
-      lens: true,
       title: 'Claude Code 权限模式',
       detail: '决定文件修改和命令执行是否需要确认。',
       selected: selected,
@@ -12856,7 +12999,6 @@ Future<void> showCodexSandboxModePicker(
     lens: true,
     scrollContent: false,
     builder: (sheetContext) => ConversationOptionSheet<CodexSandboxMode>(
-      lens: true,
       title: 'Codex 沙箱模式',
       detail: '所选模式在当前对话沿用。Codex 执行中不会弹出权限审批。',
       selected: selected,
@@ -13153,18 +13295,15 @@ class AppBackground extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final palette = AppPalette.of(context);
     return Scaffold(
       resizeToAvoidBottomInset: false,
-      backgroundColor: AppPalette.of(context).paper,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          DecoratedBox(
-            key: const ValueKey('chat-background-layer'),
-            decoration: BoxDecoration(color: AppPalette.of(context).paper),
-          ),
-          _KeyboardResizeBody(child: BackdropGroup(child: child)),
-        ],
+      backgroundColor: palette.paper,
+      body: ChatBackdrop(
+        key: const ValueKey('chat-background-layer'),
+        child: RepaintBoundary(
+          child: _KeyboardResizeBody(child: BackdropGroup(child: child)),
+        ),
       ),
     );
   }
@@ -13254,8 +13393,7 @@ Future<T?> showAppOptionPicker<T>(
   );
 }
 
-/// Shared dialog shell: the same overlay shadow as sheets, so every modal layer
-/// reads as floating at one depth. AlertDialog's own elevation stays at 0.
+/// 对话框与选择弹层共用外框，长内容可滚动。
 class AppDialog extends StatelessWidget {
   const AppDialog({
     super.key,
@@ -13276,57 +13414,57 @@ class AppDialog extends StatelessWidget {
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
-      child: Container(
-        constraints: const BoxConstraints(maxWidth: 560),
-        decoration: BoxDecoration(
-          color: palette.surface,
-          borderRadius: BorderRadius.circular(AppRadii.surface),
-          border: Border.all(color: palette.glassHighlight, width: 0.5),
-          boxShadow: AppElevation.overlay(context: context),
+      child: ChatGlass(
+        translucent: false,
+        shape: const RoundedSuperellipseBorder(
+          borderRadius: BorderRadius.all(Radius.circular(AppRadii.overlay)),
         ),
-        padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
-        // Scrollable so long copy and large text never overflow a short screen;
-        // AlertDialog did this for us before the shadow change.
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Semantics(
-                header: true,
-                child: DefaultTextStyle.merge(
-                  style: TextStyle(
-                    color: palette.ink,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w700,
-                    height: 1.3,
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 560),
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 14),
+          // Scrollable so long copy and large text never overflow a short screen;
+          // AlertDialog did this for us before the shadow change.
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Semantics(
+                  header: true,
+                  child: DefaultTextStyle.merge(
+                    style: TextStyle(
+                      color: palette.ink,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                      height: 1.3,
+                    ),
+                    child: title,
                   ),
-                  child: title,
                 ),
-              ),
-              if (content != null) ...[
-                const SizedBox(height: 12),
-                DefaultTextStyle.merge(
-                  style: TextStyle(
-                    color: palette.muted,
-                    fontSize: 14,
-                    height: 1.45,
+                if (content != null) ...[
+                  const SizedBox(height: 12),
+                  DefaultTextStyle.merge(
+                    style: TextStyle(
+                      color: palette.muted,
+                      fontSize: 14,
+                      height: 1.45,
+                    ),
+                    child: content!,
                   ),
-                  child: content!,
-                ),
+                ],
+                if (actions.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  // OverflowBar stacks the buttons vertically when large text
+                  // makes them wider than the dialog, instead of clipping.
+                  OverflowBar(
+                    alignment: MainAxisAlignment.end,
+                    spacing: 8,
+                    overflowSpacing: 8,
+                    children: actions,
+                  ),
+                ],
               ],
-              if (actions.isNotEmpty) ...[
-                const SizedBox(height: 12),
-                // OverflowBar stacks the buttons vertically when large text
-                // makes them wider than the dialog, instead of clipping.
-                OverflowBar(
-                  alignment: MainAxisAlignment.end,
-                  spacing: 8,
-                  overflowSpacing: 8,
-                  children: actions,
-                ),
-              ],
-            ],
+            ),
           ),
         ),
       ),
@@ -13339,7 +13477,7 @@ class AppSheetSurface extends StatelessWidget {
     super.key,
     required this.child,
     this.padding = const EdgeInsets.all(16),
-    this.radius = AppRadii.panel,
+    this.radius = AppRadii.overlay,
     this.borderRadius,
     this.lens = false,
   });
@@ -13353,33 +13491,25 @@ class AppSheetSurface extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final effectiveBorderRadius = borderRadius ?? BorderRadius.circular(radius);
-    if (lens) {
-      return SignalLiquidGlass(
-        lens: true,
-        blurSigma: 20,
-        decoration: AppLiquidGlass.lens(
-          context: context,
-          borderRadius: effectiveBorderRadius,
-        ),
+    final content = Material(
+        type: MaterialType.transparency,
         child: Padding(
           padding: padding,
           child: SizedBox(width: double.infinity, child: child),
         ),
-      );
-    }
-    return Container(
-      decoration: AppLiquidGlass.strong(
-        context: context,
-        borderRadius: effectiveBorderRadius,
-        shadow: AppElevation.overlay(context: context),
-      ),
-      child: ClipRRect(
-        borderRadius: effectiveBorderRadius,
-        child: Padding(
-          padding: padding,
-          child: SizedBox(width: double.infinity, child: child),
-        ),
-      ),
+    );
+    Widget surface(bool settled, Widget content) => ChatGlass(
+      translucent: lens && settled,
+      fillOpacity: 0.94,
+      shape: RoundedSuperellipseBorder(borderRadius: effectiveBorderRadius),
+      child: content,
+    );
+    final animation = ModalRoute.of(context)?.animation;
+    if (!lens || animation == null) return surface(true, content);
+    return AnimatedBuilder(
+      animation: animation,
+      child: content,
+      builder: (context, child) => surface(animation.isCompleted, child!),
     );
   }
 }
@@ -13678,6 +13808,9 @@ class TokenStore {
   }
 }
 
+String _encodeTranscriptSnapshot(TranscriptSnapshot snapshot) =>
+    jsonEncode(snapshot.toJson());
+
 class TranscriptStore {
   TranscriptStore({FlutterSecureStorage? storage})
     : storage = storage ?? const FlutterSecureStorage();
@@ -13713,7 +13846,23 @@ class TranscriptStore {
       _pendingSnapshot = null;
       _snapshotWriteQueued = false;
       if (latest != null) {
-        await storage.write(key: key, value: jsonEncode(latest.toJson()));
+        var characters = 0;
+        var large = latest.messages.length >= 200;
+        for (final message in latest.messages) {
+          if (large) break;
+          characters +=
+              message.text.length + (message.activityDetail?.length ?? 0);
+          large = characters >= 64000;
+        }
+        final raw = large
+            ? await compute(
+                _encodeTranscriptSnapshot,
+                latest,
+                debugLabel: 'transcript encoding',
+              )
+            : _encodeTranscriptSnapshot(latest);
+        if (generation != _generation) return;
+        await storage.write(key: key, value: raw);
       }
     });
   }

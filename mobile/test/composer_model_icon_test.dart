@@ -63,7 +63,7 @@ void main() {
                 : isNull,
           );
           expect(image.excludeFromSemantics, isTrue);
-          expect(tester.getSize(imageFinder), const Size.square(24));
+          expect(tester.getSize(imageFinder), const Size.square(21));
           expect(tester.getSize(button), const Size.square(48));
           final opacity = tester.widget<Opacity>(
             find.descendant(of: button, matching: find.byType(Opacity)).last,

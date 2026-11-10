@@ -5,38 +5,12 @@ import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import 'signal_console_theme.dart';
 
-// Keep the 2s text sweep consistent across thinking and tool rows.
+// Cherry Studio mobile: text-led status rows, adjacent chevrons, a 2s glyph
+// sweep, and natural disclosure layout.
 class ActivityMotion {
   static const fast = Duration(milliseconds: 200);
   static const shimmer = Duration(milliseconds: 2000);
   static const settle = Cubic(0.22, 1, 0.36, 1);
-}
-
-class ActivityIconBadge extends StatelessWidget {
-  const ActivityIconBadge({super.key, required this.child, this.color});
-
-  static const size = 28.0;
-  static const contentInset = size + 10;
-
-  final Widget child;
-  final Color? color;
-
-  @override
-  Widget build(BuildContext context) {
-    final tone = color ?? AppPalette.of(context).iconAccent;
-    return Container(
-      width: size,
-      height: size,
-      decoration: BoxDecoration(
-        color: tone.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: IconTheme(
-        data: IconThemeData(color: tone, size: AppIconSizes.control),
-        child: Center(child: child),
-      ),
-    );
-  }
 }
 
 class ActivityDisclosure extends StatefulWidget {
@@ -176,13 +150,13 @@ class ActivityStatusRow extends StatelessWidget {
   final VoidCallback? onTap;
   final String? semanticLabel;
 
-  /// Full-width process targets grow with large text.
+  /// Full-width process targets use a 32dp minimum and grow with large text.
   final bool compact;
 
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
-    final color = tone ?? palette.messageMuted;
+    final color = tone ?? palette.muted;
     return Material(
       color: Colors.transparent,
       child: Semantics(
@@ -202,7 +176,7 @@ class ActivityStatusRow extends StatelessWidget {
           borderRadius: BorderRadius.circular(AppRadii.compact),
           child: ConstrainedBox(
             constraints: BoxConstraints(
-              minHeight: compact ? 40 : AppSizes.touchTarget,
+              minHeight: compact ? 32 : AppSizes.touchTarget,
             ),
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 4),
@@ -211,20 +185,41 @@ class ActivityStatusRow extends StatelessWidget {
                   children: [
                     if (leading != null) ...[
                       SizedBox.square(
-                        dimension: ActivityIconBadge.size,
+                        dimension: 24,
                         child: Center(child: leading),
                       ),
-                      const SizedBox(width: 10),
+                      const SizedBox(width: 8),
                     ],
                     Expanded(
-                      child:
-                          titleWidget ??
-                          ActivityShimmerText(
-                            title,
-                            key: titleKey,
-                            active: running,
-                            color: color,
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child:
+                                titleWidget ??
+                                ActivityShimmerText(
+                                  title,
+                                  key: titleKey,
+                                  active: running,
+                                  color: color,
+                                ),
                           ),
+                          if (onTap != null) ...[
+                            const SizedBox(width: 6),
+                            AnimatedRotation(
+                              turns: expanded == true ? 0.25 : 0,
+                              duration: MediaQuery.disableAnimationsOf(context)
+                                  ? Duration.zero
+                                  : ActivityMotion.fast,
+                              curve: ActivityMotion.settle,
+                              child: Icon(
+                                LucideIcons.chevronRight,
+                                size: AppIconSizes.badge,
+                                color: color,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
                     ),
                     if (statusText != null) ...[
                       const SizedBox(width: 8),
@@ -238,24 +233,9 @@ class ActivityStatusRow extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: color,
-                            fontSize: 13,
+                            fontSize: 12,
                             height: 1.4,
                           ),
-                        ),
-                      ),
-                    ],
-                    if (onTap != null) ...[
-                      const SizedBox(width: 8),
-                      AnimatedRotation(
-                        turns: expanded == true ? 0.25 : 0,
-                        duration: MediaQuery.disableAnimationsOf(context)
-                            ? Duration.zero
-                            : ActivityMotion.fast,
-                        curve: ActivityMotion.settle,
-                        child: Icon(
-                          LucideIcons.chevronRight,
-                          size: AppIconSizes.inline,
-                          color: color,
                         ),
                       ),
                     ],

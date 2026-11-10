@@ -1,4 +1,5 @@
 import 'package:cc_remote/main.dart';
+import 'package:cc_remote/chat_surfaces.dart';
 import 'package:cc_remote/signal_console_theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -100,9 +101,9 @@ void main() {
         home: const Scaffold(body: AppSheetSurface(child: Text('content'))),
       ),
     );
-    final container = tester.widget<Container>(find.byType(Container).first);
-    final decoration = container.decoration! as BoxDecoration;
-    expect(decoration.boxShadow, hasLength(3));
+    final glass = tester.widget<ChatGlass>(find.byType(ChatGlass));
+    expect(glass.elevated, isTrue);
+    expect(glass.translucent, isFalse);
     expect(tester.takeException(), isNull);
   });
 
@@ -119,16 +120,9 @@ void main() {
         ),
       ),
     );
-    final container = tester.widget<Container>(
-      find
-          .descendant(
-            of: find.byType(AppDialog),
-            matching: find.byType(Container),
-          )
-          .first,
-    );
-    final decoration = container.decoration! as BoxDecoration;
-    expect(decoration.boxShadow, hasLength(3));
+    final glass = tester.widget<ChatGlass>(find.byType(ChatGlass));
+    expect(glass.elevated, isTrue);
+    expect(glass.translucent, isFalse);
     expect(find.text('删除会话？'), findsOneWidget);
     expect(find.text('取消'), findsOneWidget);
     expect(tester.takeException(), isNull);

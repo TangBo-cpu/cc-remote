@@ -58,8 +58,7 @@ enum NotoGlyph {
   type('type', 'input-latin-uppercase'),
   uploadCloud('uploadCloud', 'outbox-tray'),
   user('user', 'bust-in-silhouette'),
-  wrench('wrench', 'wrench'),
-  ;
+  wrench('wrench', 'wrench');
 
   const NotoGlyph(this.assetName, this.sourceName);
 
@@ -159,7 +158,18 @@ NotoGlyph? notoGlyphFor(IconData? icon) => switch (icon) {
   _ => null,
 };
 
-/// 优先使用 Noto 彩色字形，其余符号使用主题图标色或调用方的语义色。
+class ChatIconTheme extends InheritedTheme {
+  const ChatIconTheme({super.key, required super.child});
+
+  @override
+  Widget wrap(BuildContext context, Widget child) =>
+      ChatIconTheme(child: child);
+
+  @override
+  bool updateShouldNotify(ChatIconTheme oldWidget) => false;
+}
+
+/// 优先使用 Noto 彩色字形；聊天页的操作符号和状态保留清晰轮廓。
 class SmartIcon extends StatelessWidget {
   const SmartIcon(
     this.icon, {
@@ -179,10 +189,21 @@ class SmartIcon extends StatelessWidget {
     final palette = AppPalette.of(context);
     final iconTheme = IconTheme.of(context);
     final requestedColor = color ?? iconTheme.color;
+    final chat =
+        context.dependOnInheritedWidgetOfExactType<ChatIconTheme>() != null;
+    final buttonForeground =
+        requestedColor == palette.onCta || requestedColor == palette.onStop;
+    final semanticColor =
+        requestedColor == palette.danger ||
+        requestedColor == palette.warning ||
+        requestedColor == palette.success;
     final alpha = requestedColor == palette.inactive
         ? 0.4
         : requestedColor?.a ?? 1.0;
-    final glyph = notoGlyphFor(icon);
+    final glyph =
+        chat && (icon == LucideIcons.plus || buttonForeground || semanticColor)
+        ? null
+        : notoGlyphFor(icon);
     if (glyph != null) {
       return NotoIcon(
         glyph,
@@ -196,8 +217,6 @@ class SmartIcon extends StatelessWidget {
         (requestedColor.r == requestedColor.g &&
             requestedColor.g == requestedColor.b);
     // 实心按钮仍用配对前景色，避免彩色线条在按钮底色上失去对比。
-    final buttonForeground =
-        requestedColor == palette.onCta || requestedColor == palette.onStop;
     return Icon(
       icon,
       size: size,

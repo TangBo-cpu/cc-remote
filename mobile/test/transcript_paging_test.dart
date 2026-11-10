@@ -106,6 +106,19 @@ void main() {
       expect(anchor, findsOneWidget);
       final oldY = tester.getTopLeft(anchor).dy;
       pending.complete(response(payload(page(10, 20))));
+      for (var frame = 0; frame < 12; frame++) {
+        await tester.pump(const Duration(milliseconds: 16));
+        expect(
+          anchor,
+          findsOneWidget,
+          reason: 'anchor missing at frame $frame',
+        );
+        expect(
+          tester.getTopLeft(anchor).dy,
+          closeTo(oldY, 2),
+          reason: 'anchor moved at frame $frame',
+        );
+      }
       await tester.pumpAndSettle();
       expect(state.messages.length, 20);
       expect(state.cachedSessionTranscript('a').snapshot.messageStart, 10);
@@ -167,6 +180,136 @@ void main() {
     },
   );
 
+  for (final processBoundary in [false, true]) {
+    testWidgets(
+      'paging keeps every frame and mounted row stable (process: $processBoundary)',
+      (tester) async {
+        var start = 20;
+        var loading = false;
+        late StateSetter update;
+        late Completer<void> pending;
+        final messages = [
+          for (var i = 0; i < 30; i++)
+            if (processBoundary && i >= 18 && i <= 22)
+              TranscriptMessage.activity(
+                'read $i',
+                id: 'tool-$i',
+                kind: ActivityKind.tool,
+                state: ActivityState.done,
+                tool: 'Read',
+                detail: 'file-$i.dart',
+              )
+            else
+              TranscriptMessage.user(
+                'entry $i\n${'variable height\n' * (i % 7 + 1)}',
+              ),
+        ];
+        Future<void> load() async {
+          pending = Completer<void>();
+          update(() => loading = true);
+          await pending.future;
+          update(() {
+            start -= 10;
+            loading = false;
+          });
+        }
+
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: StatefulBuilder(
+                builder: (context, setState) {
+                  update = setState;
+                  return TranscriptView(
+                    messages: messages.sublist(start),
+                    messageStart: start,
+                    historyLoading: loading,
+                    topPadding: 80,
+                    onLoadEarlier: start == 0 ? null : () => unawaited(load()),
+                    connected: true,
+                    pendingPermissions: const [],
+                    respondingPermissionIds: const {},
+                    onFillPrompt: (_) {},
+                    onReconnect: () {},
+                    onPermissionAllow: (_) {},
+                    onPermissionDeny: (_) {},
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final controller = tester
+            .widget<ScrollView>(find.byKey(const ValueKey('transcript-list')))
+            .controller!;
+
+        for (final pageStart in [20, 10]) {
+          for (var attempt = 0; attempt < 8; attempt++) {
+            controller.jumpTo(controller.position.minScrollExtent);
+            await tester.pumpAndSettle();
+            if (controller.position.extentBefore < 1) break;
+          }
+          final process = processBoundary && pageStart == 20;
+          final anchor = process
+              ? find.byWidgetPredicate(
+                  (widget) =>
+                      widget is ActivityTimelineCard &&
+                      widget.activities.any(
+                        (item) => item.activityId == 'tool-20',
+                      ),
+                )
+              : find.text(messages[pageStart].text.trim());
+          if (process) {
+            await tester.tap(
+              find.byKey(const ValueKey('activity-process-toggle')),
+            );
+            await tester.pumpAndSettle();
+          }
+          expect(
+            anchor,
+            findsOneWidget,
+            reason: 'before loading page $pageStart',
+          );
+          final element = tester.element(anchor);
+          final y = tester.getTopLeft(anchor).dy;
+          await tester.tap(
+            find.byKey(const ValueKey('transcript-load-earlier')),
+          );
+          await tester.pump();
+          expect(tester.getTopLeft(anchor).dy, closeTo(y, 0.5));
+          pending.complete();
+          for (var frame = 0; frame < 12; frame++) {
+            await tester.pump(const Duration(milliseconds: 16));
+            expect(anchor, findsOneWidget);
+            expect(tester.element(anchor), same(element));
+            expect(
+              tester.getTopLeft(anchor).dy,
+              closeTo(y, 0.5),
+              reason: 'page $pageStart, frame $frame',
+            );
+          }
+          if (process) {
+            expect(
+              find.byKey(const ValueKey('activity-detail-tool-20')),
+              findsOneWidget,
+            );
+          }
+          await tester.pumpAndSettle();
+        }
+        expect(
+          find.byKey(const ValueKey('transcript-load-earlier')),
+          findsNothing,
+        );
+        controller.jumpTo(controller.position.minScrollExtent);
+        await tester.pumpAndSettle();
+        expect(find.text(messages.first.text.trim()), findsOneWidget);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+      },
+    );
+  }
+
   testWidgets('a late older page cannot replace another session', (
     tester,
   ) async {
@@ -213,6 +356,7 @@ void main() {
       expect(paths.last.queryParameters.containsKey('before'), isFalse);
       expect(state.messages.length, 10);
       expect(state.messages.first.text, messageText(0));
+      expect(find.byType(MessageBlock).hitTestable(), findsWidgets);
       expect(state.cachedSessionTranscript('a').snapshot.olderCursor, isNull);
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpAndSettle();

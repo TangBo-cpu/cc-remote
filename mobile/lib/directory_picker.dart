@@ -127,21 +127,22 @@ class _DirectoryPickerPageState extends State<DirectoryPickerPage> {
 
   Widget directoryRow(RemoteDirectory directory, {bool recent = false}) {
     final palette = AppPalette.of(context);
-    return ListTile(
-      key: ValueKey('${recent ? 'recent' : 'directory'}-${directory.path}'),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
-      leading: SmartIcon(
-        recent ? LucideIcons.history : LucideIcons.folder,
-        size: AppIconSizes.primary,
-        color: palette.muted,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: AppOptionRow(
+        key: ValueKey('${recent ? 'recent' : 'directory'}-${directory.path}'),
+        selected: false,
+        enabled: !creating,
+        boxedLeading: false,
+        leading: SmartIcon(
+          recent ? LucideIcons.history : LucideIcons.folder,
+          size: AppIconSizes.control,
+          color: palette.muted,
+        ),
+        title: directory.name,
+        description: recent ? directory.path : '',
+        onTap: creating ? null : () => unawaited(browse(directory.path)),
       ),
-      title: Text(directory.name),
-      subtitle: recent ? Text(directory.path, softWrap: true) : null,
-      trailing: const SmartIcon(
-        LucideIcons.chevronRight,
-        size: AppIconSizes.inline,
-      ),
-      onTap: creating ? null : () => unawaited(browse(directory.path)),
     );
   }
 

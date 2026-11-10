@@ -21,12 +21,15 @@ class AppPalette {
   bool get _isLight => brightness == Brightness.light;
 
   Color get paper =>
-      _isLight ? const Color(0xFFF9F9F9) : const Color(0xFF111111);
+      _isLight ? const Color(0xFFF2F5FC) : const Color(0xFF1C1F28);
+  Color get sessionSidebar => _isLight ? const Color(0xFFF5F6F8) : paper;
+  Color get sessionSelection =>
+      _isLight ? const Color(0xFFFFFFFF) : const Color(0xFF30343D);
   Color get surface =>
-      _isLight ? const Color(0xFFFFFFFF) : const Color(0xFF1B1B1B);
+      _isLight ? const Color(0xFFFBFCFF) : const Color(0xFF252A34);
   Color get surfaceElevated => surface;
   Color get control =>
-      _isLight ? const Color(0xFFF0F0F0) : const Color(0xFF292929);
+      _isLight ? const Color(0xFFE9EDF5) : const Color(0xFF303641);
   Color get ink => _isLight ? const Color(0xFF202020) : const Color(0xFFEEEEEE);
   Color get muted =>
       _isLight ? const Color(0xFF626262) : const Color(0xFFB0B0B0);
@@ -47,16 +50,16 @@ class AppPalette {
   Color get danger =>
       _isLight ? const Color(0xFFB42318) : const Color(0xFFFF8A80);
   Color get line =>
-      _isLight ? const Color(0xFFE5E5E5) : const Color(0xFF363636);
+      _isLight ? const Color(0xFFDDE3EE) : const Color(0xFF3B4352);
   Color get lineStrong =>
-      _isLight ? const Color(0xFFD2D2D2) : const Color(0xFF4A4A4A);
+      _isLight ? const Color(0xFFC8D1E0) : const Color(0xFF505B6E);
   Color get warning =>
       _isLight ? const Color(0xFF8A5A20) : const Color(0xFFEAB86A);
   Color get warningSoft =>
       _isLight ? const Color(0xFFFFF2D8) : const Color(0xFF4A3820);
   Color get assistantBubble => surface;
   Color get userBubble =>
-      _isLight ? const Color(0xFFEDEDED) : const Color(0xFF2A2A2A);
+      _isLight ? const Color(0xFFE5EBF5) : const Color(0xFF2C3545);
   Color get messageInk =>
       _isLight ? const Color(0xFF171717) : const Color(0xFFEDEDED);
   Color get messageMuted =>
@@ -69,7 +72,7 @@ class AppPalette {
       _isLight ? const Color(0x0D000000) : const Color(0x12FFFFFF);
   Color get inlineCodeBackground => messageSecondary;
   Color get inlineCodeForeground =>
-      _isLight ? const Color(0xFF107B32) : const Color(0xFF00CA50);
+      _isLight ? const Color(0xFF0E6B2C) : const Color(0xFF00CA50);
   Color get bubbleOutline =>
       _isLight ? const Color(0x14000000) : const Color(0x14FFFFFF);
   Color get composerControlFill => control;
@@ -84,7 +87,7 @@ class AppPalette {
   Color get glassStrong =>
       _isLight ? const Color(0xF2FFFFFF) : const Color(0xF22A2A2A);
   Color get glassControl =>
-      _isLight ? const Color(0xFFF2F2F2) : const Color(0xFF343434);
+      _isLight ? const Color(0xFFEEF2FA) : const Color(0xFF323B4B);
   Color get glassHighlight =>
       _isLight ? const Color(0xB3FFFFFF) : const Color(0x18FFFFFF);
   Color get liquidThinHighlight =>
@@ -117,7 +120,7 @@ class AppPalette {
   Color get code => ink;
   Color get codeMuted => inactive;
   Color get codeBlockBackground =>
-      _isLight ? const Color(0xFFF2F2F2) : const Color(0xFF1A1A1A);
+      _isLight ? const Color(0xFFEBEFF7) : const Color(0xFF232833);
   Color get codeKeyword =>
       _isLight ? const Color(0xFFA626A4) : const Color(0xFFC792EA);
   Color get codeString =>
@@ -130,26 +133,36 @@ class AppPalette {
       _isLight ? const Color(0xFF915C00) : const Color(0xFFFFCB6B);
   Color get codeProperty =>
       _isLight ? const Color(0xFFC0332B) : const Color(0xFFF07178);
-  Color get codeConstant =>
-      _isLight ? codeNumber : const Color(0xFFFF9CAC);
+  Color get codeConstant => _isLight ? codeNumber : const Color(0xFFFF9CAC);
   Color get codeAttribute => _isLight ? codeNumber : codeKeyword;
   Color? get codeVariable => _isLight ? codeProperty : null;
   Color get codeEmbedded =>
       _isLight ? const Color(0xFFCA1243) : const Color(0xFF89DDFF);
-  Color? get codeOperator =>
-      _isLight ? null : const Color(0xFF89DDFF);
+  Color? get codeOperator => _isLight ? null : const Color(0xFF89DDFF);
   Color get codeComment => messageMuted;
-  Color get bgTop => paper;
+  Color get bgTop =>
+      _isLight ? const Color(0xFFEBF1FE) : const Color(0xFF1D222C);
   Color get bgMid => paper;
-  Color get bgBottom => paper;
+  Color get bgBottom =>
+      _isLight ? const Color(0xFFF6F7FC) : const Color(0xFF1B1C23);
+  Color get bgGlowPrimary =>
+      _isLight ? const Color(0x6BABC3FC) : const Color(0x4751679D);
+  Color get bgGlowSecondary =>
+      _isLight ? const Color(0x61D5CBEB) : const Color(0x3D514765);
+  Color get chatGlassFill => _isLight ? Colors.white : const Color(0xFF292E39);
+  Color get chatGlassEdge =>
+      _isLight ? const Color(0x140B152D) : const Color(0x17FFFFFF);
+  Color get chatGlassRim =>
+      _isLight ? const Color(0xD9FFFFFF) : const Color(0x1FFFFFFF);
+  Color get chatShadow => _isLight ? const Color(0xFF0B152D) : Colors.black;
 }
 
 /// Light static compatibility colors for callers that have not adopted AppPalette yet.
 class AppColors {
-  static const paper = Color(0xFFF9F9F9);
-  static const surface = Color(0xFFFFFFFF);
-  static const surfaceElevated = Color(0xFFFFFFFF);
-  static const control = Color(0xFFF0F0F0);
+  static const paper = Color(0xFFF2F5FC);
+  static const surface = Color(0xFFFBFCFF);
+  static const surfaceElevated = surface;
+  static const control = Color(0xFFE9EDF5);
   static const ink = Color(0xFF202020);
   static const muted = Color(0xFF626262);
   static const inactive = Color(0xFF858585);
@@ -159,12 +172,12 @@ class AppColors {
   static const link = Color(0xFF2E6A9B);
   static const success = Color(0xFF4C7D63);
   static const danger = Color(0xFFB42318);
-  static const line = Color(0xFFE5E5E5);
-  static const lineStrong = Color(0xFFD2D2D2);
+  static const line = Color(0xFFDDE3EE);
+  static const lineStrong = Color(0xFFC8D1E0);
   static const warning = Color(0xFF8A5A20);
   static const warningSoft = Color(0xFFFFF2D8);
   static const assistantBubble = surface;
-  static const userBubble = Color(0xFFEDEDED);
+  static const userBubble = Color(0xFFE5EBF5);
   static const bubbleOutline = Color(0x14000000);
   static const composerControlFill = control;
   static const composerControlRest = Color(0x0A000000);
@@ -173,7 +186,7 @@ class AppColors {
   static const composerDisabledFill = Color(0x00000000);
   static const glass = Color(0xE8FFFFFF);
   static const glassStrong = Color(0xF2FFFFFF);
-  static const glassControl = Color(0xFFF2F2F2);
+  static const glassControl = Color(0xFFEEF2FA);
   static const glassHighlight = Color(0xB3FFFFFF);
   static const liquidThinHighlight = Color(0xF8FFFFFF);
   static const liquidThinBody = Color(0xF5FAFAFA);
@@ -194,9 +207,9 @@ class AppColors {
   static const porcelainMuted = control;
   static const code = ink;
   static const codeMuted = inactive;
-  static const bgTop = paper;
+  static const bgTop = Color(0xFFEBF1FE);
   static const bgMid = paper;
-  static const bgBottom = paper;
+  static const bgBottom = Color(0xFFF6F7FC);
 }
 
 class AppTypography {
@@ -300,28 +313,22 @@ class AppRadii {
   static const header = 22.0;
 
   /// Floating composer shell — softer than a docked bar.
-  static const composerFloat = 32.0;
+  static const composerFloat = 28.0;
   static const pill = 999.0;
 
   /// Soft chat bubbles (Claude / iMessage-like).
   static const bubbleSoft = 22.0;
 
   static const panel = surface;
+  static const overlay = 28.0;
   static const bubble = bubbleSoft;
   static const input = control;
 
   /// Top corners of a docked modal sheet — one value across the app.
-  static const sheetTop = 22.0;
+  static const sheetTop = overlay;
 }
 
-/// Shared recipe for one-shot option rows (session engine choice, settings):
-/// 36pt icon seat, title + description two-level hierarchy, far-end check, one
-/// corner value. Rows are what makes pickers read as "designed" versus a
-/// settings-list pasted into a sheet.
-///
-/// [ConversationOptionSheet] keeps its own row instead: those options carry
-/// longer descriptions and a live catalogue, so it uses a radio indicator and a
-/// taller seat.
+/// 选择列表共用图标列、文字层级和选中态。
 class AppOptionRow extends StatelessWidget {
   const AppOptionRow({
     super.key,
@@ -334,6 +341,7 @@ class AppOptionRow extends StatelessWidget {
     this.danger = false,
     this.boxedLeading = true,
     this.showDisclosure = true,
+    this.badge,
   });
 
   final String title;
@@ -345,28 +353,34 @@ class AppOptionRow extends StatelessWidget {
   final bool danger;
   final bool boxedLeading;
   final bool showDisclosure;
+  final Widget? badge;
 
   @override
   Widget build(BuildContext context) {
     final palette = AppPalette.of(context);
     final active = enabled && onTap != null;
-    final accent = danger ? palette.danger : palette.accentStrong;
-    final borderRadius = BorderRadius.circular(AppRadii.control);
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 3),
-      child: Semantics(
-        selected: selected,
-        enabled: active,
-        button: true,
+    final accent = danger ? palette.danger : palette.iconAccent;
+    final borderRadius = BorderRadius.circular(AppRadii.surface);
+    final iconTheme = IconThemeData(
+      size: AppIconSizes.control,
+      color: danger ? palette.danger : palette.ink,
+      opacity: active ? 1 : 0.4,
+    );
+    return Semantics(
+      container: true,
+      selected: selected,
+      enabled: active,
+      button: true,
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 3),
         child: Container(
           decoration: BoxDecoration(
             color: selected ? palette.composerControlFill : Colors.transparent,
             borderRadius: borderRadius,
             border: Border.all(
-              color: selected
-                  ? palette.accent.withValues(alpha: 0.22)
+              color: selected && MediaQuery.highContrastOf(context)
+                  ? palette.lineStrong
                   : Colors.transparent,
-              width: 1,
             ),
           ),
           child: Material(
@@ -378,98 +392,112 @@ class AppOptionRow extends StatelessWidget {
               borderRadius: borderRadius,
               splashColor: palette.accent.withValues(alpha: 0.08),
               highlightColor: palette.accent.withValues(alpha: 0.04),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(
+                  minHeight: AppSizes.touchTarget,
                 ),
-                child: Row(
-                  children: [
-                    if (boxedLeading)
-                      SizedBox.square(
-                        dimension: AppSizes.iconControl,
-                        child: DecoratedBox(
-                          decoration: BoxDecoration(
-                            color: selected
-                                ? palette.surfaceElevated
-                                : palette.control.withValues(alpha: 0.6),
-                            borderRadius: BorderRadius.circular(10),
-                            border: selected
-                                ? Border.all(
-                                    color: palette.accent.withValues(
-                                      alpha: 0.15,
-                                    ),
-                                    width: 1,
-                                  )
-                                : null,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                  child: Row(
+                    children: [
+                      if (boxedLeading)
+                        SizedBox.square(
+                          dimension: AppSizes.iconControl,
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: selected
+                                  ? palette.surfaceElevated
+                                  : palette.control.withValues(alpha: 0.6),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Center(
+                              child: IconTheme(
+                                data: iconTheme,
+                                child:
+                                    leading ??
+                                    const SmartIcon(LucideIcons.circle),
+                              ),
+                            ),
                           ),
+                        )
+                      else
+                        SizedBox(
+                          width: 32,
+                          height: 32,
                           child: Center(
                             child: IconTheme(
-                              data: IconThemeData(
-                                size: AppIconSizes.control,
-                                color: !enabled
+                              data: iconTheme,
+                              child:
+                                  leading ??
+                                  SmartIcon(
+                                    LucideIcons.circle,
+                                    size: AppMark.size,
+                                    color: palette.muted,
+                                  ),
+                            ),
+                          ),
+                        ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              title,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                height: 1.3,
+                                letterSpacing: -0.15,
+                                color: !active
                                     ? palette.inactive
-                                    : (selected || danger
-                                          ? accent
-                                          : palette.muted),
+                                    : danger
+                                    ? palette.danger
+                                    : palette.ink,
                               ),
-                              child: leading ?? const SmartIcon(LucideIcons.circle),
                             ),
-                          ),
-                        ),
-                      )
-                    else
-                      SizedBox(
-                        width: 24,
-                        child: Center(
-                          child:
-                              leading ??
-                              SmartIcon(
-                                LucideIcons.circle,
-                                size: AppMark.size,
-                                color: palette.muted,
+                            if (description.isNotEmpty) ...[
+                              const SizedBox(height: 3),
+                              Text(
+                                description,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  height: 1.35,
+                                  color: palette.muted,
+                                ),
                               ),
+                            ],
+                          ],
                         ),
                       ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            title,
-                            style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: selected
-                                  ? FontWeight.w700
-                                  : FontWeight.w600,
-                              letterSpacing: -0.15,
-                              color: enabled ? palette.ink : palette.inactive,
-                            ),
-                          ),
-                          const SizedBox(height: 2),
-                          Text(
-                            description,
-                            style: TextStyle(
-                              fontSize: 12,
-                              height: 1.35,
-                              color: selected
-                                  ? palette.ink.withValues(alpha: 0.72)
-                                  : palette.muted,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (selected)
-                      SmartIcon(LucideIcons.check, size: AppIconSizes.control, color: accent)
-                    else if (showDisclosure)
-                      SmartIcon(
-                        LucideIcons.chevronRight,
-                        size: AppIconSizes.control,
-                        color: palette.inactive,
-                      ),
-                  ],
+                      if (badge != null) ...[const SizedBox(width: 8), badge!],
+                      if (selected) ...[
+                        const SizedBox(width: 8),
+                        Icon(
+                          LucideIcons.check,
+                          size: AppIconSizes.control,
+                          color: accent,
+                        ),
+                      ] else if (!active) ...[
+                        const SizedBox(width: 8),
+                        SmartIcon(
+                          LucideIcons.lockKeyhole,
+                          size: AppIconSizes.control,
+                          color: palette.inactive,
+                        ),
+                      ] else if (showDisclosure)
+                        SmartIcon(
+                          LucideIcons.chevronRight,
+                          size: AppIconSizes.control,
+                          color: palette.inactive,
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -510,7 +538,7 @@ class AppOptionSheetHeader extends StatelessWidget {
         Text(
           title,
           style: TextStyle(
-            fontSize: 16,
+            fontSize: 20,
             fontWeight: FontWeight.w700,
             letterSpacing: -0.3,
             color: palette.ink,
@@ -520,7 +548,7 @@ class AppOptionSheetHeader extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             detail!,
-            style: TextStyle(fontSize: 12, height: 1.4, color: palette.muted),
+            style: TextStyle(fontSize: 13, height: 1.5, color: palette.muted),
           ),
         ],
       ],
@@ -682,9 +710,9 @@ class AppLiquidGlass {
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          palette.surface.withValues(alpha: highContrast ? 1 : 0.94),
           palette.surface.withValues(alpha: highContrast ? 1 : 0.88),
-          palette.surface.withValues(alpha: highContrast ? 1 : 0.91),
+          palette.surface.withValues(alpha: highContrast ? 1 : 0.78),
+          palette.surface.withValues(alpha: highContrast ? 1 : 0.84),
         ],
         stops: const [0, 0.55, 1],
       ),
@@ -693,7 +721,9 @@ class AppLiquidGlass {
         color: focused ? palette.liquidFocus : palette.glassHighlight,
         width: focused ? 2 : 0.5,
       ),
-      boxShadow: elevated ? AppElevation.overlay(context: context) : const [],
+      boxShadow: elevated
+          ? AppElevation.liquidStrong(context: context)
+          : const [],
     );
   }
 
@@ -778,7 +808,7 @@ class AppLiquidGlass {
     AppPalette palette,
   ) {
     if (palette.brightness == Brightness.light) return gradient;
-    const tones = [Color(0xFF323232), Color(0xFF2C2C2C), Color(0xFF282828)];
+    const tones = [Color(0xFF323B4B), Color(0xFF2B3240), Color(0xFF252C38)];
     return LinearGradient(
       begin: gradient.begin,
       end: gradient.end,
@@ -886,6 +916,7 @@ class SignalLiquidGlass extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scrolling = SignalScrollBlurState.isScrolling(context);
+    final opaque = scrolling || MediaQuery.highContrastOf(context);
     final surface = CustomPaint(
       foregroundPainter: lens
           ? _LiquidLensRimPainter(
@@ -894,11 +925,14 @@ class SignalLiquidGlass extends StatelessWidget {
             )
           : null,
       child: DecoratedBox(
-        decoration: decoration.copyWith(boxShadow: const []),
+        decoration: decoration.copyWith(
+          color: opaque ? AppPalette.of(context).surface : decoration.color,
+          boxShadow: const [],
+        ),
         child: child,
       ),
     );
-    final blurred = scrolling
+    final blurred = opaque
         ? surface
         : BackdropFilter.grouped(
             filter: _blurFilterFor(blurSigma),
@@ -944,10 +978,10 @@ class _LiquidLensRimPainter extends CustomPainter {
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: [
-          Colors.white.withValues(alpha: dark ? 0.27 : 0.95),
+          Colors.white.withValues(alpha: dark ? 0.16 : 0.7),
           Colors.white.withValues(alpha: dark ? 0.02 : 0.1),
-          Colors.black.withValues(alpha: dark ? 0.22 : 0.06),
-          Colors.white.withValues(alpha: dark ? 0.12 : 0.7),
+          Colors.black.withValues(alpha: dark ? 0.14 : 0.035),
+          Colors.white.withValues(alpha: dark ? 0.08 : 0.45),
         ],
         stops: const [0, 0.4, 0.7, 1],
       ).createShader(rect);
@@ -1174,10 +1208,17 @@ class _SnapshotWhileAnimatingState extends State<SnapshotWhileAnimating> {
 
   @override
   Widget build(BuildContext context) {
-    return SnapshotWidget(
-      controller: _controller,
-      mode: SnapshotMode.permissive,
-      child: widget.child,
+    final media = MediaQuery.of(context);
+    // 降低移动快照的像素量；内容本身仍使用真机比例，停稳后恢复实时绘制。
+    return MediaQuery(
+      data: media.copyWith(
+        devicePixelRatio: media.devicePixelRatio.clamp(1, 2),
+      ),
+      child: SnapshotWidget(
+        controller: _controller,
+        mode: SnapshotMode.permissive,
+        child: MediaQuery(data: media, child: widget.child),
+      ),
     );
   }
 }
@@ -1520,7 +1561,7 @@ ThemeData buildSignalConsoleTheme([Brightness brightness = Brightness.light]) {
       dragHandleColor: palette.lineStrong,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(
-          top: Radius.circular(AppRadii.header),
+          top: Radius.circular(AppRadii.sheetTop),
         ),
       ),
     ),
@@ -1549,7 +1590,7 @@ ThemeData buildSignalConsoleTheme([Brightness brightness = Brightness.light]) {
       surfaceTintColor: Colors.transparent,
       elevation: 0,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.all(Radius.circular(AppRadii.surface)),
+        borderRadius: BorderRadius.all(Radius.circular(AppRadii.overlay)),
       ),
     ),
     snackBarTheme: SnackBarThemeData(

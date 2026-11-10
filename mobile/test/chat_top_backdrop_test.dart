@@ -144,10 +144,10 @@ void main() {
         );
       });
 
-      final list = tester.widget<ListView>(
+      final list = tester.widget<ScrollView>(
         find.byKey(const ValueKey('transcript-list')),
       );
-      list.controller!.jumpTo(300);
+      list.controller!.jumpTo(list.controller!.position.minScrollExtent + 300);
       await tester.pumpAndSettle();
       final boundary = tester.renderObject<RenderRepaintBoundary>(
         find.byKey(const ValueKey('frost-preview')),

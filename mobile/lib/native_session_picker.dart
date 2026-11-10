@@ -178,36 +178,27 @@ class _NativeSessionPickerPageState extends State<NativeSessionPickerPage> {
                             ),
                           ),
                         for (final session in sessions)
-                          ListTile(
-                            key: ValueKey(
-                              'native-session-${session.sessionId}',
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            child: AppOptionRow(
+                              key: ValueKey(
+                                'native-session-${session.sessionId}',
+                              ),
+                              selected:
+                                  selected?.sessionId == session.sessionId,
+                              enabled: !syncing,
+                              boxedLeading: false,
+                              showDisclosure: false,
+                              leading: const SmartIcon(
+                                LucideIcons.messageSquare,
+                              ),
+                              title: session.title,
+                              description:
+                                  '${session.workspaceDir}\n${session.updatedAt.toLocal().toString().substring(0, 16)}',
+                              onTap: syncing
+                                  ? null
+                                  : () => setState(() => selected = session),
                             ),
-                            selected: selected?.sessionId == session.sessionId,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 20,
-                              vertical: 6,
-                            ),
-                            title: Text(
-                              session.title,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            subtitle: Text(
-                              '${session.workspaceDir}\n${session.updatedAt.toLocal().toString().substring(0, 16)}',
-                              maxLines: 3,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            trailing: SmartIcon(
-                              selected?.sessionId == session.sessionId
-                                  ? LucideIcons.circleCheck
-                                  : LucideIcons.circle,
-                              color: selected?.sessionId == session.sessionId
-                                  ? palette.ink
-                                  : palette.muted,
-                            ),
-                            onTap: syncing
-                                ? null
-                                : () => setState(() => selected = session),
                           ),
                         if (nextCursor != null)
                           Padding(

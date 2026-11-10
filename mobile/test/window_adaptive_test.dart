@@ -46,6 +46,8 @@ void main() {
       await _setWindowSize(tester, const Size(1280, 800));
       await _pumpDemoChat(tester);
 
+      await tester.tap(find.byKey(const ValueKey('session-options-menu')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const ValueKey('session-drawer-close')));
       await tester.pumpAndSettle();
       expect(find.byType(SessionRail), findsNothing);
@@ -98,6 +100,8 @@ void main() {
     await tester.tap(find.byTooltip('项目与会话'));
     await tester.pumpAndSettle();
     expect(find.byType(SessionNavigatorPage), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('session-options-menu')));
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('session-drawer-close')));
     await tester.pumpAndSettle();
     expect(find.byType(SessionNavigatorPage), findsNothing);

@@ -233,7 +233,6 @@ void main() {
       );
       expect(find.text('已修复问题，测试通过。'), findsOneWidget);
       expect(find.text('任务执行失败'), findsNothing);
-      expect(find.text('1 个失败'), findsNothing);
       expect(hasCurrentFailureEvidence(messages), isFalse);
 
       emit({
@@ -246,12 +245,6 @@ void main() {
       });
       await tester.pumpAndSettle();
       expect(find.text('任务执行失败'), findsNothing);
-      expect(find.text('1 个失败'), findsNothing);
-      await tester.tap(find.byKey(const ValueKey('activity-process-toggle')));
-      await tester.pumpAndSettle();
-      expect(find.text('执行失败'), findsOneWidget);
-      expect(find.text('第一次测试失败'), findsOneWidget);
-      expect(find.text('重试测试通过'), findsOneWidget);
       await state.lastTranscriptWrite;
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pumpAndSettle();

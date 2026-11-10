@@ -285,6 +285,47 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
+  testWidgets(
+    'long streaming Markdown limits updates and flushes the final text',
+    (tester) async {
+      var text = '**long reply**\n\n${'paragraph ' * 1700}';
+      var streaming = true;
+      late StateSetter update;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: buildSignalConsoleTheme(),
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: StatefulBuilder(
+                builder: (context, setState) {
+                  update = setState;
+                  return MessageBlock(
+                    message: TranscriptMessage.assistant(text),
+                    isStreaming: streaming,
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+      final markdown = find.byType(MessageMarkdownBody);
+      final first = tester.widget(markdown);
+      update(() => text += ' newest');
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(tester.widget(markdown), same(first));
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(tester.widget<MessageMarkdownBody>(markdown).data, text);
+      update(() {
+        text += ' final';
+        streaming = false;
+      });
+      await tester.pump();
+      expect(tester.widget<MessageMarkdownBody>(markdown).data, text);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   testWidgets('plain streaming text is displayed without the Markdown delay', (
     tester,
   ) async {
