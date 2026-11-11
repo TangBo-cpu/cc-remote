@@ -35,6 +35,35 @@ test('workspace paths reject traversal and absolute paths', () => {
   assert.throws(() => normalizeRelative(''), /invalid_path/);
 });
 
+test('change fingerprints stay stable until file contents change', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-workspace-'));
+  try {
+    await execFileAsync('git', ['-C', dir, 'init', '-q']);
+    await mkdir(join(dir, 'notes'));
+    await writeFile(join(dir, 'notes', 'draft.txt'), 'first');
+    const workspace = new WorkspaceService(dir);
+    const first = (await workspace.snapshot()).changes;
+    assert.equal(first[0]?.path, 'notes/draft.txt');
+    assert.ok(first[0]?.fingerprint);
+    assert.deepEqual((await workspace.snapshot()).changes, first);
+
+    await writeFile(join(dir, 'notes', 'draft.txt'), 'other');
+    const next = (await workspace.snapshot()).changes;
+    assert.equal(next[0]?.unstaged, first[0]?.unstaged);
+    assert.notEqual(next[0]?.fingerprint, first[0]?.fingerprint);
+
+    await writeFile(join(dir, 'notes', 'draft.txt'), 'other');
+    assert.deepEqual((await workspace.snapshot()).changes, next);
+
+    await execFileAsync('git', ['-C', dir, 'add', '--', 'notes/draft.txt']);
+    assert.equal((await workspace.snapshot()).changes[0]?.fingerprint, next[0]?.fingerprint);
+    await rm(join(dir, 'notes', 'draft.txt'));
+    assert.equal((await workspace.snapshot()).changes[0]?.fingerprint, 'deleted');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('reads text files inside the workspace and blocks traversal', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-remote-workspace-'));
   try {

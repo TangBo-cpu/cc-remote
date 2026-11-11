@@ -12,7 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
-Map<String, Object?> catalog({bool imported = false}) => {
+Map<String, Object?> catalog({bool imported = false, bool withPending = false}) => {
   'version': 1,
   'activeProjectId': 'project',
   'activeSessionId': imported ? 'imported' : 'original',
@@ -26,6 +26,13 @@ Map<String, Object?> catalog({bool imported = false}) => {
       'title': '手机会话',
       'engine': 'codex',
     },
+    if (withPending)
+      {
+        'id': 'pending',
+        'projectId': 'project',
+        'title': '未能打开的会话',
+        'engine': 'codex',
+      },
     if (imported)
       {
         'id': 'imported',
@@ -94,9 +101,14 @@ void main() {
     },
   );
 
-  for (final wsFirst in [false, true]) {
+  for (final (wsFirst, failedSelection) in [
+    (false, false),
+    (true, false),
+    (false, true),
+    (true, true),
+  ]) {
     testWidgets(
-      'syncs one desktop session and preserves drafts with WS-first=$wsFirst',
+      'syncs and opens desktop session with WS-first=$wsFirst, failed-selection=$failedSelection',
       (tester) async {
         dynamic state;
         var syncRequests = 0;
@@ -150,7 +162,9 @@ void main() {
           deviceName: 'host',
         );
         state.route = ShellRoute.chat;
-        state.applyCatalog(RemoteProjectCatalog.tryParse(catalog()));
+        state.applyCatalog(
+          RemoteProjectCatalog.tryParse(catalog(withPending: failedSelection)),
+        );
         state.messages.add(TranscriptMessage.assistant('原会话内容'));
         state.promptController.text = '保留草稿';
         state.selectedEffort = ClaudeEffortPreference.max;
@@ -163,6 +177,12 @@ void main() {
           }),
         );
         await tester.pumpAndSettle();
+        if (failedSelection) {
+          expect(state.selectRemoteSessionWithJump('pending'), isTrue);
+          await tester.pumpAndSettle();
+          expect(state.selectingSessionId, 'pending');
+          expect(state.peekFailed, isTrue);
+        }
         state.openSessions();
         await tester.pumpAndSettle();
         await tester.tap(
@@ -185,6 +205,8 @@ void main() {
         expect(syncRequests, 1);
         expect(find.byType(NativeSessionPickerPage), findsNothing);
         expect(state.activeSessionId, 'imported');
+        expect(state.selectingSessionId, isNull);
+        expect(find.text('电脑回复'), findsOneWidget);
         expect(state.remoteSessions.length, 2);
         expect(state.messages.map((dynamic message) => message.text).toList(), [
           '电脑问题',

@@ -775,6 +775,20 @@ class WorkspaceSnapshot {
   final List<String> files;
   final List<WorkspaceChange> changes;
 
+  List<String> changedPathsSince(WorkspaceSnapshot before) {
+    final previous = {
+      for (final change in before.changes) change.path: change.fingerprint,
+    };
+    return [
+      for (final change in changes)
+        if (change.path.trim().isNotEmpty &&
+            (!previous.containsKey(change.path) ||
+                (change.fingerprint != null &&
+                    change.fingerprint != previous[change.path])))
+          change.path,
+    ];
+  }
+
   factory WorkspaceSnapshot.fromJson(Map<String, dynamic> json) {
     return WorkspaceSnapshot(
       rootName: json['rootName'] as String? ?? '',
@@ -813,12 +827,14 @@ class WorkspaceSnapshot {
 class WorkspaceChange {
   const WorkspaceChange({
     required this.path,
+    this.fingerprint,
     this.previousPath,
     this.staged,
     this.unstaged,
   });
 
   final String path;
+  final String? fingerprint;
   final String? previousPath;
   final String? staged;
   final String? unstaged;
@@ -826,6 +842,7 @@ class WorkspaceChange {
   factory WorkspaceChange.fromJson(Map<String, dynamic> json) {
     return WorkspaceChange(
       path: json['path'] as String? ?? '',
+      fingerprint: json['fingerprint'] as String?,
       previousPath: json['previousPath'] as String?,
       staged: json['staged'] as String?,
       unstaged: json['unstaged'] as String?,

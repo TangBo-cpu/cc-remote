@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process';
-import { open, readdir, realpath, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { createReadStream } from 'node:fs';
+import { lstat, open, readdir, readlink, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -12,6 +14,7 @@ const FALLBACK_IGNORES = new Set(['.git', 'node_modules', 'build', 'dist', '.dar
 
 export type WorkspaceChange = {
   path: string;
+  fingerprint?: string;
   previousPath?: string;
   staged?: string;
   unstaged?: string;
@@ -60,17 +63,38 @@ export class WorkspaceService {
 
     const [filesRaw, statusRaw, branchRaw] = await Promise.all([
       this.git(['ls-files', '-co', '--exclude-standard', '-z']),
-      this.git(['status', '--porcelain=v1', '-z']),
+      this.git(['status', '--porcelain=v1', '--untracked-files=all', '-z']),
       this.git(['branch', '--show-current']),
     ]);
+    const changes = parseGitStatus(statusRaw);
+    for (const change of changes) change.fingerprint = await this.changeFingerprint(change.path);
 
     return {
       rootName: basename(this.rootDir),
       gitAvailable: true,
       branch: branchRaw.trim() || undefined,
       files: filesRaw.split('\0').filter(Boolean).sort(comparePaths),
-      changes: parseGitStatus(statusRaw),
+      changes,
     };
+  }
+
+  private async changeFingerprint(path: string): Promise<string | undefined> {
+    try {
+      const candidate = resolveWorkspacePath(this.rootDir, normalizeRelative(path));
+      const info = await lstat(candidate);
+      const hash = createHash('sha256');
+      if (info.isSymbolicLink()) {
+        hash.update('symlink\0').update(await readlink(candidate));
+      } else {
+        if (!info.isFile()) return undefined;
+        const actual = await realpath(candidate);
+        assertInsideRoot(this.rootDir, actual);
+        for await (const chunk of createReadStream(actual)) hash.update(chunk);
+      }
+      return hash.digest('hex');
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'deleted' : undefined;
+    }
   }
 
   async readFile(relativePath: string): Promise<WorkspaceFile> {

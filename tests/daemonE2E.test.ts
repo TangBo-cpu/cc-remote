@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test, { after, before } from 'node:test';
 import WebSocket from 'ws';
+import type { TranscriptMessage } from '../src/transcriptState.js';
 
 type RunningDaemon = {
   baseUrl: string;
@@ -1523,7 +1524,15 @@ test('Codex message phases survive batching, native resync and websocket reconne
 });
 
 test('session reads, selection and websocket reconnect send bounded transcript pages', async () => {
-  const transcriptMessages = Array.from({ length: 25 }, (_, i) => ({ role: 'system' as const, text: 'history ' + i }));
+  const transcriptMessages = Array.from({ length: 13 }, (_, turn): TranscriptMessage[] => [
+    { role: 'user', text: 'question ' + turn },
+    { role: 'assistant', phase: 'commentary', text: 'checking ' + turn },
+    ...Array.from({ length: 7 }, (_, tool): TranscriptMessage => ({
+      role: 'activity', text: 'Read', activityId: `tool-${turn}-${tool}`,
+      activityKind: 'tool', activityState: 'done', activityTool: 'Read',
+    })),
+    { role: 'assistant', phase: 'final_answer', text: 'answer ' + turn },
+  ]).flat();
   const instance = await startDaemon({ transcriptMessages });
   const sockets: WebSocket[] = [];
   try {
@@ -1537,15 +1546,15 @@ test('session reads, selection and websocket reconnect send bounded transcript p
     type Page = { messages: typeof transcriptMessages; history: { start: number; total: number; before: string | null; token: string } };
     const read = async (suffix = '') => (await (await fetch(url + '?cached=1' + suffix, { headers })).json() as { transcript: Page }).transcript;
     const tail = await read();
-    assert.deepEqual(tail.messages, transcriptMessages.slice(-10));
-    assert.equal(tail.history.total, 25);
+    assert.deepEqual(tail.messages, transcriptMessages.slice(-50));
+    assert.equal(tail.history.total, 130);
     const middle = await read('&before=' + tail.history.before);
     const first = await read('&before=' + middle.history.before);
     assert.deepEqual([...first.messages, ...middle.messages, ...tail.messages], transcriptMessages);
     assert.equal(first.history.before, null);
     assert.equal((await fetch(url + '?before=invalid', { headers })).status, 400);
     const selected = await (await fetch(url + '/select', { method: 'POST', headers })).json() as { transcript: Page };
-    assert.equal(selected.transcript.messages.length, 10);
+    assert.deepEqual(selected.transcript.messages, tail.messages);
     for (const resume of [undefined, { sessionId: activeSessionId, token: tail.history.token }]) {
       const socket = new WebSocket(instance.baseUrl.replace('http:', 'ws:') + '/ws', { headers: { Origin: instance.baseUrl } });
       sockets.push(socket);
@@ -1553,11 +1562,11 @@ test('session reads, selection and websocket reconnect send bounded transcript p
       const ready = waitForWsMessage(socket, message => message.type === 'transcript_snapshot');
       socket.send(JSON.stringify({ type: 'auth', token, transcriptResume: resume }));
       const snapshot = await ready;
-      assert.equal((snapshot.messages as unknown[]).length, resume ? 0 : 10);
+      assert.equal((snapshot.messages as unknown[]).length, resume ? 0 : 50);
       assert.equal(snapshot.unchanged, resume ? true : undefined);
       const changed = waitForWsMessage(socket, message => message.type === 'transcript_snapshot');
       socket.send(JSON.stringify({ type: 'select_session', sessionId: activeSessionId }));
-      assert.equal(((await changed).messages as unknown[]).length, 10);
+      assert.deepEqual((await changed).messages, tail.messages);
     }
   } finally {
     for (const socket of sockets) socket.terminate();
@@ -1574,7 +1583,7 @@ async function startDaemon(options: {
   codexArgs?: (root: string) => string[];
   staleSessionId?: string;
   nativeHistory?: boolean;
-  transcriptMessages?: { role: 'system'; text: string }[];
+  transcriptMessages?: TranscriptMessage[];
 } = {}): Promise<RunningDaemon> {
   const root = await mkdtemp(join(tmpdir(), 'cc-remote-daemon-e2e-'));
   await writeFile(join(root, 'README.md'), '# fixture\n', 'utf8');

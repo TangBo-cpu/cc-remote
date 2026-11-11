@@ -38,6 +38,62 @@ test('pages ten messages without truncating stored history and rejects stale cur
   }
 });
 
+for (const typed of [false, true]) {
+  test(`pages ten body messages without counting process records (typed: ${typed})`, async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'cc-remote-transcript-body-pages-'));
+    try {
+      const state = await createTranscriptState(join(dir, 'transcript.json'));
+      for (let turn = 0; turn < 7; turn++) {
+        state.beginPrompt('question ' + turn, 'manual');
+        state.appendText('checking ' + turn, typed ? { phase: 'commentary' } : undefined);
+        for (let tool = 0; tool < 6; tool++) {
+          state.mergeActivity({
+            id: `tool-${turn}-${tool}`, kind: 'tool', state: 'done', toolName: 'Read',
+          });
+        }
+        state.appendText('answer ' + turn, typed ? { phase: 'final_answer' } : undefined);
+        await state.finishDone();
+      }
+      const full = state.snapshot();
+      const tail = state.snapshot({});
+      const body = tail.messages.filter(message => /^(question|answer) /.test(message.text));
+      assert.equal(body.length, 10);
+      assert.equal(tail.messages[0].text, 'question 2');
+      assert.equal(tail.messages.filter(message => message.role === 'activity').length, 30);
+      const first = state.snapshot({ before: tail.history!.before! });
+      assert.equal(first.history?.before, null);
+      assert.deepEqual([...first.messages, ...tail.messages], full.messages);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test('very long process history stays bounded and pages without losing records', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'cc-remote-transcript-long-pages-'));
+  try {
+    const state = await createTranscriptState(join(dir, 'transcript.json'));
+    state.beginPrompt('question', 'manual');
+    for (let tool = 0; tool < 450; tool++) {
+      state.mergeActivity({ id: `tool-${tool}`, kind: 'tool', state: 'done', toolName: 'Read' });
+    }
+    state.appendText('answer');
+    await state.finishDone();
+    const full = state.snapshot();
+    let page = state.snapshot({});
+    assert.equal(page.messages.length, 200);
+    const combined = [...page.messages];
+    while (page.history!.before !== null) {
+      assert.ok(page.messages.length > 0 && page.messages.length <= 200);
+      page = state.snapshot({ before: page.history!.before });
+      combined.unshift(...page.messages);
+    }
+    assert.deepEqual(combined, full.messages);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test('background save failure stays recoverable and flush retries unsaved history', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'cc-remote-transcript-save-failure-'));
   const blocked = join(dir, 'blocked');

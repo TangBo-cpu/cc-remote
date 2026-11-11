@@ -344,6 +344,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   String? activeRunId;
   DateTime? runStartedAt;
   WorkspaceChangeEcho? workspaceChangeEcho;
+  WorkspaceSnapshot? workspaceChangeBaseline;
   int workspaceEchoGeneration = 0;
   int remoteTranscriptRevision = 0;
   bool allowBypassPermissions = false;
@@ -1088,6 +1089,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             ? current.workspaceDir
             : status.workspaceDir,
       );
+      final wasRunning = running;
       setState(() {
         session = restored;
         remoteOffline = false;
@@ -1107,6 +1109,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         }
       });
       persistTranscriptSnapshotLater();
+      reconcileIdleRun(wasRunning);
     } catch (err) {
       if (!mounted ||
           session != current ||
@@ -1178,6 +1181,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
             ? current.workspaceDir
             : status.workspaceDir,
       );
+      final wasRunning = running;
       setState(() {
         session = restored;
         remoteOffline = false;
@@ -1196,6 +1200,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         }
       });
       persistTranscriptSnapshotLater();
+      reconcileIdleRun(wasRunning);
     } catch (err) {
       await transcriptRestored;
       if (!mounted ||
@@ -1300,12 +1305,17 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
     });
   }
 
-  void closeWs() {
+  void cancelSessionSelection() {
     sessionSelectionGeneration++;
     selectingSessionId = null;
     expectedSelectionCatalogId = null;
+    selectionCatalogReceived = false;
     sessionSelectionAcknowledged?.complete();
     sessionSelectionAcknowledged = null;
+  }
+
+  void closeWs() {
+    cancelSessionSelection();
     sessionTranscriptCache.clear();
     wsClient.close();
     wsReady = false;
@@ -1459,7 +1469,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         });
         openPendingNotificationSession();
         persistTranscriptSnapshotLater();
-        if (wasRunning && !running) releaseQueuedPromptIfTurnIdle();
+        reconcileIdleRun(wasRunning);
 
       case 'devices':
         devicesRevision.value += 1;
@@ -1473,63 +1483,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         final snapshot = cached != null && cached.revision >= receivedSnapshot.revision
             ? cached
             : receivedSnapshot;
-        if (!shouldApplyRemoteTranscriptSnapshot(
-              snapshot: snapshot,
-              currentRevision: remoteTranscriptRevision,
-              hasLocalMessages: messages.isNotEmpty,
-            )) {
-          return;
-        }
-        final wasRunning = running;
-        clearStreamTextBatch(apply: false);
-        setState(() {
-          remoteTranscriptRevision = snapshot.revision;
-          transcriptMotion.reset(preserveCompletedRun: true);
-          running = snapshot.running;
-          stopping = snapshot.running && snapshot.stopping;
-          activeRunId = snapshot.running ? snapshot.runId ?? activeRunId : null;
-          runStartedAt = snapshot.running ? snapshot.startedAt : null;
-          removeDisconnectedRunNotice();
-          messages
-            ..clear()
-            ..addAll(snapshot.messages);
-          modelName = snapshot.modelName;
-          contextWindow = snapshot.contextWindow;
-          remainingContext = snapshot.remainingContext;
-          activePermissionMode = snapshot.permissionMode;
-          selectedPermissionMode = snapshot.permissionMode;
-          activeCodexSandboxMode = snapshot.codexSandboxMode;
-          selectedCodexSandboxMode =
-              codexSandboxModes.contains(snapshot.codexSandboxMode)
-              ? snapshot.codexSandboxMode
-              : codexSandboxModes.first;
-          pendingPermissions
-            ..clear()
-            ..addAll(snapshot.pendingPermissions);
-          respondingPermissionIds.removeWhere(
-            (requestId) => !pendingPermissions.any(
-              (request) => request.requestId == requestId,
-            ),
-          );
-        });
-        if (selectionCatalogReceived &&
-            selectingSessionId == decoded['sessionId']) {
-          final jump = transcriptJumpRequest;
-          setState(() {
-            selectingSessionId = null;
-            resetSessionOnlyEffort();
-            sessionSelectionGeneration++;
-            clearSessionPeek();
-            transcriptJumpRequest = jump;
-          });
-          sessionSelectionAcknowledged?.complete();
-          sessionSelectionAcknowledged = null;
-        }
-        persistTranscriptSnapshotLater();
-        if (wasRunning && !running) releaseQueuedPromptIfTurnIdle();
-        if (viewingSessionId != null && pendingPermissions.isNotEmpty) {
-          setState(clearSessionPeek);
-        }
+        applyRemoteTranscriptSnapshot(decoded['sessionId'] as String, snapshot);
 
       case 'permission_capabilities':
         setState(() {
@@ -1722,6 +1676,69 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         persistTranscriptSnapshotNow();
         unawaited(refreshWorkspaceChangeEcho());
         releaseQueuedPromptAfterTurn('error');
+    }
+  }
+
+  void applyRemoteTranscriptSnapshot(
+    String sessionId,
+    RemoteTranscriptSnapshot snapshot,
+  ) {
+    if (!shouldApplyRemoteTranscriptSnapshot(
+      snapshot: snapshot,
+      currentRevision: remoteTranscriptRevision,
+      hasLocalMessages: messages.isNotEmpty,
+    )) {
+      return;
+    }
+    final wasRunning = running;
+    clearStreamTextBatch(apply: false);
+    setState(() {
+      remoteTranscriptRevision = snapshot.revision;
+      transcriptMotion.reset(preserveCompletedRun: true);
+      running = snapshot.running;
+      stopping = snapshot.running && snapshot.stopping;
+      activeRunId = snapshot.running ? snapshot.runId ?? activeRunId : null;
+      runStartedAt = snapshot.running ? snapshot.startedAt : null;
+      removeDisconnectedRunNotice();
+      messages
+        ..clear()
+        ..addAll(snapshot.messages);
+      modelName = snapshot.modelName;
+      contextWindow = snapshot.contextWindow;
+      remainingContext = snapshot.remainingContext;
+      activePermissionMode = snapshot.permissionMode;
+      selectedPermissionMode = snapshot.permissionMode;
+      activeCodexSandboxMode = snapshot.codexSandboxMode;
+      selectedCodexSandboxMode =
+          codexSandboxModes.contains(snapshot.codexSandboxMode)
+          ? snapshot.codexSandboxMode
+          : codexSandboxModes.first;
+      pendingPermissions
+        ..clear()
+        ..addAll(snapshot.pendingPermissions);
+      respondingPermissionIds.removeWhere(
+        (requestId) => !pendingPermissions.any(
+          (request) => request.requestId == requestId,
+        ),
+      );
+    });
+    if (selectionCatalogReceived && selectingSessionId == sessionId) {
+      final jump = transcriptJumpRequest;
+      setState(() {
+        // Keep the catalog guard until WebSocket confirms the selection.
+        selectingSessionId = null;
+        resetSessionOnlyEffort();
+        sessionSelectionGeneration++;
+        clearSessionPeek();
+        transcriptJumpRequest = jump;
+      });
+      sessionSelectionAcknowledged?.complete();
+      sessionSelectionAcknowledged = null;
+    }
+    persistTranscriptSnapshotLater();
+    reconcileIdleRun(wasRunning);
+    if (viewingSessionId != null && pendingPermissions.isNotEmpty) {
+      setState(clearSessionPeek);
     }
   }
 
@@ -1964,11 +1981,15 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       return;
     }
     preparingPrompt = true;
+    WorkspaceSnapshot? workspaceBaseline;
     try {
       await Future.wait([
         modelPreferenceInitialization,
         effortPreferenceInitialization,
       ]);
+      if (!running && draftConnection != null && (widget.demoMode || wsReady)) {
+        workspaceBaseline = await readWorkspaceSnapshot(draftConnection);
+      }
     } finally {
       preparingPrompt = false;
     }
@@ -2009,6 +2030,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         running = false;
         stopping = false;
         clearWorkspaceChangeEcho();
+        workspaceChangeBaseline = workspaceBaseline;
         messages
           ..add(TranscriptMessage.user(text))
           ..add(TranscriptMessage.assistant('演示模式：真实对话需要连接 daemon WebSocket。'));
@@ -2113,6 +2135,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       running = true;
       stopping = false;
       clearWorkspaceChangeEcho();
+      workspaceChangeBaseline = workspaceBaseline;
       runStartedAt = DateTime.now();
       currentRunFailed = false;
       activePermissionMode = permissionMode;
@@ -2338,6 +2361,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
 
     if (widget.demoMode) {
       setState(() {
+        cancelSessionSelection();
         resetSessionOnlyEffort();
         modelName = null;
         contextWindow = null;
@@ -2384,6 +2408,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       if (!mounted || session != current) return;
       final body = jsonDecode(res.body);
       setState(() {
+        cancelSessionSelection();
         resetSessionOnlyEffort();
         if (body is Map<String, dynamic> && body['sessionId'] is String) {
           changeActiveSession(body['sessionId'] as String);
@@ -2538,38 +2563,57 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   void clearWorkspaceChangeEcho() {
     workspaceEchoGeneration += 1;
     workspaceChangeEcho = null;
+    workspaceChangeBaseline = null;
   }
 
-  Future<void> refreshWorkspaceChangeEcho() async {
-    final current = session;
-    if (current == null) return;
-    final generation = ++workspaceEchoGeneration;
+  Future<WorkspaceSnapshot?> readWorkspaceSnapshot(SavedSession current) async {
+    final sessionId = activeSessionId;
+    final generation = workspaceEchoGeneration;
     final api = WorkspaceApi(
       origin: current.origin,
       token: current.token,
       demoMode: widget.demoMode,
     );
     try {
-      final snapshot = await api.snapshot();
-      if (!mounted || generation != workspaceEchoGeneration) return;
-      final changes = [
-        for (final change in snapshot.changes)
-          if (change.path.trim().isNotEmpty) change.path,
-      ];
-      setState(() {
-        workspaceChangeEcho = changes.isEmpty
-            ? null
-            : WorkspaceChangeEcho(
-                changeCount: changes.length,
-                paths: changes,
-                branch: snapshot.branch,
-              );
-      });
-    } catch (_) {
-      if (!mounted || generation != workspaceEchoGeneration) return;
+      for (var attempt = 0; attempt < 2; attempt++) {
+        if (!isCurrentConnection(current) ||
+            activeSessionId != sessionId ||
+            generation != workspaceEchoGeneration) {
+          return null;
+        }
+        try {
+          return await api.snapshot();
+        } catch (_) {
+          if (attempt == 0) {
+            await Future<void>.delayed(const Duration(milliseconds: 300));
+          }
+        }
+      }
+      return null;
     } finally {
       api.close();
     }
+  }
+
+  Future<void> refreshWorkspaceChangeEcho() async {
+    final current = session;
+    final baseline = workspaceChangeBaseline;
+    if (current == null || baseline == null) return;
+    final generation = ++workspaceEchoGeneration;
+    final snapshot = await readWorkspaceSnapshot(current);
+    if (!mounted || generation != workspaceEchoGeneration || snapshot == null) {
+      return;
+    }
+    final changes = snapshot.changedPathsSince(baseline);
+    setState(() {
+      workspaceChangeEcho = changes.isEmpty
+          ? null
+          : WorkspaceChangeEcho(
+              changeCount: changes.length,
+              paths: changes,
+              branch: snapshot.branch,
+            );
+    });
   }
 
   void applyCatalog(RemoteProjectCatalog? catalog) {
@@ -2679,12 +2723,18 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
               throw const NativeSessionException('claude_is_busy');
             }
             final previousSessionId = activeSessionId;
+            final selectionGeneration = sessionSelectionGeneration;
             final result = await request(() => api.sync(target));
+            if (selectionGeneration != sessionSelectionGeneration &&
+                selectingSessionId != null) {
+              throw const NativeSessionException('connection_changed');
+            }
             if (activeSessionId != previousSessionId &&
                 activeSessionId != result.catalog.activeSessionId) {
               throw const NativeSessionException('connection_changed');
             }
             setState(() {
+              cancelSessionSelection();
               if (previousSessionId != result.catalog.activeSessionId) {
                 resetSessionOnlyEffort();
               }
@@ -2748,19 +2798,30 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
               throw const DirectoryRequestException('directory_busy');
             }
             final previousSessionId = activeSessionId;
+            final selectionGeneration = sessionSelectionGeneration;
             final catalog = await request(
               () => api.createSession(path, engine),
             );
+            if (selectionGeneration != sessionSelectionGeneration &&
+                selectingSessionId != null) {
+              throw const DirectoryRequestException('connection_changed');
+            }
             if (activeSessionId != previousSessionId &&
                 activeSessionId != catalog.activeSessionId) {
               throw const DirectoryRequestException('connection_changed');
             }
             setState(() {
+              cancelSessionSelection();
               resetSessionOnlyEffort();
               clearSessionPeek();
               transcriptJumpRequest = null;
               applyCatalog(catalog);
             });
+            final snapshot =
+                cachedSessionTranscript(catalog.activeSessionId)?.snapshot;
+            if (snapshot != null) {
+              applyRemoteTranscriptSnapshot(catalog.activeSessionId, snapshot);
+            }
             if (session != null) await tokenStore.save(session!);
             persistTranscriptSnapshotLater();
           },
@@ -2985,6 +3046,12 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
   void releaseQueuedPromptIfTurnIdle() {
     if (queuedPrompt == null || running || uploadingAttachments) return;
     setState(restoreQueuedPrompt);
+  }
+
+  void reconcileIdleRun(bool wasRunning) {
+    if (!wasRunning || running) return;
+    unawaited(refreshWorkspaceChangeEcho());
+    releaseQueuedPromptIfTurnIdle();
   }
 
   void releaseQueuedPromptAfterTurn(String endType) {
@@ -3453,6 +3520,7 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       if (!reportError) throw StateError('connection_changed');
       return;
     }
+    final selectionGeneration = sessionSelectionGeneration;
     try {
       final res = await apiClient.post(
         current.origin,
@@ -3466,6 +3534,10 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
       if (res.statusCode == 401) throw const UnauthorizedSession();
       if (res.statusCode != 201) throw StateError('create_session_failed');
       if (!mounted || session != current) return;
+      if (selectionGeneration != sessionSelectionGeneration &&
+          selectingSessionId != null) {
+        return;
+      }
       final body = jsonDecode(res.body);
       final rawCatalog = body is Map<String, dynamic> ? body['catalog'] : null;
       final catalog = rawCatalog is Map<String, dynamic>
@@ -3475,9 +3547,14 @@ class _DemoShellState extends State<DemoShell> with WidgetsBindingObserver {
         throw const FormatException('bad_create_session_response');
       }
       setState(() {
+        cancelSessionSelection();
         resetSessionOnlyEffort();
         applyCatalog(catalog);
       });
+      final snapshot = cachedSessionTranscript(catalog.activeSessionId)?.snapshot;
+      if (snapshot != null) {
+        applyRemoteTranscriptSnapshot(catalog.activeSessionId, snapshot);
+      }
       if (session != null) await tokenStore.save(session!);
       persistTranscriptSnapshotLater();
     } on UnauthorizedSession {
@@ -8077,9 +8154,6 @@ class _TranscriptViewState extends State<TranscriptView>
   bool bottomJumpScheduled = false;
   bool didInitialBottomJump = false;
   bool followingBottom = true;
-  int observedVisibleMessageCount = 0;
-  TranscriptMessage? observedTailMessage;
-  int unreadOutputCount = 0;
 
   @override
   void initState() {
@@ -8089,7 +8163,6 @@ class _TranscriptViewState extends State<TranscriptView>
     widget.motion?.discardEntrances();
     scrollController.addListener(updateBottomFollowing);
     refreshTranscriptRows();
-    observeTranscript(reset: true);
     scheduleJump();
   }
 
@@ -8116,9 +8189,7 @@ class _TranscriptViewState extends State<TranscriptView>
       bottomJumpScheduled = false;
       readingRestoreScheduled = false;
       readingRestoreInFlight = false;
-      unreadOutputCount = 0;
       refreshTranscriptRows();
-      observeTranscript(reset: true);
     } else {
       final prepended = oldWidget.messageStart > widget.messageStart;
       if (prepended) {
@@ -8150,7 +8221,9 @@ class _TranscriptViewState extends State<TranscriptView>
       refreshTranscriptRows(
         tailOnly: !prepended && widget.tailOnlyUpdate && oldWidget.running == widget.running,
       );
-      observeTranscript(reset: prepended);
+      if (!followingBottom || widget.jumpRequest != null) {
+        widget.motion?.discardEntrances();
+      }
     }
     readingMessageStart = widget.messageStart;
     scheduleJump();
@@ -8181,12 +8254,7 @@ class _TranscriptViewState extends State<TranscriptView>
       readingCaptureTimer = null;
       captureReadingPosition();
     });
-    final nextFollowing = scrollController.position.extentAfter <= 72;
-    if (followingBottom == nextFollowing) return;
-    followingBottom = nextFollowing;
-    if (nextFollowing && unreadOutputCount > 0) {
-      setState(() => unreadOutputCount = 0);
-    }
+    followingBottom = scrollController.position.extentAfter <= 72;
   }
 
   void resetReadingMemory() {
@@ -8367,62 +8435,6 @@ class _TranscriptViewState extends State<TranscriptView>
     readingRestoreInFlight = false;
     followingBottom = false;
     captureReadingPosition();
-  }
-
-  void observeTranscript({bool reset = false}) {
-    final rows = visibleRows();
-    final visibleCount = rows.length;
-    final last = rows.isEmpty ? null : rows.last.message;
-    if (!reset &&
-        !followingBottom &&
-        widget.jumpRequest == null &&
-        (visibleCount != observedVisibleMessageCount ||
-            !identical(last, observedTailMessage))) {
-      final added = max(0, visibleCount - observedVisibleMessageCount);
-      unreadOutputCount += added > 0
-          ? added
-          : unreadOutputCount == 0
-          ? 1
-          : 0;
-    }
-    observedVisibleMessageCount = visibleCount;
-    observedTailMessage = last;
-    if (!followingBottom || widget.jumpRequest != null) {
-      widget.motion?.discardEntrances();
-    }
-  }
-
-  Future<void> scrollToLatest() async {
-    cancelReadingRestore();
-    final generation = readingGeneration;
-    if (unreadOutputCount > 0) {
-      setState(() => unreadOutputCount = 0);
-    }
-    followingBottom = true;
-    if (!scrollController.hasClients) return;
-    bottomJumpScheduled = true;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final target = scrollController.position.maxScrollExtent;
-    try {
-      if (reduceMotion) {
-        scrollController.jumpTo(target);
-      } else {
-        await scrollController.animateTo(
-          target,
-          duration: AppMotion.standard,
-          curve: AppMotion.enter,
-        );
-      }
-    } finally {
-      bottomJumpScheduled = false;
-    }
-    if (!mounted ||
-        generation != readingGeneration ||
-        !scrollController.hasClients) {
-      return;
-    }
-    followingBottom = true;
-    scheduleBottomJump(force: true);
   }
 
   void scheduleBottomJump({required bool force}) {
@@ -9009,9 +9021,6 @@ class _TranscriptViewState extends State<TranscriptView>
       return echo!;
     }
     final workspaceDir = widget.session?.workspaceDir;
-    final reduceMotion = MediaQuery.disableAnimationsOf(context);
-    final newOutputLabel =
-        '$unreadOutputCount 条新输出 · ${widget.running ? '仍在运行' : '已更新'}';
     Widget buildRow(BuildContext context, int index) {
       final item = itemAt(index);
       Widget row;
@@ -9264,15 +9273,25 @@ class _TranscriptViewState extends State<TranscriptView>
           // Scroll relayout/repaint stops here: per-frame scrolling must not
           // re-record the composer, pill, or background display lists.
           child: RepaintBoundary(
-            child: NotificationListener<UserScrollNotification>(
+            child: NotificationListener<ScrollNotification>(
               onNotification: (notification) {
-                if (notification.direction == ScrollDirection.forward &&
+                if (notification.depth != 0) return false;
+                final towardEarlier = switch (notification) {
+                  UserScrollNotification(:final direction) =>
+                    direction == ScrollDirection.forward,
+                  ScrollUpdateNotification(:final scrollDelta) =>
+                    (scrollDelta ?? 0) < 0,
+                  OverscrollNotification(:final overscroll) => overscroll < 0,
+                  _ => false,
+                };
+                if (towardEarlier &&
                     scrollController.hasClients &&
                     scrollController.position.extentBefore <= widget.topPadding + 100 &&
                     !widget.historyLoading && !widget.historyFailed) {
                   widget.onLoadEarlier?.call();
                 }
-                if (notification.direction != ScrollDirection.idle &&
+                if (notification is UserScrollNotification &&
+                    notification.direction != ScrollDirection.idle &&
                     (pendingReadingRestore != null || readingRestoreInFlight)) {
                   cancelReadingRestore();
                   followingBottom = scrollController.position.extentAfter <= 72;
@@ -9299,75 +9318,6 @@ class _TranscriptViewState extends State<TranscriptView>
                   slivers: slivers,
                 ),
               ),
-            ),
-          ),
-        ),
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 196,
-          child: Center(
-            child: AnimatedSwitcher(
-              duration: reduceMotion ? Duration.zero : AppMotion.fast,
-              reverseDuration: reduceMotion ? Duration.zero : AppMotion.fast,
-              switchInCurve: AppMotion.enter,
-              switchOutCurve: AppMotion.exit,
-              transitionBuilder: (child, animation) => FadeTransition(
-                opacity: animation,
-                child: ScaleTransition(
-                  scale: Tween<double>(begin: 0.96, end: 1).animate(animation),
-                  child: child,
-                ),
-              ),
-              child: unreadOutputCount == 0
-                  ? const SizedBox.shrink()
-                  : Semantics(
-                      key: const ValueKey('transcript-new-output'),
-                      liveRegion: true,
-                      button: true,
-                      label: '$newOutputLabel，返回最新输出',
-                      onTap: scrollToLatest,
-                      child: ExcludeSemantics(
-                        child: SignalPressEffect(
-                          child: Material(
-                            color: AppPalette.of(context).ink,
-                            borderRadius: BorderRadius.circular(AppRadii.pill),
-                            child: InkWell(
-                              onTap: scrollToLatest,
-                              borderRadius: BorderRadius.circular(
-                                AppRadii.pill,
-                              ),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 10,
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    SmartIcon(
-                                      LucideIcons.arrowDown,
-                                      size: AppIconSizes.inline,
-                                      color: AppPalette.of(context).onCta,
-                                    ),
-                                    const SizedBox(width: 7),
-                                    Text(
-                                      newOutputLabel,
-                                      style: TextStyle(
-                                        color: AppPalette.of(context).onCta,
-                                        fontSize: 12,
-                                        height: 1.25,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
             ),
           ),
         ),

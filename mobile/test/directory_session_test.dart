@@ -10,7 +10,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
-Map<String, Object?> catalog({bool newSession = false}) => {
+Map<String, Object?> catalog({
+  bool newSession = false,
+  bool withPending = false,
+}) => {
   'version': 1,
   'activeProjectId': newSession ? 'new-project' : 'old-project',
   'activeSessionId': newSession ? 'new-session' : 'old-session',
@@ -26,6 +29,13 @@ Map<String, Object?> catalog({bool newSession = false}) => {
       'title': '旧对话',
       'engine': 'claude',
     },
+    if (withPending)
+      {
+        'id': 'pending',
+        'projectId': 'old-project',
+        'title': '未能打开的会话',
+        'engine': 'claude',
+      },
     if (newSession)
       {
         'id': 'new-session',
@@ -42,7 +52,11 @@ http.Response jsonResponse(Object body, [int status = 200]) => http.Response(
   headers: {'content-type': 'application/json; charset=utf-8'},
 );
 
-Future<dynamic> boot(WidgetTester tester, RemoteApiClient api) async {
+Future<dynamic> boot(
+  WidgetTester tester,
+  RemoteApiClient api, {
+  bool failedSelection = false,
+}) async {
   await tester.pumpWidget(CcRemoteApp(enableCamera: false, apiClient: api));
   await tester.pumpAndSettle();
   final dynamic state = tester.state(find.byType(DemoShell));
@@ -53,7 +67,9 @@ Future<dynamic> boot(WidgetTester tester, RemoteApiClient api) async {
     workspaceDir: '/projects/old',
   );
   state.route = ShellRoute.chat;
-  state.applyCatalog(RemoteProjectCatalog.tryParse(catalog()));
+  state.applyCatalog(
+    RemoteProjectCatalog.tryParse(catalog(withPending: failedSelection)),
+  );
   state.messages.add(TranscriptMessage.assistant('旧对话内容'));
   state.promptController.text = '保留这段草稿';
   state.handleWsMessage(
@@ -65,6 +81,12 @@ Future<dynamic> boot(WidgetTester tester, RemoteApiClient api) async {
     }),
   );
   await tester.pumpAndSettle();
+  if (failedSelection) {
+    expect(state.selectRemoteSessionWithJump('pending'), isTrue);
+    await tester.pumpAndSettle();
+    expect(state.selectingSessionId, 'pending');
+    expect(state.peekFailed, isTrue);
+  }
   state.openSessions();
   await tester.pumpAndSettle();
   await tester.tap(find.byKey(const ValueKey('create-session')));
@@ -83,9 +105,14 @@ Future<dynamic> boot(WidgetTester tester, RemoteApiClient api) async {
 void main() {
   setUp(() => FlutterSecureStorage.setMockInitialValues({}));
 
-  for (final wsFirst in [false, true]) {
+  for (final (wsFirst, failedSelection) in [
+    (false, false),
+    (true, false),
+    (false, true),
+    (true, true),
+  ]) {
     testWidgets(
-      'directory switch retains draft and handles WS-first=$wsFirst',
+      'directory switch retains draft with WS-first=$wsFirst, failed-selection=$failedSelection',
       (tester) async {
         dynamic state;
         var requests = 0;
@@ -131,7 +158,7 @@ void main() {
             return jsonResponse({});
           }),
         );
-        state = await boot(tester, api);
+        state = await boot(tester, api, failedSelection: failedSelection);
         await tester.tap(find.byKey(const ValueKey('directory-engine-codex')));
         await tester.tap(
           find.byKey(const ValueKey('directory-create-session')),
@@ -140,6 +167,7 @@ void main() {
         expect(requests, 1);
         expect(find.byType(DirectoryPickerPage), findsNothing);
         expect(state.activeSessionId, 'new-session');
+        expect(state.selectingSessionId, isNull);
         expect(state.session.workspaceDir, '/projects/new');
         expect(state.activeSessionEngine, SessionEngine.codex);
         expect(state.promptController.text, isEmpty);

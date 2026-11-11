@@ -1722,7 +1722,9 @@ void main() {
     expect(find.textContaining("workspace_drawer.dart"), findsOneWidget);
   });
 
-  testWidgets('demo send shows a local workspace change echo', (tester) async {
+  testWidgets('demo send does not report pre-existing workspace changes', (
+    tester,
+  ) async {
     await tester.pumpWidget(
       const CcRemoteApp(enableCamera: false, demoMode: true),
     );
@@ -1735,9 +1737,7 @@ void main() {
     await tester.tap(find.byTooltip('发送'));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const ValueKey('workspace-change-echo')), findsOneWidget);
-    expect(find.text('改了 2 个文件'), findsOneWidget);
-    expect(find.text('看 diff · 仅桌面工作区'), findsOneWidget);
+    expect(find.byKey(const ValueKey('workspace-change-echo')), findsNothing);
 
     final snapshot = await TranscriptStore().load();
     expect(snapshot, isNotNull);
@@ -1746,15 +1746,28 @@ void main() {
       '演示模式：真实对话需要连接 daemon WebSocket。',
     ]);
 
-    await tester.ensureVisible(find.text('改了 2 个文件'));
-    await tester.tap(find.text('改了 2 个文件'));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('workspace-changes')), findsOneWidget);
-
-    await tester.tap(find.byTooltip('关闭'));
-    await tester.pumpAndSettle();
     await tester.tap(find.byTooltip('新对话'));
     await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('workspace-change-echo')), findsNothing);
+  });
+
+  testWidgets('unchanged workspace does not repeat the change echo', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const CcRemoteApp(enableCamera: false, demoMode: true),
+    );
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(find.text('连接这台电脑'));
+    await tester.pumpAndSettle();
+
+    for (final prompt in ['ping', '再解释一下']) {
+      await tester.enterText(find.byType(TextField), prompt);
+      await tester.pump();
+      await tester.tap(find.byTooltip('发送'));
+      await tester.pumpAndSettle();
+    }
+
     expect(find.byKey(const ValueKey('workspace-change-echo')), findsNothing);
   });
 
@@ -4478,7 +4491,7 @@ void main() {
     });
   }
 
-  testWidgets('new output stays visible while reading and returns to latest', (
+  testWidgets('new output preserves reading position and follows at bottom', (
     tester,
   ) async {
     tester.view.physicalSize = const Size(393, 720);
@@ -4526,8 +4539,7 @@ void main() {
 
     rebuild(() => messages.add(TranscriptMessage.assistant('新的输出')));
     await tester.pump();
-    expect(find.byKey(const ValueKey('transcript-new-output')), findsOneWidget);
-    expect(find.text('1 条新输出 · 仍在运行'), findsOneWidget);
+    expect(controller.offset, 0);
 
     rebuild(
       () => messages[messages.length - 1] = TranscriptMessage.assistant(
@@ -4535,12 +4547,14 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('1 条新输出 · 仍在运行'), findsOneWidget);
+    expect(controller.offset, 0);
 
-    await tester.tap(find.byKey(const ValueKey('transcript-new-output')));
+    controller.jumpTo(controller.position.maxScrollExtent);
+    await tester.pumpAndSettle();
+    rebuild(() => messages.add(TranscriptMessage.assistant('后续输出')));
     await tester.pumpAndSettle();
     expect(controller.position.extentAfter, lessThan(1));
-    expect(find.byKey(const ValueKey('transcript-new-output')), findsNothing);
+    expect(find.text('后续输出'), findsOneWidget);
   });
 
   testWidgets('tool activity shows its target inline and folds in place', (

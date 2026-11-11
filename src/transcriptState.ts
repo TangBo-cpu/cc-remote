@@ -15,6 +15,7 @@ const SCHEMA_VERSION = 1;
 const SAVE_DELAY_MS = 200;
 const INTERRUPTED_MESSAGE = '电脑端重启，任务已中断';
 export const TRANSCRIPT_PAGE_SIZE = 10;
+const TRANSCRIPT_PAGE_MAX_RECORDS = 200;
 
 export type TranscriptMessage = {
   role: 'user' | 'assistant' | 'system' | 'activity';
@@ -552,6 +553,40 @@ function cloneSnapshot(snapshot: TranscriptSnapshot): TranscriptSnapshot {
   return structuredClone(snapshot);
 }
 
+function transcriptPageStart(messages: TranscriptMessage[], end: number): number {
+  const lowerBound = Math.max(0, end - TRANSCRIPT_PAGE_MAX_RECORDS);
+  const bodyIndices: number[] = [];
+  const isProcessPart = (message: TranscriptMessage) => message.role === 'assistant'
+    || (message.role === 'activity'
+      && (message.activityKind === 'tool' || message.activityKind === 'thinking'));
+  let index = lowerBound;
+  while (index < end) {
+    if (!isProcessPart(messages[index])) {
+      if (messages[index].role !== 'activity') bodyIndices.push(index);
+      index += 1;
+      continue;
+    }
+    const segmentStart = index;
+    let typed = false;
+    let lastActivity = -1;
+    while (index < end && isProcessPart(messages[index])) {
+      if (messages[index].phase !== undefined) typed = true;
+      if (messages[index].role === 'activity') lastActivity = index;
+      index += 1;
+    }
+    for (let part = segmentStart; part < index; part += 1) {
+      const message = messages[part];
+      if (message.role === 'assistant' && message.phase !== 'commentary'
+        && (typed || part > lastActivity)
+        && (message.text.trim().length > 0 || message.attachments?.length)) {
+        bodyIndices.push(part);
+      }
+    }
+  }
+  const precedingBody = bodyIndices.at(-TRANSCRIPT_PAGE_SIZE - 1);
+  return precedingBody === undefined ? lowerBound : precedingBody + 1;
+}
+
 function transcriptPage(snapshot: TranscriptSnapshot, before?: string): TranscriptSnapshot {
   const messages = snapshot.messages;
   const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('base64url');
@@ -571,7 +606,7 @@ function transcriptPage(snapshot: TranscriptSnapshot, before?: string): Transcri
       throw new Error('transcript_history_changed');
     }
   }
-  const start = Math.max(0, end - TRANSCRIPT_PAGE_SIZE);
+  const start = transcriptPageStart(messages, end);
   const page = messages.slice(start, end);
   return structuredClone({
     ...snapshot,

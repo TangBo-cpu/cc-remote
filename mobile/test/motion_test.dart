@@ -346,11 +346,14 @@ void main() {
       await tester.pumpAndSettle();
       expect(controller.offset, 0);
       expect(motion.takeMessage(message), isFalse);
-      expect(
-        find.byKey(const ValueKey('transcript-new-output')),
-        findsOneWidget,
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('message-entrance-30')),
+        500,
+        scrollable: find.descendant(
+          of: find.byKey(const ValueKey('transcript-list')),
+          matching: find.byType(Scrollable),
+        ),
       );
-      controller.jumpTo(controller.position.maxScrollExtent);
       await tester.pumpAndSettle();
       expect(
         opacityOf(tester, find.byKey(const ValueKey('message-entrance-30'))),

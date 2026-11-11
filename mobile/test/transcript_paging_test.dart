@@ -137,6 +137,95 @@ void main() {
   );
 
   testWidgets(
+    'one continuous drag loads history before reaching the top and keeps moving',
+    (tester) async {
+      final pending = Completer<http.Response>();
+      final requests = <http.Request>[];
+      final dynamic state = await boot(
+        tester,
+        RemoteApiClient(
+          client: MockClient((request) {
+            requests.add(request);
+            return pending.future;
+          }),
+        ),
+      );
+      state.handleWsMessage(page(20, 30));
+      await tester.pumpAndSettle();
+      final list = find.byKey(const ValueKey('transcript-list'));
+      final controller = tester.widget<ScrollView>(list).controller!;
+      final view = tester.widget<TranscriptView>(find.byType(TranscriptView));
+      final threshold = view.topPadding + 100;
+      controller.jumpTo(controller.position.minScrollExtent + threshold + 400);
+      await tester.pumpAndSettle();
+      final gesture = await tester.startGesture(tester.getCenter(list));
+      await gesture.moveBy(const Offset(0, 60));
+      await tester.pump();
+      expect(requests, isEmpty);
+      for (var step = 0; step < 7; step++) {
+        await gesture.moveBy(const Offset(0, 60));
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(controller.position.extentBefore, lessThan(threshold));
+      expect(controller.position.extentBefore, greaterThan(0));
+      expect(requests, hasLength(1));
+      final anchor = find.text(messageText(20).trim());
+      expect(anchor, findsOneWidget);
+      final element = tester.element(anchor);
+      final oldY = tester.getTopLeft(anchor).dy;
+      pending.complete(response(payload(page(10, 20))));
+      await tester.pump();
+      await tester.pump();
+      expect(tester.element(anchor), same(element));
+      expect(tester.getTopLeft(anchor).dy, closeTo(oldY, 0.5));
+      await gesture.moveBy(const Offset(0, 60));
+      await tester.pump();
+      expect(tester.getTopLeft(anchor).dy, closeTo(oldY + 60, 0.5));
+      expect(requests, hasLength(1));
+      await gesture.up();
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets('inertial scrolling loads history before reaching the top', (
+    tester,
+  ) async {
+    final pending = Completer<http.Response>();
+    final requests = <http.Request>[];
+    final dynamic state = await boot(
+      tester,
+      RemoteApiClient(
+        client: MockClient((request) {
+          requests.add(request);
+          return pending.future;
+        }),
+      ),
+    );
+    state.handleWsMessage(page(20, 30));
+    await tester.pumpAndSettle();
+    final list = find.byKey(const ValueKey('transcript-list'));
+    final controller = tester.widget<ScrollView>(list).controller!;
+    final view = tester.widget<TranscriptView>(find.byType(TranscriptView));
+    final threshold = view.topPadding + 100;
+    controller.jumpTo(controller.position.minScrollExtent + threshold + 500);
+    await tester.pumpAndSettle();
+    await tester.fling(list, const Offset(0, 100), 2000);
+    expect(requests, isEmpty);
+    for (var frame = 0; frame < 60 && requests.isEmpty; frame++) {
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    expect(requests, hasLength(1));
+    expect(controller.position.extentBefore, greaterThan(0));
+    expect(controller.position.isScrollingNotifier.value, isTrue);
+    pending.complete(response(payload(page(10, 20))));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets(
     'search loads older pages before resolving an absolute message index',
     (tester) async {
       final cursors = <String>[];

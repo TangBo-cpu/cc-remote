@@ -149,6 +149,103 @@ void main() {
     },
   );
 
+  for (final (failedSelection, wsFirst) in [
+    (true, false),
+    (false, false),
+    (true, true),
+    (false, true),
+  ]) {
+    testWidgets(
+      'create supersedes a previous selection, failed-selection=$failedSelection, WS-first=$wsFirst',
+      (tester) async {
+        dynamic state;
+        final selection = Completer<http.Response>();
+        final created = catalog('created');
+        (created['sessions'] as List).add({
+          'id': 'created',
+          'projectId': 'project',
+          'title': '新对话',
+          'engine': 'codex',
+        });
+        final api = RemoteApiClient(
+          client: MockClient((request) async {
+            if (request.url.path == '/api/sessions/b/select') {
+              return selection.future;
+            }
+            if (request.url.path == '/api/projects/project/sessions') {
+              if (wsFirst) {
+                state.handleWsMessage({'type': 'catalog', ...created});
+                state.handleWsMessage({
+                  'type': 'transcript_snapshot',
+                  'sessionId': 'created',
+                  'version': 1,
+                  'revision': 1,
+                  'running': false,
+                  'messages': [
+                    TranscriptMessage.assistant('新会话快照已同步').toJson(),
+                  ],
+                  'pendingPermissions': [],
+                });
+              }
+              return response({'catalog': created}, 201);
+            }
+            return response({});
+          }),
+        );
+        state = await boot(tester, api);
+        state.messages.add(TranscriptMessage.assistant('原会话内容'));
+        state.promptController.text = '保留草稿';
+        expect(state.selectRemoteSessionWithJump('b'), isTrue);
+        await tester.pump();
+        if (failedSelection) {
+          selection.complete(response({'error': 'select_failed'}, 500));
+          await tester.pumpAndSettle();
+          expect(state.peekFailed, isTrue);
+        }
+        expect(state.selectingSessionId, 'b');
+
+        await state.createRemoteSession('project', SessionEngine.codex);
+        await tester.pumpAndSettle();
+        expect(state.activeSessionId, 'created');
+        expect(state.selectingSessionId, isNull);
+        expect(state.viewingSessionId, isNull);
+        expect(state.promptController.text, isEmpty);
+        expect(state.sessionMemoryStore.forSession('a').draft.text, '保留草稿');
+        expect(
+          state.messages.map((dynamic message) => message.text).toList(),
+          wsFirst ? ['新会话快照已同步'] : isEmpty,
+        );
+
+        if (!failedSelection) {
+          selection.complete(
+            response({
+              ...catalog('b'),
+              'transcript': {
+                'version': 1,
+                'revision': 1,
+                'running': false,
+                'messages': [TranscriptMessage.assistant('旧请求的回复').toJson()],
+                'pendingPermissions': [],
+              },
+            }),
+          );
+          await tester.pumpAndSettle();
+          await state.sessionSelectionOperation;
+          expect(state.activeSessionId, 'created');
+          expect(
+            state.messages.map((dynamic message) => message.text).toList(),
+            wsFirst ? ['新会话快照已同步'] : isEmpty,
+          );
+        }
+        await state.lastTranscriptWrite;
+        expect((await TranscriptStore().load())!.sessionId, 'created');
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+      },
+    );
+  }
+
   for (final operation in ['create', 'rename', 'archive', 'delete']) {
     testWidgets(
       '$operation ignores an HTTP catalog after a newer WS selection',
@@ -240,6 +337,84 @@ void main() {
       }
     });
   }
+
+  testWidgets('new conversation clears a failed selection from the header', (
+    tester,
+  ) async {
+    final api = RemoteApiClient(
+      client: MockClient(
+        (request) async => request.url.path == '/api/new-conversation'
+            ? response({'sessionId': 'c', 'engine': 'codex'})
+            : response({'error': 'select_failed'}, 500),
+      ),
+    );
+    final dynamic state = await boot(tester, api);
+    state.promptController.text = '保留草稿';
+    expect(state.selectRemoteSessionWithJump('b'), isTrue);
+    await tester.pumpAndSettle();
+    expect(state.peekFailed, isTrue);
+    await tester.tap(find.byTooltip('新对话'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('session-engine-codex')));
+    await tester.pumpAndSettle();
+    expect(state.activeSessionId, 'c');
+    expect(state.selectingSessionId, isNull);
+    expect(state.viewingSessionId, isNull);
+    expect(state.sessionMemoryStore.forSession('a').draft.text, '保留草稿');
+    await state.lastTranscriptWrite;
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('create does not cancel a newer pending selection', (
+    tester,
+  ) async {
+    final creation = Completer<http.Response>();
+    final selection = Completer<http.Response>();
+    final api = RemoteApiClient(
+      client: MockClient((request) async {
+        if (request.url.path == '/api/projects/project/sessions') {
+          return creation.future;
+        }
+        if (request.url.path == '/api/sessions/c/select') {
+          return selection.future;
+        }
+        return response({});
+      }),
+    );
+    final dynamic state = await boot(tester, api);
+    final Future<void> creating = state.createRemoteSession(
+      'project',
+      SessionEngine.codex,
+    );
+    await tester.pump();
+    expect(state.selectRemoteSessionWithJump('c'), isTrue);
+    await tester.pump();
+    creation.complete(response({'catalog': catalog('b')}, 201));
+    await creating;
+    await tester.pump();
+    expect(state.activeSessionId, 'a');
+    expect(state.selectingSessionId, 'c');
+
+    selection.complete(
+      response({
+        ...catalog('c'),
+        'transcript': {
+          'version': 1,
+          'revision': 1,
+          'running': false,
+          'messages': [TranscriptMessage.assistant('新的选择').toJson()],
+          'pendingPermissions': [],
+        },
+      }),
+    );
+    await tester.pumpAndSettle();
+    expect(state.activeSessionId, 'c');
+    expect(state.messages.single.text, '新的选择');
+    await state.lastTranscriptWrite;
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+  });
 
   testWidgets('delete applies an HTTP-only catalog and clears deleted memory', (
     tester,

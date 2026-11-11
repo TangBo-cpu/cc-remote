@@ -4,9 +4,9 @@
 
 扫码或输入配对码后，你就能在手机上发指令、看流式回复、审批工具权限、浏览工作区与 Git 变更。电脑端 daemon 继续运行 Claude Code CLI 或 Codex CLI，手机负责远程控制与阅读。
 
-[下载 Android APK · v2.0.21](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.21/cc-remote-v2.0.21-android.apk)
+[下载 Android APK · v2.0.22](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.22/cc-remote-v2.0.22-android.apk)
 ·
-[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.21)
+[Release 说明](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.22)
 
 ```text
 手机 App  ──HTTPS / WSS──▶  Cloudflare Tunnel  ──▶  本机 daemon (:8787)  ──▶  Claude Code CLI / Codex CLI
@@ -16,7 +16,7 @@
   <img src="docs/images/01-chat.png" alt="Android 实机对话界面" width="280" />
 </p>
 
-<p align="center"><sub>2026-10-31 用户提供的 Android 实机截图；字体与系统栏以设备设置为准</sub></p>
+<p align="center"><sub>当前 Android 实机界面预览；字体与系统栏以设备设置为准</sub></p>
 
 ---
 
@@ -53,7 +53,7 @@
 | :---: | :---: | :---: |
 | <img src="docs/images/04-settings.png" width="220" alt="设置，主机信息已脱敏" /> | <img src="docs/images/05-sandbox-modes.png" width="220" alt="Codex 沙箱模式" /> | <img src="docs/images/06-model-picker.png" width="220" alt="选择 Codex 模型" /> |
 
-以上 6 张由用户于 2026-10-31 提供，作为当前 UI 的评审依据，不对应指定发布版本。设置截图中的主机名称、服务地址和本机目录已遮盖；系统字体、系统栏及顶部系统提示不属于 App 自绘界面。当前没有同批次的深色、键盘展开、工作区或 diff 截图，不能据此确认这些状态的效果。截图索引见 [`docs/images/README.md`](docs/images/README.md)。
+以上 6 张来自当前 Android 实机，用于展示主要界面。设置截图中的主机名称、服务地址和本机目录已遮盖；系统字体、系统栏及顶部系统提示以设备设置为准。截图索引见 [`docs/images/README.md`](docs/images/README.md)。
 
 当前开发版使用中性背景，助手正文直接排在页面上，用户消息保留浅灰气泡；输入区和浮动控件使用中性玻璃材质与柔和阴影。主要操作采用炭黑，深色模式采用近白；选中态使用灰底与字重，正文链接采用中性色和下划线；会话导航保留彩色身份标识与蓝色上下文提示。设置提供「跟随系统 / 浅色 / 深色」，壁纸与背景预设已移除。阅读字号、模型选择、工具折叠、代码复制和权限决策仍保留。当前设计规格见 [`DESIGN.md`](DESIGN.md)。
 
@@ -125,11 +125,11 @@ npm run cc-remote -- -WorkspaceDir "C:\path\to\your-project"
 
 ### 3. 手机端
 
-1. 安装 [v2.0.21 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.21/cc-remote-v2.0.21-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
+1. 安装 [v2.0.22 APK](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.22/cc-remote-v2.0.22-android.apk)（测试签名，个人使用；覆盖更新时不要卸载旧版）
 2. 允许「未知来源」安装
 3. 打开 App → 扫启动器窗口或终端中的二维码 → 确认电脑名与服务地址 → 进入控制台
 
-Android App 版本为 v2.0.21。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
+Android App 版本为 v2.0.22。使用「同步电脑会话」需要同时更新电脑端代码并重启 daemon；手机端可直接覆盖安装，保留已有配对与设置。
 
 ### 4. 开始对话
 
@@ -279,7 +279,7 @@ cc-remote -DisableBypassPermissions
 
 ## 版本
 
-当前公开版：**[v2.0.21](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.21)**
-APK：[`cc-remote-v2.0.21-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.21/cc-remote-v2.0.21-android.apk)
+当前公开版：**[v2.0.22](https://github.com/TangBo-cpu/cc-remote/releases/tag/v2.0.22)**
+APK：[`cc-remote-v2.0.22-android.apk`](https://github.com/TangBo-cpu/cc-remote/releases/download/v2.0.22/cc-remote-v2.0.22-android.apk)
 
-v2.0.21 改进长工具过程的按需构建、超长回复的流式渲染和聊天快照保存，并更新会话侧栏、聊天玻璃材质及选择面板。Android 版本为 `2.0.21+31`，电脑端 package 版本为 `2.0.21`。安装包沿用旧版测试签名，适合个人使用；请覆盖安装，不要卸载旧版。已使用 v2.0.20 电脑端的用户可直接更新 APK。WebRTC 仍需配置自建入口与 TURN 服务；未启用时继续使用原有 WSS。部署说明见 [`deploy/relay/README.md`](deploy/relay/README.md)。
+v2.0.22 更新长对话分页：每页保留 10 条正文消息，工具与思考记录随对应消息加载；连续上滑接近顶部时提前读取更早消息，并保持当前阅读位置。对话完成后比较本轮前后的工作区快照，在回复下方显示实际修改的文件；工作区读取遇到临时错误时会有限重试。移除“有新的聊天消息”浮动提示，保留上翻阅读位置和回到底部后的自动跟随。Android 版本为 `2.0.22+32`，电脑端 package 版本为 `2.0.22`。安装包沿用旧版测试签名，适合个人使用；请覆盖安装，不要卸载旧版。使用本版分页和文件变更提示需要同步更新电脑端并重启 daemon。WebRTC 仍需配置自建入口与 TURN 服务；未启用时继续使用原有 WSS。部署说明见 [`deploy/relay/README.md`](deploy/relay/README.md)。
